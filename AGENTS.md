@@ -60,7 +60,7 @@ When starting any coding, refactoring, debugging, or feature implementation task
 ```
                        AGENT EXECUTION LOOP
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. READ RoadMap2026-08-21.md & planFix_AGY_CHANGELOG.md         │
+│ 1. READ docs/RoadMap2026-08-21.md & docs/planFix_AGY_CHANGELOG.md│
 │    Find "You Are Here", identify your owned phase/ticket.       │
 ├─────────────────────────────────────────────────────────────────┤
 │ 2. PREPARE: CHECK TOOLS/SKILLS/DEPS FOR THE TICKET               │
@@ -68,7 +68,7 @@ When starting any coding, refactoring, debugging, or feature implementation task
 │    from C:/.skills/skills/ per the matrix below. If a new        │
 │    FetchContent dependency is needed, confirm it before coding. │
 ├─────────────────────────────────────────────────────────────────┤
-│ 3. LOG START IN phases/ (see phases/README.md)                  │
+│ 3. LOG START IN docs/phases/ (see docs/phases/README.md)        │
 │    Create/update phaseNN.letter.seq.md, link it from the        │
 │    RoadMap's progress table for that phase.                     │
 ├─────────────────────────────────────────────────────────────────┤
@@ -84,8 +84,8 @@ When starting any coding, refactoring, debugging, or feature implementation task
 │    verification subagent (see RoadMap "Verification Protocol")  │
 │    rather than self-certifying. Zero new compiler warnings.     │
 ├─────────────────────────────────────────────────────────────────┤
-│ 7. UPDATE phases/ FILE, planFix_AGY_CHANGELOG.md, AND THE        │
-│    ROADMAP'S STATUS COLUMN — all three, not just one.           │
+│ 7. UPDATE docs/phases/ FILE, docs/planFix_AGY_CHANGELOG.md, AND  │
+│    THE ROADMAP'S STATUS COLUMN — all three, not just one.       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

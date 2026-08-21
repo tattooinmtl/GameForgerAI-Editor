@@ -1,0 +1,1 @@
+print('Sliding puzzle script')

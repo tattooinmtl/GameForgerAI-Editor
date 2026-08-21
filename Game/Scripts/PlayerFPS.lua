@@ -1,0 +1,1 @@
+local X = {}; function X:on_start() self.camera:setMode("fps") end; return X

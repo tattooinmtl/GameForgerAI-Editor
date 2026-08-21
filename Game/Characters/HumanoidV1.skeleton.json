@@ -1,0 +1,33 @@
+﻿{
+  "format": "GameForgerSkeletonProfile",
+  "version": 1,
+  "name": "HumanoidV1",
+  "units": "meters",
+  "upAxis": "+Y",
+  "forwardAxis": "+Z",
+  "referencePose": "T",
+  "bones": [
+    { "id": "rootMotion", "required": true, "parent": null },
+    { "id": "hips", "required": true, "parent": "rootMotion" },
+    { "id": "spine", "required": true, "parent": "hips" },
+    { "id": "chest", "required": true, "parent": "spine" },
+    { "id": "neck", "required": true, "parent": "chest" },
+    { "id": "head", "required": true, "parent": "neck" },
+    { "id": "shoulderLeft", "required": false, "parent": "chest" },
+    { "id": "upperArmLeft", "required": true, "parent": "shoulderLeft" },
+    { "id": "lowerArmLeft", "required": true, "parent": "upperArmLeft" },
+    { "id": "handLeft", "required": true, "parent": "lowerArmLeft" },
+    { "id": "shoulderRight", "required": false, "parent": "chest" },
+    { "id": "upperArmRight", "required": true, "parent": "shoulderRight" },
+    { "id": "lowerArmRight", "required": true, "parent": "upperArmRight" },
+    { "id": "handRight", "required": true, "parent": "lowerArmRight" },
+    { "id": "upperLegLeft", "required": true, "parent": "hips" },
+    { "id": "lowerLegLeft", "required": true, "parent": "upperLegLeft" },
+    { "id": "footLeft", "required": true, "parent": "lowerLegLeft" },
+    { "id": "toeLeft", "required": false, "parent": "footLeft" },
+    { "id": "upperLegRight", "required": true, "parent": "hips" },
+    { "id": "lowerLegRight", "required": true, "parent": "upperLegRight" },
+    { "id": "footRight", "required": true, "parent": "lowerLegRight" },
+    { "id": "toeRight", "required": false, "parent": "footRight" }
+  ]
+}

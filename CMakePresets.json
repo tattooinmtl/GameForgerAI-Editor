@@ -1,0 +1,61 @@
+﻿{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64",
+      "description": "Visual Studio 2026 C++ toolchain with Ninja Multi-Config",
+      "inherits": "windows-base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "editor-debug",
+      "displayName": "Editor - Debug",
+      "configurePreset": "windows-x64",
+      "configuration": "Debug",
+      "targets": [
+        "GameForgerEditor"
+      ]
+    },
+    {
+      "name": "runtime-debug",
+      "displayName": "Runtime - Debug",
+      "configurePreset": "windows-x64",
+      "configuration": "Debug",
+      "targets": [
+        "GameForgerRuntime"
+      ]
+    },
+    {
+      "name": "all-release",
+      "displayName": "All - Release",
+      "configurePreset": "windows-x64",
+      "configuration": "Release"
+    }
+  ]
+}

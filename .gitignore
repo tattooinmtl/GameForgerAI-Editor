@@ -1,0 +1,23 @@
+﻿/.vs/
+/out/
+/build/
+/cmake-build-*/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.log
+.env
+.env.*
+!.env.example
+AI-Providers.local.json
+Game/AI/Providers.local.json
+*.local.json
+*secret*
+*credential*
+*.pem
+*.key
+
+# Local backups / IDE session state - not source
+*.zip
+GameForgerEditorLayout.ini

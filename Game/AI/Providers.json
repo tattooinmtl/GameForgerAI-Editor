@@ -1,0 +1,40 @@
+{
+  "format": "GameForgerAIProviders",
+  "version": 1,
+  "activeProvider": "nvidia",
+  "localSecretsFile": "Game/AI/Providers.local.json",
+  "providers": [
+    {
+      "id": "nvidia",
+      "displayName": "NVIDIA NIM",
+      "enabled": true,
+      "priority": 0,
+      "protocol": "openai-compatible",
+      "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "model": "nvidia/nemotron-3-nano-30b-a3b",
+      "apiKeyEnvironmentVariable": "NVIDIA_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling",
+        "structured-output"
+      ]
+    },
+    {
+      "id": "agnes-ai",
+      "displayName": "Agnes-AI",
+      "enabled": true,
+      "priority": 1,
+      "protocol": "openai-compatible",
+      "endpoint": "https://apihub.agnes-ai.com/v1/chat/completions",
+      "model": "agnes-2.0-flash",
+      "apiKeyEnvironmentVariable": "AGNES_AI_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling",
+        "structured-output"
+      ]
+    }
+  ]
+}

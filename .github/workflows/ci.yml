@@ -1,0 +1,38 @@
+name: GameForgerAI CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Windows x64 MSVC Build & CTest
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup Ninja
+        uses: ashley-taylor/setup-ninja@v1.0.0
+
+      - name: Configure CMake
+        run: |
+          cmake --preset windows-x64
+
+      - name: Build All Targets (Debug)
+        run: |
+          cmake --build out/build/windows-x64 --config Debug
+
+      - name: Run Automated CTest Suite
+        run: |
+          ctest --test-dir out/build/windows-x64 -C Debug --output-on-failure

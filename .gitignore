@@ -21,3 +21,11 @@ Game/AI/Providers.local.json
 # Local backups / IDE session state - not source
 *.zip
 GameForgerEditorLayout.ini
+vc140.pdb
+
+# Scratch asset dump at the repo root (~610 MB of .glb). NOT the editor's asset
+# root - every code path reads Game/Models (see Editor/src/main.cpp's
+# modelsDirectory), and nothing references this directory. Ignored so a routine
+# `git add -A` can't commit it into a history that already carries 331 MB of
+# binary assets with no LFS.
+/models/

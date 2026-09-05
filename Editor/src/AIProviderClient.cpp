@@ -22,6 +22,12 @@ namespace gameforger::editor
 {
 	namespace
 	{
+		// Used when a provider omits `timeoutSeconds`, and as the clamp floor
+		// so a nonsense value can't disable the timeout entirely.
+		constexpr int kDefaultHttpTimeoutMs = 30000;
+		constexpr int kMinHttpTimeoutMs = 1000;
+		constexpr int kMaxHttpTimeoutMs = 600000;
+
 		struct ProviderSettings
 		{
 			std::wstring host;
@@ -33,6 +39,10 @@ namespace gameforger::editor
 			// absent, which is what every provider in the shipped file except
 			// Anthropic itself uses.
 			std::string protocol = "openai-compatible";
+			// From the provider's own `timeoutSeconds`. Previously the field
+			// was parsed by nobody and every request used a hardcoded 30s, so
+			// a user raising it for a slow reasoning model still got cut off.
+			int timeoutMs = kDefaultHttpTimeoutMs;
 		};
 
 		std::string readFile(const std::filesystem::path& path)
@@ -47,7 +57,6 @@ namespace gameforger::editor
 			return contents.str();
 		}
 
-		constexpr int kHttpTimeoutMs = 30000;
 
 		std::wstring widen(const std::string& value)
 		{
@@ -187,6 +196,16 @@ namespace gameforger::editor
 			{
 				settings.protocol = protocolValue->stringValue;
 			}
+			if (const json::Value* timeoutValue = match->find("timeoutSeconds");
+				timeoutValue != nullptr && timeoutValue->type == json::Value::Type::Number &&
+				timeoutValue->numberValue > 0.0)
+			{
+				const double milliseconds = timeoutValue->numberValue * 1000.0;
+				settings.timeoutMs = static_cast<int>(std::clamp(
+					milliseconds,
+					static_cast<double>(kMinHttpTimeoutMs),
+					static_cast<double>(kMaxHttpTimeoutMs)));
+			}
 
 			// Local secrets file uses the same JSON shape: an object whose
 			// keys are environment variable names and whose values are the
@@ -210,6 +229,47 @@ namespace gameforger::editor
 				settings.key = widen(key);
 			}
 			return !settings.host.empty() && !settings.path.empty() && !settings.key.empty();
+		}
+
+		// One place that turns (projectRoot, providerId) into resolved settings.
+		// All three request paths used to inline these two readFile calls with
+		// the secrets filename hardcoded, which is why Providers.json's own
+		// `localSecretsFile` key was never honoured.
+		bool loadProviderSettings(
+			const std::filesystem::path& projectRoot,
+			const std::string& providerId,
+			ProviderSettings& settings)
+		{
+			const std::string configuration = readFile(projectRoot / "Game/AI/Providers.json");
+			if (configuration.empty())
+			{
+				return false;
+			}
+
+			std::filesystem::path secretsRelative = "Game/AI/Providers.local.json";
+			if (const std::optional<json::Value> root = json::parse(configuration);
+				root.has_value() && root->type == json::Value::Type::Object)
+			{
+				if (const json::Value* configured = root->find("localSecretsFile");
+					configured != nullptr && configured->type == json::Value::Type::String &&
+					!configured->stringValue.empty())
+				{
+					// Confine to the project: this path comes out of a config
+					// file, so an absolute path or a traversal would otherwise
+					// let it name any file on disk as a key source.
+					const std::filesystem::path candidate(configured->stringValue);
+					const bool escapes = std::any_of(
+						candidate.begin(), candidate.end(),
+						[](const std::filesystem::path& part) { return part == ".."; });
+					if (!candidate.is_absolute() && !escapes)
+					{
+						secretsRelative = candidate;
+					}
+				}
+			}
+
+			const std::string localSecrets = readFile(projectRoot / secretsRelative);
+			return parseProvider(configuration, providerId, localSecrets, settings);
 		}
 
 		// Anthropic caps generation with a REQUIRED max_tokens; OpenAI-compatible
@@ -347,9 +407,7 @@ namespace gameforger::editor
 		const AIProviderRequest& request) const
 	{
 		ProviderSettings settings;
-		const std::string configuration = readFile(projectRoot_ / "Game/AI/Providers.json");
-		const std::string localSecrets = readFile(projectRoot_ / "Game/AI/Providers.local.json");
-		if (configuration.empty() || !parseProvider(configuration, providerId, localSecrets, settings))
+		if (!loadProviderSettings(projectRoot_, providerId, settings))
 		{
 			return {false, 0, {}, "Provider configuration or API key is unavailable."};
 		}
@@ -373,7 +431,7 @@ namespace gameforger::editor
 		{
 			return {false, 0, {}, "Could not initialize WinHTTP."};
 		}
-		WinHttpSetTimeouts(session, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs);
+		WinHttpSetTimeouts(session, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs);
 		HINTERNET connection = WinHttpConnect(session, settings.host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
 		HINTERNET requestHandle = connection == nullptr
 			? nullptr
@@ -453,9 +511,7 @@ namespace gameforger::editor
 		const std::string& overrideEndpointPath) const
 	{
 		ProviderSettings settings;
-		const std::string configuration = readFile(projectRoot_ / "Game/AI/Providers.json");
-		const std::string localSecrets = readFile(projectRoot_ / "Game/AI/Providers.local.json");
-		if (configuration.empty() || !parseProvider(configuration, providerId, localSecrets, settings))
+		if (!loadProviderSettings(projectRoot_, providerId, settings))
 		{
 			return {false, 0, {}, "Provider configuration or API key is unavailable."};
 		}
@@ -469,7 +525,7 @@ namespace gameforger::editor
 			WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
 			WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 		if (session == nullptr) return {false, 0, {}, "Could not initialize WinHTTP."};
-		WinHttpSetTimeouts(session, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs);
+		WinHttpSetTimeouts(session, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs);
 		HINTERNET connection = WinHttpConnect(session, settings.host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
 		HINTERNET request = connection == nullptr ? nullptr : WinHttpOpenRequest(
 			connection, L"POST", path.c_str(), nullptr,
@@ -545,7 +601,15 @@ namespace gameforger::editor
 			}
 			// Special-case Anthropic-native /v1/messages: their models are a
 			// static list, not enumerable; return empty to signal not-supported.
-			if (chatPath.rfind(L"/messages") == chatPath.size() - 9)
+			//
+			// The size check is load-bearing, not defensive noise: without it
+			// `chatPath.size() - 9` underflows on a short path, and at exactly
+			// 8 characters it wraps to npos - which is what rfind returns on
+			// NO match - so a path like "/v1/chat" was misread as Anthropic
+			// and refused model discovery.
+			static constexpr std::wstring_view kMessagesLeaf = L"/messages";
+			if (chatPath.size() >= kMessagesLeaf.size() &&
+				chatPath.compare(chatPath.size() - kMessagesLeaf.size(), kMessagesLeaf.size(), kMessagesLeaf) == 0)
 			{
 				return L"";
 			}
@@ -558,9 +622,7 @@ namespace gameforger::editor
 		DiscoverResult result;
 
 		ProviderSettings settings;
-		const std::string configuration = readFile(projectRoot_ / "Game/AI/Providers.json");
-		const std::string localSecrets = readFile(projectRoot_ / "Game/AI/Providers.local.json");
-		if (configuration.empty() || !parseProvider(configuration, providerId, localSecrets, settings))
+		if (!loadProviderSettings(projectRoot_, providerId, settings))
 		{
 			result.error = "Provider configuration or API key is unavailable.";
 			return result;
@@ -582,7 +644,7 @@ namespace gameforger::editor
 			result.error = "Could not initialize WinHTTP.";
 			return result;
 		}
-		WinHttpSetTimeouts(session, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs);
+		WinHttpSetTimeouts(session, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs, settings.timeoutMs);
 		HINTERNET connection = WinHttpConnect(session, settings.host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
 		HINTERNET request = connection == nullptr ? nullptr : WinHttpOpenRequest(
 			connection, L"GET", modelsPath.c_str(), nullptr,

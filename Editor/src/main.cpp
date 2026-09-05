@@ -2604,19 +2604,31 @@ namespace
             }
             if (ImGui::Button("Emit JSON snippet"))
             {
-                std::string snippet =
-                    std::string("{\n") +
-                    "  \"id\": \""                        + state.customProviderId.data()          + "\",\n" +
-                    "  \"displayName\": \""               + (state.customProviderDisplayName[0] != '\0' ? state.customProviderDisplayName.data() : state.customProviderId.data()) + "\",\n" +
-                    "  \"enabled\": true,\n" +
-                    "  \"priority\": 999,\n" +
-                    "  \"protocol\": \"openai-compatible\",\n" +
-                    "  \"endpoint\": \""                  + state.customProviderEndpoint.data()    + "\",\n" +
-                    "  \"model\": \""                     + state.customProviderModel.data()       + "\",\n" +
-                    "  \"apiKeyEnvironmentVariable\": \"" + state.customProviderEnvVar.data()      + "\",\n" +
-                    "  \"timeoutSeconds\": 120,\n" +
-                    "  \"capabilities\": [\"chat\", \"tool-calling\"]\n" +
-                    "}";
+                // Built through json::Value + json::serialize rather than
+                // string concatenation. These five fields are free text: a
+                // single " or \ typed into any of them produced a snippet that
+                // was invalid the moment it was pasted into Providers.json,
+                // with nothing to explain why the file had stopped loading.
+                const char* displayName = state.customProviderDisplayName[0] != '\0'
+                    ? state.customProviderDisplayName.data()
+                    : state.customProviderId.data();
+                const std::string snippet = gameforger::editor::json::serialize(
+                    gameforger::editor::json::makeObject({
+                        {"id",          gameforger::editor::json::makeString(state.customProviderId.data())},
+                        {"displayName", gameforger::editor::json::makeString(displayName)},
+                        {"enabled",     gameforger::editor::json::makeBool(true)},
+                        {"priority",    gameforger::editor::json::makeNumber(999)},
+                        {"protocol",    gameforger::editor::json::makeString("openai-compatible")},
+                        {"endpoint",    gameforger::editor::json::makeString(state.customProviderEndpoint.data())},
+                        {"model",       gameforger::editor::json::makeString(state.customProviderModel.data())},
+                        {"apiKeyEnvironmentVariable",
+                                        gameforger::editor::json::makeString(state.customProviderEnvVar.data())},
+                        {"timeoutSeconds", gameforger::editor::json::makeNumber(120)},
+                        {"capabilities", gameforger::editor::json::makeArray({
+                            gameforger::editor::json::makeString("chat"),
+                            gameforger::editor::json::makeString("tool-calling"),
+                        })},
+                    }));
                 logMessage(console, LogLevel::Info,
                     "Paste this into Game/AI/Providers.json's \"providers\" array:\n" + snippet);
                 ImGui::CloseCurrentPopup();

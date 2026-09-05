@@ -133,11 +133,8 @@ namespace gameforger::editor
 	};
 
 	// Data for an entity with isCastle=true (see below) - additive, like
-	// hasCollider/isPickupItem. The entity's own world-space AABB
-	// (position +/- scale, same convention as the collider) is what
-	// projectile hit-testing checks against, so this is normally placed on
-	// one deliberately large "hitbox" entity rather than every decorative
-	// piece of a castle - see tickProjectiles (GameplayLoop.cpp).
+	// hasCollider/isPickupItem. Projectile hit-testing uses colliderWorldAabb
+	// (mesh bounds for imported models, otherwise position +/- scale).
 	struct CastleData
 	{
 		float hp = 100.0F;
@@ -160,6 +157,42 @@ namespace gameforger::editor
 		float maxPitchDegrees = 70.0F;
 		float launchSpeed = 22.0F;
 	};
+
+	// Unity-style collider shapes, used only when hasCollider is true.
+	// Box = solid AABB, Mesh = triangle mesh (hollow), Convex = solid hull.
+	enum class ColliderType
+	{
+		Box,
+		Mesh,
+		Convex
+	};
+
+	[[nodiscard]] inline const char* colliderTypeToString(const ColliderType type)
+	{
+		switch (type)
+		{
+			case ColliderType::Mesh:
+				return "mesh";
+			case ColliderType::Convex:
+				return "convex";
+			case ColliderType::Box:
+			default:
+				return "box";
+		}
+	}
+
+	[[nodiscard]] inline ColliderType colliderTypeFromString(const std::string& text)
+	{
+		if (text == "mesh")
+		{
+			return ColliderType::Mesh;
+		}
+		if (text == "convex")
+		{
+			return ColliderType::Convex;
+		}
+		return ColliderType::Box;
+	}
 
 	struct SceneEntity
 	{
@@ -194,12 +227,15 @@ namespace gameforger::editor
 		std::vector<std::string> scripts;
 		EntityAnimation animation;
 		EntityCameraRig cameraRig;
-		// Whether self.physics:resolve() (see ScriptRuntime) treats this
-		// entity as solid. The collider is this entity's world-space AABB -
-		// its primitive's local [-1,1] box scaled by `scale`, ignoring
-		// rotation and pivotOffset - a deliberate simplification, not a
-		// rotation-aware physics shape.
+		// Whether self.physics:resolve() (see Collision.hpp / ScriptRuntime)
+		// treats this entity as solid. Checking this on a parent also makes
+		// descendant meshes solid. Shape is `colliderType` (Unity-style Box /
+		// Mesh / Convex) - the Inspector only shows those after this flag.
 		bool hasCollider = false;
+		// Box: solid AABB (primitive scale box, or imported mesh bounds).
+		// Mesh: triangle mesh (hollow rooms/walls). Convex: solid convex hull.
+		// Imported models default to Mesh (CreateImportedMeshCommand).
+		ColliderType colliderType = ColliderType::Box;
 		// Whether this entity can be picked up (see PickupItemData above,
 		// and tickPickupInteraction/main.cpp for the actual interaction) -
 		// additive, like hasCollider, not a shape replacement.
@@ -207,7 +243,7 @@ namespace gameforger::editor
 		PickupItemData pickupItem;
 		// Whether this entity is a destructible castle (see CastleData
 		// above) - additive, like hasCollider. Normally paired with
-		// hasCollider=true, since the collider AABB is what a gravity
+		// hasCollider=true, since colliderWorldAabb is what a gravity
 		// projectile's hit test uses.
 		bool isCastle = false;
 		CastleData castle;
@@ -288,6 +324,8 @@ namespace gameforger::editor
 	{
 	public:
 		explicit EditorScene(std::filesystem::path projectRoot);
+
+		[[nodiscard]] const std::filesystem::path& projectRoot() const noexcept { return projectRoot_; }
 
 		[[nodiscard]] AICommandResult execute(const AIEditorCommand& command);
 		[[nodiscard]] const std::vector<SceneEntity>& entities() const noexcept;

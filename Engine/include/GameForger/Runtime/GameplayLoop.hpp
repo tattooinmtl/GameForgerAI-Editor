@@ -114,7 +114,7 @@ namespace gameforger::editor
 
 	// Moves/despawns every active engine-managed projectile - see
 	// GameplayState::Projectile. No-op unless isPlaying. Gravity
-	// projectiles (useGravity=true) hit-test via AABB against hasCollider
+	// projectiles (useGravity=true) hit-test via collider AABB against hasCollider
 	// entities matching hitTag and, on a hit against an isCastle entity,
 	// push a "Castle"/"hp" SetPropertyCommand through commandBus (and set
 	// gameplay.gameOverMessage the first time a castle's hp reaches 0) -

@@ -197,6 +197,15 @@ namespace gameforger::editor
 				entity.importedMesh.sourcePath =
 					readString(*importedMesh, "sourcePath", entity.importedMesh.sourcePath);
 			}
+			if (obj.find("colliderType") != nullptr)
+			{
+				entity.colliderType = colliderTypeFromString(readString(obj, "colliderType", "box"));
+			}
+			else
+			{
+				// Pre-type scenes: imported colliders were triangle meshes.
+				entity.colliderType = entity.isImportedMesh ? ColliderType::Mesh : ColliderType::Box;
+			}
 			if (const json::Value* textMesh = obj.find("textMesh"))
 			{
 				entity.textMesh.content = readString(*textMesh, "content", entity.textMesh.content);
@@ -386,6 +395,7 @@ namespace gameforger::editor
 			}
 			json += entity.materialLayers.empty() ? "],\n" : ("\n" + indent + "  ],\n");
 			json += indent + "  \"hasCollider\": " + std::string(entity.hasCollider ? "true" : "false") + ",\n";
+			json += indent + "  \"colliderType\": \"" + std::string(colliderTypeToString(entity.colliderType)) + "\",\n";
 			json += indent + "  \"isPickupItem\": " + std::string(entity.isPickupItem ? "true" : "false") + ",\n";
 			json += indent + "  \"pickupItem\": {\n";
 			json += indent + "    \"itemName\": \"" + escapeJson(entity.pickupItem.itemName) + "\",\n";

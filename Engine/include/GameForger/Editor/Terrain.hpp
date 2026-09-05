@@ -35,7 +35,7 @@ namespace gameforger::editor
 	// heights[]-to-world-Y mapping) - the single source of truth for "what
 	// height is the terrain surface at this XZ", shared by the sculpt
 	// brush's raycast (main.cpp) and terrain-aware physics grounding
-	// (ScriptRuntime.cpp) so both agree with what actually got rendered.
+	// (Collision.cpp) so both agree with what actually got rendered.
 	[[nodiscard]] float sampleTerrainHeight(
 		int resolution, float worldSize, float heightScale, const std::vector<float>& heights, float localX,
 		float localZ);

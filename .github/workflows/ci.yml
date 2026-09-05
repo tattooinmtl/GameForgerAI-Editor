@@ -8,8 +8,12 @@ on:
 
 jobs:
   build-and-test:
-    name: Windows x64 MSVC Build & CTest
+    name: Windows x64 MSVC ${{ matrix.config }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
 
     steps:
       - name: Checkout repository
@@ -29,10 +33,10 @@ jobs:
         run: |
           cmake --preset windows-x64
 
-      - name: Build All Targets (Debug)
+      - name: Build All Targets
         run: |
-          cmake --build out/build/windows-x64 --config Debug
+          cmake --build out/build/windows-x64 --config ${{ matrix.config }}
 
       - name: Run Automated CTest Suite
         run: |
-          ctest --test-dir out/build/windows-x64 -C Debug --output-on-failure
+          ctest --test-dir out/build/windows-x64 -C ${{ matrix.config }} --output-on-failure

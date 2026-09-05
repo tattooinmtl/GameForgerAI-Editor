@@ -82,12 +82,19 @@ namespace gameforger::editor
 		// appends before recursing, so a bone's parent index is guaranteed to
 		// be smaller than its own index (callers can walk the array in order
 		// and rely on the parent already being processed).
+		constexpr int kMaxHierarchyDepth = 64;
+
 		void buildHierarchy(
 			const aiNode& node,
 			const int parentIndex,
 			std::vector<ImportedBone>& bones,
-			std::unordered_map<std::string, int>& indexByName)
+			std::unordered_map<std::string, int>& indexByName,
+			const int depth)
 		{
+			if (depth >= kMaxHierarchyDepth)
+			{
+				return;
+			}
 			const int myIndex = static_cast<int>(bones.size());
 			ImportedBone bone;
 			bone.name = node.mName.C_Str();
@@ -98,7 +105,7 @@ namespace gameforger::editor
 
 			for (unsigned int childIndex = 0; childIndex < node.mNumChildren; ++childIndex)
 			{
-				buildHierarchy(*node.mChildren[childIndex], myIndex, bones, indexByName);
+				buildHierarchy(*node.mChildren[childIndex], myIndex, bones, indexByName, depth + 1);
 			}
 		}
 
@@ -193,8 +200,13 @@ namespace gameforger::editor
 			const aiScene& scene,
 			const aiNode& node,
 			const std::unordered_map<std::string, int>& indexByName,
-			std::vector<float>& out)
+			std::vector<float>& out,
+			const int depth)
 		{
+			if (depth >= kMaxHierarchyDepth)
+			{
+				return;
+			}
 			for (unsigned int meshIndex = 0; meshIndex < node.mNumMeshes; ++meshIndex)
 			{
 				const unsigned int sceneMeshIndex = node.mMeshes[meshIndex];
@@ -252,7 +264,7 @@ namespace gameforger::editor
 
 			for (unsigned int childIndex = 0; childIndex < node.mNumChildren; ++childIndex)
 			{
-				appendSkinnedMeshes(scene, *node.mChildren[childIndex], indexByName, out);
+				appendSkinnedMeshes(scene, *node.mChildren[childIndex], indexByName, out, depth + 1);
 			}
 		}
 
@@ -264,8 +276,16 @@ namespace gameforger::editor
 		// model has no concept of child entities yet). Only used for
 		// non-skinned imports (see appendSkinnedMeshes above for those).
 		void appendMeshNode(
-			const aiScene& scene, const aiNode& node, const glm::mat4& parentTransform, std::vector<float>& out)
+			const aiScene& scene,
+			const aiNode& node,
+			const glm::mat4& parentTransform,
+			std::vector<float>& out,
+			const int depth)
 		{
+			if (depth >= kMaxHierarchyDepth)
+			{
+				return;
+			}
 			const glm::mat4 worldTransform = parentTransform * toGlm(node.mTransformation);
 			const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(worldTransform));
 
@@ -321,7 +341,7 @@ namespace gameforger::editor
 
 			for (unsigned int childIndex = 0; childIndex < node.mNumChildren; ++childIndex)
 			{
-				appendMeshNode(scene, *node.mChildren[childIndex], worldTransform, out);
+				appendMeshNode(scene, *node.mChildren[childIndex], worldTransform, out, depth + 1);
 			}
 		}
 
@@ -404,7 +424,7 @@ namespace gameforger::editor
 			{
 				std::vector<ImportedBone> bones;
 				std::unordered_map<std::string, int> indexByName;
-				buildHierarchy(*scene->mRootNode, -1, bones, indexByName);
+				buildHierarchy(*scene->mRootNode, -1, bones, indexByName, 0);
 
 				if (static_cast<int>(bones.size()) <= kMaxSkinningBones)
 				{
@@ -432,7 +452,7 @@ namespace gameforger::editor
 						}
 					}
 
-					appendSkinnedMeshes(*scene, *scene->mRootNode, indexByName, result.vertices);
+					appendSkinnedMeshes(*scene, *scene->mRootNode, indexByName, result.vertices, 0);
 
 					if (!result.vertices.empty())
 					{
@@ -450,7 +470,7 @@ namespace gameforger::editor
 			if (!result.hasSkeleton)
 			{
 				result.vertices.clear();
-				appendMeshNode(*scene, *scene->mRootNode, glm::mat4(1.0F), result.vertices);
+				appendMeshNode(*scene, *scene->mRootNode, glm::mat4(1.0F), result.vertices, 0);
 				result.vertexStride = 6;
 			}
 

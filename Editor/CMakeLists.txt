@@ -5,6 +5,19 @@
     src/ScriptGenerator.cpp
     src/AICommandPlanner.cpp
     src/AIAnimationGenerator.cpp
+    # Blender MCP integration (Phase A of integration_plan_allinone.md).
+    # HTTP + JSON-RPC 2.0 client that talks to the upstream
+    # MCP_Server_blender addon on http://127.0.0.1:8765/mcp.
+    src/BlenderClient.cpp
+    # Detects blender.exe (env / registry / %ProgramFiles% glob / PATH)
+    # and spawns it via CreateProcessW with the MCP addon enabled and
+    # its HTTP server started, so BlenderClient can immediately connect.
+    src/BlenderLauncher.cpp
+    # Phase C of integration_plan_allinone.md. Multi-turn agentic loop that
+    # routes tool calls to scene (AICommandBus) or Blender (BlenderClient),
+    # gates destructive ops on user approval, and pushes an undo entry per
+    # successful mutation into a bounded ring.
+    src/AICockpit.cpp
     # Editor-only InputSource implementation (ImGui-backed) - see
     # GameForger/Editor/InputSource.hpp (Engine, shared interface) and
     # Engine/src/Editor/GlfwInputSource.cpp (Runtime's equivalent).
@@ -45,7 +58,11 @@ target_link_libraries(GameForgerEditor
 )
 
 if(WIN32)
-    target_link_libraries(GameForgerEditor PRIVATE winhttp shell32)
+    # winhttp: AIProviderClient + BlenderClient outbound HTTP.
+    # shell32: file dialogs + ShellExecute (Blender install fallback URL).
+    # Advapi32: RegOpenKeyEx / RegQueryValueEx for BlenderLauncher's HKCR
+    #           blendfile\shell\open\command lookup.
+    target_link_libraries(GameForgerEditor PRIVATE winhttp shell32 Advapi32)
 endif()
 
 target_compile_features(GameForgerEditor PRIVATE cxx_std_20)

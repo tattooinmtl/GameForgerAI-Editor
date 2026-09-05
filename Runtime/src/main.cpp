@@ -36,6 +36,15 @@
 
 namespace
 {
+	void executeOrLog(gameforger::editor::AICommandBus& commandBus, const gameforger::editor::AIEditorCommand& command)
+	{
+		const gameforger::editor::AICommandResult result = commandBus.execute(command);
+		if (!result.success)
+		{
+			std::fprintf(stderr, "Runtime command failed: %s\n", result.message.c_str());
+		}
+	}
+
 	void glfwErrorCallback(const int error, const char* description)
 	{
 		std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -590,7 +599,7 @@ int main()
 					followedEntity->rotationEuler.x,
 					followedEntity->rotationEuler.y - static_cast<float>(mouseDeltaX) * mouseLookSensitivity,
 					followedEntity->rotationEuler.z);
-				commandBus.execute(SetPropertyCommand{followedEntity->name, "Transform", "rotation", newRotation});
+				executeOrLog(commandBus, SetPropertyCommand{followedEntity->name, "Transform", "rotation", newRotation});
 				// Rotation just changed under the entity findEntity() found
 				// earlier this frame - re-resolve so the pickup check below
 				// (and this frame's camera framing) see the fresh facing.
@@ -626,7 +635,7 @@ int main()
 					const glm::vec3 itemMaterialBlendWeight = candidate->materialBlendWeight;
 					const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
 					const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
-					commandBus.execute(DeleteEntityCommand{candidate->name});
+					executeOrLog(commandBus, DeleteEntityCommand{candidate->name});
 					const auto existing = std::find_if(
 						gameplay.inventoryItems.begin(),
 						gameplay.inventoryItems.end(),
@@ -671,7 +680,10 @@ int main()
 			? followedEntity->id
 			: -1;
 
-		viewportRenderer.resize(width, height);
+		if (!viewportRenderer.resize(width, height))
+		{
+			std::fprintf(stderr, "Failed to resize the game viewport.\n");
+		}
 		viewportRenderer.render(scene.entities(), {}, projectRoot, excludeEntityId);
 		viewportRenderer.blitToCurrentFramebuffer(width, height);
 

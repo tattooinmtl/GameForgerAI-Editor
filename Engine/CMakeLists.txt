@@ -22,6 +22,7 @@ add_library(GameForgerEngine STATIC
     src/Editor/Terrain.cpp
     src/Editor/TextMesh.cpp
     src/Editor/ModelImport.cpp
+    src/Editor/Collision.cpp
     src/Editor/TerrainTexture.cpp
     src/Editor/StbImageImpl.cpp
     src/Editor/StbTrueTypeImpl.cpp

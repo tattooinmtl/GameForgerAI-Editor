@@ -18,6 +18,7 @@ function FPSController:on_start()
 end
 
 function FPSController:on_update(delta_time)
+    -- Same WASD / getRight contract as fps_controller.lua — do not swap A/D.
     local forward_axis = self.input:getAxis("W", "S")
     local strafe_axis = self.input:getAxis("D", "A")
 

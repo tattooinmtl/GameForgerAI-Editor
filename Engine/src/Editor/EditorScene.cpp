@@ -48,6 +48,15 @@ namespace gameforger::editor
 						return {false, false, "Entity was not found in the editor scene."};
 					}
 					entities_.erase(iterator);
+					// Promote former children to root. World TRS was already
+					// written by applyParentConstraints, so they stay put.
+					for (SceneEntity& child : entities_)
+					{
+						if (child.parentName == value.entityName)
+						{
+							child.parentName.clear();
+						}
+					}
 					return {true, false, "Entity deleted from the editor scene."};
 				}
 				else if constexpr (std::is_same_v<Command, RenameEntityCommand>)
@@ -66,6 +75,16 @@ namespace gameforger::editor
 						return {false, false, "Entity was not found in the editor scene."};
 					}
 					entity->name = value.newName;
+					if (value.entityName != value.newName)
+					{
+						for (SceneEntity& child : entities_)
+						{
+							if (child.parentName == value.entityName)
+							{
+								child.parentName = value.newName;
+							}
+						}
+					}
 					return {true, false, "Entity renamed."};
 				}
 				else if constexpr (std::is_same_v<Command, DuplicateEntityCommand>)
@@ -130,17 +149,37 @@ namespace gameforger::editor
 							"Script already exists at " + scriptPath->string() +
 								" - set overwrite=true to replace it."};
 					}
-					std::ofstream output(*scriptPath, std::ios::binary | std::ios::trunc);
-					if (!output)
+					const std::filesystem::path tempPath = scriptPath->string() + ".tmp";
 					{
-						return {false, false, "Could not write the script file."};
+						std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
+						if (!output)
+						{
+							return {false, false, "Could not write the script file."};
+						}
+						output << value.content;
+						if (!output)
+						{
+							return {false, false, "Failed while writing the script file."};
+						}
+						output.flush();
+						if (!output)
+						{
+							return {false, false, "Failed to flush the script file."};
+						}
 					}
-					output << value.content;
-					if (!output)
+					std::error_code writeError;
+					if (exists)
 					{
-						return {false, false, "Failed while writing the script file."};
+						const std::filesystem::path backupPath = scriptPath->string() + ".bak";
+						std::filesystem::copy(
+							*scriptPath, backupPath, std::filesystem::copy_options::overwrite_existing, writeError);
 					}
-					output.flush();
+					std::filesystem::rename(tempPath, *scriptPath, writeError);
+					if (writeError)
+					{
+						std::filesystem::remove(tempPath, writeError);
+						return {false, false, "Could not replace the script file: " + writeError.message()};
+					}
 					return {true, false, "Lua script created in the project."};
 				}
 				else if constexpr (std::is_same_v<Command, AttachScriptCommand>)
@@ -326,6 +365,7 @@ namespace gameforger::editor
 					entity.position = value.position;
 					entity.isImportedMesh = true;
 					entity.importedMesh.sourcePath = value.sourcePath;
+					entity.colliderType = ColliderType::Mesh;
 					entities_.push_back(entity);
 					return {true, false, "Model imported into the editor scene."};
 				}
@@ -442,6 +482,14 @@ namespace gameforger::editor
 						{
 							entity->hasCollider = *enabled;
 							return {true, false, "Entity collider updated."};
+						}
+					}
+				else if (value.component == "Collider" && value.property == "type")
+					{
+						if (const auto* type = std::get_if<std::string>(&value.value))
+						{
+							entity->colliderType = colliderTypeFromString(*type);
+							return {true, false, "Entity collider type updated."};
 						}
 					}
 					else if (value.component == "CineCamera" && value.property == "enabled")

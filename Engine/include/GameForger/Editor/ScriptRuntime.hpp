@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -27,7 +28,8 @@ namespace gameforger::editor
 	// getRight), `self.input` (isKeyDown/isKeyPressed/getAxis), `self.camera`
 	// (setMode/getMode, "fps" or "third_person"), and `self.physics`
 	// (resolve(position, halfWidth, height) -> correctedPosition, grounded -
-	// simple AABB collision/ground-check against Collider-enabled entities),
+	// box vs Collider-enabled primitives, imported-mesh triangles, and
+	// children of a Collider-enabled parent; see Collision.hpp),
 	// and `self.world` (findNearestWithTag(tag) -> position|nil, distance,
 	// name - nearest OTHER entity carrying that tag anywhere in its tags
 	// list, not just primaryTag; findPositionByTag(tag) -> position|nil,
@@ -195,9 +197,12 @@ namespace gameforger::editor
 		// error that aborts the pcall with LUA_ERRRUN. Stops a `while true`
 		// in on_update from freezing the editor indefinitely.
 		std::atomic<std::int64_t> instructionsRemaining_{0};
+		std::atomic<std::size_t> luaBytesUsed_{0};
+		static constexpr std::size_t kLuaMemoryBudgetBytes = 8 * 1024 * 1024;
 
 		static void instructionHook(lua_State* L, lua_Debug* ar);
 		void installBudgetHook(lua_State* L);
 		void resetBudget();
+		static void* luaAlloc(void* userData, void* pointer, std::size_t oldSize, std::size_t newSize);
 	};
 }

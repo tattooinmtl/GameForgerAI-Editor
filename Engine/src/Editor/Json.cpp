@@ -1,8 +1,10 @@
 #include "GameForger/Editor/Json.hpp"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <utility>
 
 namespace gameforger::editor::json
 {
@@ -19,12 +21,29 @@ namespace gameforger::editor::json
 				out += static_cast<char>(0xC0 | (codepoint >> 6));
 				out += static_cast<char>(0x80 | (codepoint & 0x3F));
 			}
-			else
+			else if (codepoint < 0x10000)
 			{
 				out += static_cast<char>(0xE0 | (codepoint >> 12));
 				out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
 				out += static_cast<char>(0x80 | (codepoint & 0x3F));
 			}
+			else if (codepoint <= 0x10FFFF)
+			{
+				out += static_cast<char>(0xF0 | (codepoint >> 18));
+				out += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+				out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				out += static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+		}
+
+		[[nodiscard]] bool isHighSurrogate(const unsigned int codepoint) noexcept
+		{
+			return codepoint >= 0xD800 && codepoint <= 0xDBFF;
+		}
+
+		[[nodiscard]] bool isLowSurrogate(const unsigned int codepoint) noexcept
+		{
+			return codepoint >= 0xDC00 && codepoint <= 0xDFFF;
 		}
 
 		class Parser
@@ -128,9 +147,14 @@ namespace gameforger::editor::json
 			[[nodiscard]] std::optional<Value> parseNumber()
 			{
 				const std::size_t start = pos_;
-				if (!atEnd() && (text_[pos_] == '-' || text_[pos_] == '+'))
+				if (!atEnd() && text_[pos_] == '-')
 				{
 					++pos_;
+				}
+				else if (!atEnd() && text_[pos_] == '+')
+				{
+					pos_ = start;
+					return std::nullopt;
 				}
 				bool sawDigit = false;
 				while (!atEnd() &&
@@ -149,9 +173,17 @@ namespace gameforger::editor::json
 					pos_ = start;
 					return std::nullopt;
 				}
+				const std::string token = text_.substr(start, pos_ - start);
+				char* end = nullptr;
+				const double parsed = std::strtod(token.c_str(), &end);
+				if (end != token.c_str() + token.size())
+				{
+					pos_ = start;
+					return std::nullopt;
+				}
 				Value value;
 				value.type = Value::Type::Number;
-				value.numberValue = std::strtod(text_.substr(start, pos_ - start).c_str(), nullptr);
+				value.numberValue = parsed;
 				return value;
 			}
 
@@ -187,9 +219,29 @@ namespace gameforger::editor::json
 							case 'u':
 								if (pos_ + 5 < text_.size())
 								{
-									const unsigned int codepoint = static_cast<unsigned int>(
+									const unsigned int unit = static_cast<unsigned int>(
 										std::strtoul(text_.substr(pos_ + 2, 4).c_str(), nullptr, 16));
-									appendUtf8(result, codepoint);
+									if (isHighSurrogate(unit) &&
+										pos_ + 11 < text_.size() &&
+										text_[pos_ + 6] == '\\' &&
+										text_[pos_ + 7] == 'u')
+									{
+										const unsigned int low = static_cast<unsigned int>(
+											std::strtoul(text_.substr(pos_ + 8, 4).c_str(), nullptr, 16));
+										if (isLowSurrogate(low))
+										{
+											const unsigned int codepoint =
+												0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00);
+											appendUtf8(result, codepoint);
+											pos_ += 12;
+											break;
+										}
+									}
+									if (isHighSurrogate(unit) || isLowSurrogate(unit))
+									{
+										return std::nullopt;
+									}
+									appendUtf8(result, unit);
 									pos_ += 6;
 								}
 								else
@@ -403,5 +455,152 @@ namespace gameforger::editor::json
 		const std::string bodyText(body);
 		Parser parser(bodyText);
 		return parser.parseDocument();
+	}
+
+	// ---- Phase C: serialisation + builder helpers -------------------------
+
+	namespace
+	{
+		void appendEscapedString(std::string& out, const std::string& text)
+		{
+			out += '"';
+			for (const char c : text)
+			{
+				const unsigned char b = static_cast<unsigned char>(c);
+				switch (b)
+				{
+					case '\\': out += "\\\\"; break;
+					case '"':  out += "\\\""; break;
+					case '\b': out += "\\b"; break;
+					case '\f': out += "\\f"; break;
+					case '\n': out += "\\n"; break;
+					case '\r': out += "\\r"; break;
+					case '\t': out += "\\t"; break;
+					default:
+						if (b < 0x20)
+						{
+							static constexpr char hex[] = "0123456789abcdef";
+							out += "\\u00";
+							out += hex[(b >> 4) & 0x0F];
+							out += hex[b & 0x0F];
+						}
+						else
+						{
+							out += c;
+						}
+						break;
+				}
+			}
+			out += '"';
+		}
+
+		void serializeInto(const Value& value, std::string& out)
+		{
+			switch (value.type)
+			{
+				case Value::Type::Null:
+					out += "null";
+					break;
+				case Value::Type::Boolean:
+					out += value.boolValue ? "true" : "false";
+					break;
+				case Value::Type::Number:
+				{
+					// Print integers as integers, floats compactly. std::to_string
+					// on a double would emit "1.000000" - noisy for tool arg logs.
+					const double n = value.numberValue;
+					if (n == static_cast<double>(static_cast<long long>(n)) &&
+					    n >= -9.0e15 && n <= 9.0e15)
+					{
+						out += std::to_string(static_cast<long long>(n));
+					}
+					else
+					{
+						char buf[32];
+						std::snprintf(buf, sizeof(buf), "%.17g", n);
+						out += buf;
+					}
+					break;
+				}
+				case Value::Type::String:
+					appendEscapedString(out, value.stringValue);
+					break;
+				case Value::Type::Array:
+					out += '[';
+					for (std::size_t i = 0; i < value.arrayValue.size(); ++i)
+					{
+						if (i > 0) out += ',';
+						serializeInto(value.arrayValue[i], out);
+					}
+					out += ']';
+					break;
+				case Value::Type::Object:
+					out += '{';
+					for (std::size_t i = 0; i < value.objectValue.size(); ++i)
+					{
+						if (i > 0) out += ',';
+						appendEscapedString(out, value.objectValue[i].first);
+						out += ':';
+						serializeInto(value.objectValue[i].second, out);
+					}
+					out += '}';
+					break;
+			}
+		}
+	}
+
+	std::string serialize(const Value& value)
+	{
+		std::string out;
+		out.reserve(64);
+		serializeInto(value, out);
+		return out;
+	}
+
+	Value makeString(std::string text)
+	{
+		Value v;
+		v.type = Value::Type::String;
+		v.stringValue = std::move(text);
+		return v;
+	}
+
+	Value makeNumber(double n)
+	{
+		Value v;
+		v.type = Value::Type::Number;
+		v.numberValue = n;
+		return v;
+	}
+
+	Value makeBool(bool b)
+	{
+		Value v;
+		v.type = Value::Type::Boolean;
+		v.boolValue = b;
+		return v;
+	}
+
+	Value makeNull()
+	{
+		Value v;
+		v.type = Value::Type::Null;
+		return v;
+	}
+
+	Value makeArray(std::vector<Value> items)
+	{
+		Value v;
+		v.type = Value::Type::Array;
+		v.arrayValue = std::move(items);
+		return v;
+	}
+
+	Value makeObject(std::vector<std::pair<std::string, Value>> entries)
+	{
+		Value v;
+		v.type = Value::Type::Object;
+		v.objectValue = std::move(entries);
+		return v;
 	}
 }

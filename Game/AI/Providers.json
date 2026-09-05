@@ -1,14 +1,47 @@
 {
   "format": "GameForgerAIProviders",
-  "version": 1,
-  "activeProvider": "nvidia",
+  "version": 2,
+  "activeProvider": "anthropic",
   "localSecretsFile": "Game/AI/Providers.local.json",
   "providers": [
+    {
+      "id": "anthropic",
+      "displayName": "Anthropic Claude",
+      "enabled": true,
+      "priority": 0,
+      "protocol": "anthropic",
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "model": "claude-opus-4-7",
+      "apiKeyEnvironmentVariable": "ANTHROPIC_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-use",
+        "thinking"
+      ]
+    },
+    {
+      "id": "openai",
+      "displayName": "OpenAI",
+      "enabled": true,
+      "priority": 1,
+      "protocol": "openai-compatible",
+      "endpoint": "https://api.openai.com/v1/chat/completions",
+      "model": "gpt-4o",
+      "apiKeyEnvironmentVariable": "OPENAI_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling",
+        "structured-output",
+        "reasoning-effort"
+      ]
+    },
     {
       "id": "nvidia",
       "displayName": "NVIDIA NIM",
       "enabled": true,
-      "priority": 0,
+      "priority": 2,
       "protocol": "openai-compatible",
       "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
       "model": "nvidia/nemotron-3-nano-30b-a3b",
@@ -21,10 +54,72 @@
       ]
     },
     {
+      "id": "openrouter",
+      "displayName": "OpenRouter",
+      "enabled": true,
+      "priority": 3,
+      "protocol": "openai-compatible",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "model": "anthropic/claude-opus-4-7",
+      "apiKeyEnvironmentVariable": "OPENROUTER_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling",
+        "thinking",
+        "reasoning-effort"
+      ]
+    },
+    {
+      "id": "moonshot",
+      "displayName": "Moonshot (Kimi)",
+      "enabled": true,
+      "priority": 4,
+      "protocol": "openai-compatible",
+      "endpoint": "https://api.moonshot.cn/v1/chat/completions",
+      "model": "moonshot-v1-32k",
+      "apiKeyEnvironmentVariable": "MOONSHOT_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling"
+      ]
+    },
+    {
+      "id": "minimax",
+      "displayName": "MiniMax",
+      "enabled": true,
+      "priority": 5,
+      "protocol": "openai-compatible",
+      "endpoint": "https://api.minimax.chat/v1/text/chatcompletion_v2",
+      "model": "MiniMax-M1",
+      "apiKeyEnvironmentVariable": "MINIMAX_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling"
+      ]
+    },
+    {
+      "id": "antigravity",
+      "displayName": "Antigravity",
+      "enabled": true,
+      "priority": 6,
+      "protocol": "openai-compatible",
+      "endpoint": "https://api.antigravity.ai/v1/chat/completions",
+      "model": "antigravity-default",
+      "apiKeyEnvironmentVariable": "ANTIGRAVITY_API_KEY",
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "chat",
+        "tool-calling"
+      ]
+    },
+    {
       "id": "agnes-ai",
       "displayName": "Agnes-AI",
       "enabled": true,
-      "priority": 1,
+      "priority": 7,
       "protocol": "openai-compatible",
       "endpoint": "https://apihub.agnes-ai.com/v1/chat/completions",
       "model": "agnes-2.0-flash",

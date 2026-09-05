@@ -77,6 +77,7 @@ function ThirdPersonController:on_update(delta_time)
     -- mid-aim would be disorienting and isn't how the real interaction is
     -- meant to work.
     local operating_catapult = self.world:isAimingCatapult()
+    -- Same WASD / getRight contract as fps_controller.lua — do not swap A/D.
     local forward_axis = operating_catapult and 0.0 or self.input:getAxis("W", "S")
     local strafe_axis = operating_catapult and 0.0 or self.input:getAxis("D", "A")
     local is_moving = forward_axis ~= 0.0 or strafe_axis ~= 0.0

@@ -74,6 +74,12 @@ function FpsController:on_update(delta_time)
     -- mid-aim would be disorienting and isn't how the real interaction is
     -- meant to work.
     local operating_catapult = self.world:isAimingCatapult()
+    -- DO NOT CHANGE this WASD mapping or the getRight usage below.
+    -- Verified in Play: W/S = getAxis("W","S"), A/D = getAxis("D","A"),
+    -- move += forward * forward_axis + right * strafe_axis, with
+    -- entity:getRight() = cross(forward, +Y) (FPS camera screen-right).
+    -- Swapping A/D, negating strafe, or "fixing" getRight to cross(+Y, forward)
+    -- inverts left/right in the Game view.
     local forward_axis = operating_catapult and 0.0 or self.input:getAxis("W", "S")
     local strafe_axis = operating_catapult and 0.0 or self.input:getAxis("D", "A")
     local is_moving = forward_axis ~= 0.0 or strafe_axis ~= 0.0
@@ -86,7 +92,7 @@ function FpsController:on_update(delta_time)
     local speed = self.walk_speed * (sprinting and self.sprint_multiplier or 1.0)
 
     local forward = self.entity:getForward()
-    local right = self.entity:getRight()
+    local right = self.entity:getRight() -- do not negate; see WASD note above
     local move_x = forward.x * forward_axis + right.x * strafe_axis
     local move_z = forward.z * forward_axis + right.z * strafe_axis
     if is_moving then

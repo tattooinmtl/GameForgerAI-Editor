@@ -130,6 +130,22 @@ void testJsonParser()
 	// 2. Reject trailing garbage / invalid JSON
 	const std::optional<json::Value> invalidDoc = json::parse("{\"name\": \"Player\"} extra_junk");
 	TEST_ASSERT(!invalidDoc.has_value(), "JSON with trailing garbage must be rejected");
+
+	// 3. RFC 8259: leading '+' is not a valid number (F-10 / DEF-05)
+	const std::optional<json::Value> plusNumber = json::parse("{\"n\": +42}");
+	TEST_ASSERT(!plusNumber.has_value(), "JSON numbers must not accept a leading '+'");
+
+	// 4. UTF-16 surrogate pair \uD83D\uDE00 (😀) must decode to one code point
+	const std::optional<json::Value> emoji = json::parse("{\"g\":\"\\uD83D\\uDE00\"}");
+	TEST_ASSERT(emoji.has_value(), "Surrogate-pair JSON string must parse");
+	const json::Value* g = emoji->find("g");
+	TEST_ASSERT(g != nullptr && g->type == json::Value::Type::String, "emoji field must be a string");
+	TEST_ASSERT(g->stringValue.size() == 4 &&
+			static_cast<unsigned char>(g->stringValue[0]) == 0xF0 &&
+			static_cast<unsigned char>(g->stringValue[1]) == 0x9F &&
+			static_cast<unsigned char>(g->stringValue[2]) == 0x98 &&
+			static_cast<unsigned char>(g->stringValue[3]) == 0x80,
+		"\\uD83D\\uDE00 must decode to UTF-8 F0 9F 98 80");
 }
 
 // ----------------------------------------------------------------------------
@@ -182,6 +198,34 @@ void testSceneSerialization()
 
 	std::filesystem::remove(tempSceneFile);
 	std::filesystem::remove(tempSceneFile.string() + ".bak");
+
+	// Collider type round-trip (Box / Mesh / Convex)
+	const std::filesystem::path colliderSceneFile = "test_collider_type.scene";
+	{
+		SceneEntity boxEntity;
+		boxEntity.name = "BoxCol";
+		boxEntity.hasCollider = true;
+		boxEntity.colliderType = ColliderType::Box;
+		SceneEntity meshEntity;
+		meshEntity.name = "MeshCol";
+		meshEntity.hasCollider = true;
+		meshEntity.colliderType = ColliderType::Mesh;
+		meshEntity.isImportedMesh = true;
+		SceneEntity convexEntity;
+		convexEntity.name = "ConvexCol";
+		convexEntity.hasCollider = true;
+		convexEntity.colliderType = ColliderType::Convex;
+		const SceneSaveResult typedSave =
+			saveScene(colliderSceneFile, {boxEntity, meshEntity, convexEntity});
+		TEST_ASSERT(typedSave.success, "Saving collider types must succeed");
+		const SceneLoadResult typedLoad = loadScene(colliderSceneFile);
+		TEST_ASSERT(typedLoad.success && typedLoad.entities.size() == 3, "Load collider types");
+		TEST_ASSERT(typedLoad.entities[0].colliderType == ColliderType::Box, "Box type round-trip");
+		TEST_ASSERT(typedLoad.entities[1].colliderType == ColliderType::Mesh, "Mesh type round-trip");
+		TEST_ASSERT(typedLoad.entities[2].colliderType == ColliderType::Convex, "Convex type round-trip");
+		std::filesystem::remove(colliderSceneFile);
+		std::filesystem::remove(colliderSceneFile.string() + ".bak");
+	}
 }
 
 // ----------------------------------------------------------------------------
@@ -210,6 +254,31 @@ void testEditorScene()
 	const SceneEntity* player2 = scene.findEntity("Player (1)");
 	TEST_ASSERT(player2 != nullptr, "findEntity('Player (1)') must return unique duplicated entity");
 	TEST_ASSERT(scene.entities().size() == 2, "Total entities count must be 2");
+
+	// 4. Rename rewrites children's parentName (F-02 / R-01)
+	const AICommandResult childCreate = scene.execute(CreateEntityCommand{"Turret", PrimitiveType::Cube, glm::vec3(1.0F)});
+	TEST_ASSERT(childCreate.success, "Creating child 'Turret' must succeed");
+	const AICommandResult parented = scene.execute(
+		SetPropertyCommand{"Turret", "Parent", "parentName", std::string("Player")});
+	TEST_ASSERT(parented.success, "Parenting Turret under Player must succeed");
+	TEST_ASSERT(scene.findEntity("Turret") != nullptr && scene.findEntity("Turret")->parentName == "Player",
+		"Turret.parentName must be Player before rename");
+
+	const AICommandResult renamed = scene.execute(RenameEntityCommand{"Player", "Hero"});
+	TEST_ASSERT(renamed.success, "Renaming Player to Hero must succeed");
+	TEST_ASSERT(scene.findEntity("Player") == nullptr, "Old name Player must be gone");
+	TEST_ASSERT(scene.findEntity("Hero") != nullptr, "Hero must exist after rename");
+	const SceneEntity* turretAfterRename = scene.findEntity("Turret");
+	TEST_ASSERT(turretAfterRename != nullptr && turretAfterRename->parentName == "Hero",
+		"Child parentName must follow parent rename");
+
+	// 5. Delete parent promotes children to root (clears parentName) without deleting them
+	const AICommandResult deleted = scene.execute(DeleteEntityCommand{"Hero"});
+	TEST_ASSERT(deleted.success, "Deleting Hero must succeed");
+	TEST_ASSERT(scene.findEntity("Hero") == nullptr, "Hero must be gone");
+	const SceneEntity* turretAfterDelete = scene.findEntity("Turret");
+	TEST_ASSERT(turretAfterDelete != nullptr, "Child must survive parent delete");
+	TEST_ASSERT(turretAfterDelete->parentName.empty(), "Orphaned child must be promoted to root");
 }
 
 // ----------------------------------------------------------------------------
@@ -296,6 +365,41 @@ void testScriptRuntimeSandboxing()
 
 	std::filesystem::remove(script1Path);
 	std::filesystem::remove(script2Path);
+}
+
+void testGetRightMatchesFpsCamera()
+{
+	// GLM lookAtRH screen-right is cross(forward, +Y). At yaw 0 the entity
+	// looks +Z, so D-strafe (getRight) must be -X, matching the Game view.
+	const std::filesystem::path scriptsDir = "Game/Scripts";
+	std::filesystem::create_directories(scriptsDir);
+	const std::filesystem::path scriptPath = scriptsDir / "test_get_right.lua";
+	{
+		std::ofstream out(scriptPath);
+		out << R"(
+			local Controller = { right_x = 0.0 }
+			function Controller:on_start()
+				self.right_x = self.entity:getRight().x
+			end
+			return Controller
+		)";
+	}
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	MockInputSource input;
+	ScriptRuntime runtime;
+	runtime.initialize(scene, bus, input, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+
+	TEST_ASSERT(runtime.startScript(1, "Game/Scripts/test_get_right.lua", "."),
+		"getRight probe script must start");
+	const float rightX = runtime.getScriptNumberField(1, "Game/Scripts/test_get_right.lua", "right_x", 0.0F);
+	TEST_ASSERT(rightX < -0.5F,
+		"getRight at yaw 0 must point -X (FPS camera screen-right), not +X");
+
+	runtime.shutdown();
+	std::filesystem::remove(scriptPath);
 }
 
 // ----------------------------------------------------------------------------
@@ -507,6 +611,147 @@ return Controller
 }
 
 // ----------------------------------------------------------------------------
+// Test: Inspector Collider actually blocks (primitives, imported mesh, parent)
+// ----------------------------------------------------------------------------
+#include "GameForger/Editor/Collision.hpp"
+
+void testColliderPrimitiveBlocksWhenChecked()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(0.0F, 1.0F, 0.0F)}).success,
+		"create wall");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Collider", "enabled", true}).success, "check Collider");
+	const SceneEntity* wall = scene.findEntity("Wall");
+	TEST_ASSERT(wall != nullptr && wall->hasCollider, "Inspector Collider must set hasCollider");
+
+	const BoxCollisionResult blocked =
+		resolveBoxCollision(scene, 999, glm::vec3(1.2F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(blocked.position.x > 1.35F && blocked.position.x < 1.45F,
+		"Cube collider at origin scale 1 must push a 0.4-radius mover out to x=1.4");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Collider", "enabled", false}).success, "uncheck Collider");
+	const BoxCollisionResult open =
+		resolveBoxCollision(scene, 999, glm::vec3(1.2F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(std::abs(open.position.x - 1.2F) < 0.001F, "Unchecked Collider must not block");
+}
+
+void testImportedMeshColliderUsesTrianglesNotScaleBox()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Castle", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create castle");
+	const SceneEntity* castleFound = scene.findEntity("Castle");
+	TEST_ASSERT(castleFound != nullptr, "castle entity exists");
+	SceneEntity* castle = scene.findEntityMutable(castleFound->id);
+	TEST_ASSERT(castle != nullptr, "castle entity");
+	castle->isImportedMesh = true;
+	castle->hasCollider = true;
+	castle->colliderType = ColliderType::Mesh;
+	castle->scale = glm::vec3(1.0F);
+
+	// Thin wall at x=10 (local), taller/wider than the default 2x2x2 scale box.
+	MeshCollisionGeometry wall;
+	wall.triangleVertices = {
+		{10.0F, 0.0F, -4.0F}, {10.0F, 4.0F, -4.0F}, {10.0F, 4.0F, 4.0F},
+		{10.0F, 0.0F, -4.0F}, {10.0F, 4.0F, 4.0F}, {10.0F, 0.0F, 4.0F},
+	};
+	wall.localMin = {10.0F, 0.0F, -4.0F};
+	wall.localMax = {10.0F, 4.0F, 4.0F};
+	wall.valid = true;
+	const ImportedMeshProvider provider = [&](const SceneEntity&) { return &wall; };
+
+	const BoxCollisionResult intoWall =
+		resolveBoxCollision(scene, 999, glm::vec3(9.7F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(intoWall.position.x < 9.65F,
+		"Imported-mesh wall at x=10 must push the player back (not ignore the mesh)");
+
+	const BoxCollisionResult courtyard =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(std::abs(courtyard.position.x) < 0.01F && std::abs(courtyard.position.y) < 0.01F,
+		"Courtyard inside a hollow castle must stay walkable (not a solid AABB)");
+
+	const BoxCollisionResult nearOrigin =
+		resolveBoxCollision(scene, 999, glm::vec3(0.5F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(std::abs(nearOrigin.position.x - 0.5F) < 0.01F,
+		"Imported collider must not use the Transform Scale 2x2x2 box");
+}
+
+void testParentColliderSolidsChildren()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Castle", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create castle root");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(10.0F, 1.0F, 0.0F)}).success,
+		"create wall child");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Parent", "parentName", std::string("Castle")}).success,
+		"parent wall");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Castle", "Collider", "enabled", true}).success,
+		"check Collider on parent only");
+
+	const BoxCollisionResult intoChild =
+		resolveBoxCollision(scene, 999, glm::vec3(8.7F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(intoChild.position.x < 8.65F,
+		"Collider on castle parent must block against child wall cubes");
+
+	const BoxCollisionResult courtyard =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(std::abs(courtyard.position.x) < 0.01F && std::abs(courtyard.position.y) < 0.01F,
+		"Parent collider must not fill the courtyard with the root cube AABB");
+}
+
+void testColliderBoxMeshConvexTypes()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Pyramid", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create pyramid");
+	const SceneEntity* found = scene.findEntity("Pyramid");
+	TEST_ASSERT(found != nullptr, "pyramid exists");
+	SceneEntity* pyramid = scene.findEntityMutable(found->id);
+	pyramid->isImportedMesh = true;
+	pyramid->hasCollider = true;
+	pyramid->scale = glm::vec3(1.0F);
+
+	MeshCollisionGeometry geom;
+	geom.triangleVertices = {
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F},
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, 2.0F},
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, -2.0F}, {0.0F, 4.0F, 0.0F},
+		{2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F}, {0.0F, 4.0F, 0.0F},
+		{2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, 2.0F}, {0.0F, 4.0F, 0.0F},
+		{-2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, -2.0F}, {0.0F, 4.0F, 0.0F},
+	};
+	geom.localMin = {-2.0F, 0.0F, -2.0F};
+	geom.localMax = {2.0F, 4.0F, 2.0F};
+	geom.valid = true;
+	const ImportedMeshProvider provider = [&](const SceneEntity&) { return &geom; };
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("box")}).success,
+		"set Box");
+	const BoxCollisionResult boxInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(boxInside.position.y > 3.9F, "Box collider is a solid AABB - inside the bounds is pushed to the roof");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("mesh")}).success,
+		"set Mesh");
+	const BoxCollisionResult meshInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(std::abs(meshInside.position.y - 1.5F) < 0.05F,
+		"Mesh collider is hollow - standing inside the pyramid does not hit a triangle");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("convex")}).success,
+		"set Convex");
+	const BoxCollisionResult convexInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(std::abs(convexInside.position.x) > 0.01F || std::abs(convexInside.position.y - 1.5F) > 0.05F,
+		"Convex hull is solid - a point inside the pyramid must be pushed out");
+
+	const BoxCollisionResult convexCorner =
+		resolveBoxCollision(scene, 999, glm::vec3(1.8F, 3.5F, 1.8F), 0.1F, 0.2F, provider);
+	TEST_ASSERT(std::abs(convexCorner.position.x - 1.8F) < 0.05F && std::abs(convexCorner.position.y - 3.5F) < 0.05F,
+		"Convex does not fill the AABB corners the way Box does");
+}
+
+// ----------------------------------------------------------------------------
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -520,10 +765,15 @@ int main()
 	RUN_TEST(testSceneSerialization);
 	RUN_TEST(testEditorScene);
 	RUN_TEST(testScriptRuntimeSandboxing);
+	RUN_TEST(testGetRightMatchesFpsCamera);
 	RUN_TEST(testGameObjectComponentModel);
 	RUN_TEST(testAssetDatabase);
 	RUN_TEST(testMaterialSerialization);
 	RUN_TEST(testScriptPropertyReflection);
+	RUN_TEST(testColliderPrimitiveBlocksWhenChecked);
+	RUN_TEST(testImportedMeshColliderUsesTrianglesNotScaleBox);
+	RUN_TEST(testParentColliderSolidsChildren);
+	RUN_TEST(testColliderBoxMeshConvexTypes);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

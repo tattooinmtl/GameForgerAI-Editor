@@ -1,6 +1,7 @@
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,6 +13,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "GameForger/Editor/Animation.hpp"
+#include "GameForger/Editor/Collision.hpp"
 #include "GameForger/Editor/Transform.hpp"
 
 namespace gameforger::editor
@@ -29,13 +31,23 @@ namespace gameforger::editor
 		return std::isfinite(deltaTime) ? std::min(deltaTime, kMaxDeltaSeconds) : 0.0F;
 	}
 
+	void executeOrLog(AICommandBus& commandBus, const AIEditorCommand& command)
+	{
+		const AICommandResult result = commandBus.execute(command);
+		if (!result.success)
+		{
+			std::fprintf(stderr, "GameplayLoop command failed: %s\n", result.message.c_str());
+		}
+	}
+
 	void applyParentConstraints(const EditorScene& scene, AICommandBus& commandBus)
 	{
 		std::unordered_map<int, glm::mat4> worldMatrixCache;
 		std::unordered_set<int> resolving;
+		constexpr int kMaxParentDepth = 64;
 
-		const std::function<glm::mat4(const SceneEntity&)> resolveWorldMatrix =
-			[&](const SceneEntity& entity) -> glm::mat4
+		const std::function<glm::mat4(const SceneEntity&, int)> resolveWorldMatrix =
+			[&](const SceneEntity& entity, const int depth) -> glm::mat4
 		{
 			const auto cached = worldMatrixCache.find(entity.id);
 			if (cached != worldMatrixCache.end())
@@ -46,7 +58,8 @@ namespace gameforger::editor
 			// A cycle (A's parent chain loops back to A) is treated the
 			// same as "no parent" - resolves to this entity's own last
 			// known world transform instead of recursing forever.
-			const SceneEntity* parent = (entity.parentName.empty() || resolving.count(entity.id) > 0)
+			const SceneEntity* parent =
+				(entity.parentName.empty() || resolving.count(entity.id) > 0 || depth >= kMaxParentDepth)
 				? nullptr
 				: scene.findEntity(entity.parentName);
 			if (parent == nullptr)
@@ -57,7 +70,7 @@ namespace gameforger::editor
 			}
 
 			resolving.insert(entity.id);
-			const glm::mat4 parentWorld = resolveWorldMatrix(*parent);
+			const glm::mat4 parentWorld = resolveWorldMatrix(*parent, depth + 1);
 			resolving.erase(entity.id);
 
 			SceneEntity localFrame{};
@@ -75,7 +88,7 @@ namespace gameforger::editor
 			{
 				continue;
 			}
-			const glm::mat4 world = resolveWorldMatrix(entity);
+			const glm::mat4 world = resolveWorldMatrix(entity, 0);
 			float translation[3];
 			float rotation[3];
 			float scale[3];
@@ -87,9 +100,9 @@ namespace gameforger::editor
 				glm::length(newRotation - entity.rotationEuler) > 0.0001F ||
 				glm::length(newScale - entity.scale) > 0.0001F)
 			{
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "position", newPosition});
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "rotation", newRotation});
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "scale", newScale});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "position", newPosition});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "rotation", newRotation});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "scale", newScale});
 			}
 		}
 	}
@@ -119,15 +132,15 @@ namespace gameforger::editor
 			// detach the child visually (turret arms snapping off castles, etc.).
 			if (entity.parentName.empty())
 			{
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "position", pose.position});
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "rotation", pose.rotationEuler});
-				commandBus.execute(SetPropertyCommand{entity.name, "Transform", "scale", pose.scale});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "position", pose.position});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "rotation", pose.rotationEuler});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Transform", "scale", pose.scale});
 			}
 			else
 			{
-				commandBus.execute(SetPropertyCommand{entity.name, "Parent", "localPosition", pose.position});
-				commandBus.execute(SetPropertyCommand{entity.name, "Parent", "localRotation", pose.rotationEuler});
-				commandBus.execute(SetPropertyCommand{entity.name, "Parent", "localScale", pose.scale});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Parent", "localPosition", pose.position});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Parent", "localRotation", pose.rotationEuler});
+				executeOrLog(commandBus, SetPropertyCommand{entity.name, "Parent", "localScale", pose.scale});
 			}
 		}
 	}
@@ -179,11 +192,9 @@ namespace gameforger::editor
 			bool hit = false;
 			if (projectile.useGravity)
 			{
-				// Real AABB-vs-collider test (same min/max formula as
-				// resolveBoxCollision, ScriptRuntime.cpp), gated on
-				// hasCollider, not the original sphere-vs-tag check - a
-				// boulder needs to actually land inside the castle's
-				// hitbox, not just pass near an entity carrying the tag.
+				// AABB-vs-collider test (colliderWorldAabb, Collision.cpp),
+				// gated on hasCollider. Imported castles use the mesh bounds,
+				// not the Transform Scale 2x2x2 box.
 				for (const SceneEntity& other : scene.entities())
 				{
 					if (!other.active || !other.hasCollider)
@@ -194,17 +205,18 @@ namespace gameforger::editor
 					{
 						continue;
 					}
-					const glm::vec3 boxMin = other.position - other.scale;
-					const glm::vec3 boxMax = other.position + other.scale;
-					if (projectile.position.x >= boxMin.x && projectile.position.x <= boxMax.x &&
-						projectile.position.y >= boxMin.y && projectile.position.y <= boxMax.y &&
-						projectile.position.z >= boxMin.z && projectile.position.z <= boxMax.z)
+					const MeshCollisionGeometry* mesh =
+						other.isImportedMesh ? importedMeshCollision(scene, other) : nullptr;
+					const ColliderAabb box = colliderWorldAabb(other, mesh);
+					if (projectile.position.x >= box.min.x && projectile.position.x <= box.max.x &&
+						projectile.position.y >= box.min.y && projectile.position.y <= box.max.y &&
+						projectile.position.z >= box.min.z && projectile.position.z <= box.max.z)
 					{
 						hit = true;
 						if (other.isCastle && gameplay.gameOverMessage.empty())
 						{
 							const float newHp = std::max(0.0F, other.castle.hp - 25.0F);
-							commandBus.execute(SetPropertyCommand{other.name, "Castle", "hp", newHp});
+							executeOrLog(commandBus, SetPropertyCommand{other.name, "Castle", "hp", newHp});
 							if (newHp <= 0.0F)
 							{
 								const bool playerCastleLost =

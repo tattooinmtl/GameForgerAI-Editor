@@ -8,6 +8,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
@@ -814,6 +815,79 @@ static void testChatResponseBothProtocols()
 	TEST_ASSERT(err == "max_tokens is required", "Anthropic error.message must be extracted");
 }
 
+// ----------------------------------------------------------------------------
+// gameforger::core::resolveProjectFile is THE project-boundary check - every script, model,
+// font and texture path authored into a scene goes through it (ScriptRuntime,
+// ViewportRenderer, EditorScene). A silent regression here is a security
+// regression: scene files are shareable, so a hostile one could otherwise name
+// any path on disk. It had no coverage at all until this test.
+// ----------------------------------------------------------------------------
+static void testResolveProjectFileConfinement()
+{
+	namespace fs = std::filesystem;
+
+	// A real directory tree, because resolveProjectFile calls weakly_canonical
+	// and a purely fictional root would exercise different code paths.
+	const fs::path root = fs::absolute("test_confinement_root");
+	fs::create_directories(root / "Game" / "Scripts");
+	fs::create_directories(root / "Game" / "ScriptsEvil");
+	fs::create_directories(root / "Secrets");
+	{
+		std::ofstream(root / "Game" / "Scripts" / "ok.lua") << "-- ok\n";
+		std::ofstream(root / "Game" / "ScriptsEvil" / "sneaky.lua") << "-- sneaky\n";
+		std::ofstream(root / "Secrets" / "keys.lua") << "-- secret\n";
+	}
+
+	const std::vector<std::string> lua{".lua"};
+
+	// Happy path.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", lua).has_value(),
+		"A normal in-bounds script path must resolve");
+
+	// Traversal out of the required subdirectory.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/Scripts/../../Secrets/keys.lua", "Game/Scripts", lua).has_value(),
+		"'..' traversal escaping the required directory must be rejected");
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Secrets/keys.lua", "Game/Scripts", lua).has_value(),
+		"A path outside the required directory must be rejected");
+
+	// Sibling directory sharing a string prefix. This is the case a naive
+	// starts_with() boundary check would wrongly allow.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/ScriptsEvil/sneaky.lua", "Game/Scripts", lua).has_value(),
+		"A sibling directory with a matching string prefix must be rejected");
+
+	// Absolute paths bypass the root entirely, so they are never acceptable.
+	const fs::path absolute = root / "Game" / "Scripts" / "ok.lua";
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, absolute, "Game/Scripts", lua).has_value(),
+		"An absolute path must be rejected even when it points somewhere legal");
+
+	// Empty input.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "", "Game/Scripts", lua).has_value(),
+		"An empty relative path must be rejected");
+
+	// Extension allowlist, and its case-insensitivity.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", {".glb"}).has_value(),
+		"A disallowed extension must be rejected");
+	{
+		std::ofstream(root / "Game" / "Scripts" / "SHOUTY.LUA") << "-- ok\n";
+	}
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/SHOUTY.LUA", "Game/Scripts", lua).has_value(),
+		"Extension matching must be case-insensitive");
+
+	// No allowlist means any extension is acceptable.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", {}).has_value(),
+		"An empty allowedExtensions list must accept any extension");
+
+	// A file that does not exist yet still resolves - confinement is a path
+	// question, not an existence one, and callers report missing files
+	// themselves. Pinned so nobody "fixes" this into an exists() check and
+	// breaks save-to-new-path flows.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/not_created.lua", "Game/Scripts", lua).has_value(),
+		"A not-yet-existing in-bounds path must still resolve");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -837,6 +911,7 @@ int main()
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testColliderBoxMeshConvexTypes);
 	RUN_TEST(testChatResponseBothProtocols);
+	RUN_TEST(testResolveProjectFileConfinement);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

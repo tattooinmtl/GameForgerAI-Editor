@@ -70,8 +70,20 @@ namespace gameforger::editor::json
 			}
 
 		private:
+			// parseValue -> parseObject/parseArray -> parseValue recurses once
+			// per level of nesting, so an input like "[[[[[..." would grow the
+			// stack without bound and hard-crash the process. This parser is
+			// fed AI provider HTTP response bodies, Blender MCP replies and
+			// scene files opened from disk - none of which are trusted input -
+			// so the depth is capped rather than left to the stack size.
+			//
+			// 200 is far beyond anything this project's own formats reach: a
+			// saved scene nests about six levels deep.
+			static constexpr std::size_t kMaxDepth = 200;
+
 			const std::string& text_;
 			std::size_t pos_ = 0;
+			std::size_t depth_ = 0;
 
 			[[nodiscard]] bool atEnd() const noexcept
 			{
@@ -95,8 +107,21 @@ namespace gameforger::editor::json
 				}
 				switch (text_[pos_])
 				{
-					case '{': return parseObject();
-					case '[': return parseArray();
+					// The only two recursive cases. Everything else below is a
+					// flat scalar and cannot grow the stack.
+					case '{':
+					case '[':
+					{
+						if (depth_ >= kMaxDepth)
+						{
+							return std::nullopt;
+						}
+						++depth_;
+						std::optional<Value> nested =
+							text_[pos_] == '{' ? parseObject() : parseArray();
+						--depth_;
+						return nested;
+					}
 					case '"': return parseStringValue();
 					case 't':
 					case 'f': return parseBool();

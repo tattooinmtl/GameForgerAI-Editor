@@ -147,6 +147,28 @@ void testJsonParser()
 			static_cast<unsigned char>(g->stringValue[2]) == 0x98 &&
 			static_cast<unsigned char>(g->stringValue[3]) == 0x80,
 		"\\uD83D\\uDE00 must decode to UTF-8 F0 9F 98 80");
+
+	// 5. Nesting depth is capped. Without a cap this input recurses ~50k deep
+	// and overflows the stack - a hard crash, reachable from any AI provider
+	// response, Blender MCP reply or scene file the editor is asked to read.
+	// Rejection must be graceful (nullopt), not a process death.
+	{
+		const std::size_t kNesting = 50000;
+		std::string deep;
+		deep.reserve(kNesting * 2);
+		deep.append(kNesting, '[');
+		deep.append(kNesting, ']');
+		TEST_ASSERT(!json::parse(deep).has_value(),
+			"Deeply nested JSON must be rejected rather than overflowing the stack");
+
+		// The cap must not reject documents of a sane shape. Scenes nest ~6
+		// levels; 40 is comfortably legal and must still parse.
+		std::string legal;
+		legal.append(40, '[');
+		legal.append(40, ']');
+		TEST_ASSERT(json::parse(legal).has_value(),
+			"Moderately nested JSON (40 levels) must still parse");
+	}
 }
 
 // ----------------------------------------------------------------------------

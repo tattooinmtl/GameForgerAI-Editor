@@ -1880,8 +1880,20 @@ namespace
         ImGui::Checkbox("Autonomous mode", &cockpit.autonomousMode);
         ImGui::SameLine();
         if (!cockpit.autonomousMode) ImGui::BeginDisabled();
-        ImGui::Checkbox("Auto-approve destructive (except execute_python)",
+        // Autonomous mode alone auto-runs only the editor's own known-safe,
+        // undoable scene.* tools (see isAutoApprovableTool). This checkbox
+        // extends that to everything else - including every tool discovered
+        // from the Blender MCP server, whose names we do not control.
+        // execute_python stays gated regardless.
+        ImGui::Checkbox("Also auto-approve unrecognised + destructive tools (never execute_python)",
             &cockpit.approveDestructiveAutomatically);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Off: only the editor's own safe scene tools run unattended;\n"
+                "anything else - including Blender MCP tools - asks first.\n"
+                "On: everything except execute_python runs unattended.");
+        }
         if (!cockpit.autonomousMode) ImGui::EndDisabled();
 
         if (!cockpit.statusText.empty())

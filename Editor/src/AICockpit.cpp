@@ -54,6 +54,12 @@ namespace gameforger::editor
 		entries_.clear();
 	}
 
+	// NOTE: this is a PRESENTATION helper - it drives the orange highlight on
+	// tool rows in the chat transcript. It is deliberately NOT the security
+	// gate; see requiresApproval(), which works from an allowlist. A
+	// substring blocklist cannot be a security boundary here because most
+	// tool names arrive from the MCP server's own tools/list response, i.e.
+	// they are chosen by the other end of the socket.
 	bool isDestructiveTool(const std::string& name)
 	{
 		// Case-insensitive substring test for the usual suspects. Anything
@@ -437,24 +443,65 @@ namespace gameforger::editor
 
 	namespace
 	{
+		// Tools this editor implements itself, which are non-destructive and
+		// reversible through the AI undo ring. This is an ALLOWLIST, and it is
+		// exhaustive on purpose: the previous gate asked "does this name look
+		// destructive?", which fails open for anything it does not recognise.
+		// That matters because only these entries are ours - every other tool
+		// name reaching requiresApproval() came from the MCP server's
+		// tools/list response, so the string is chosen by the other end of the
+		// socket. A tool called "bpy.run" or "object.set_script" contains none
+		// of the old blocklist markers and would have run unattended.
+		//
+		// scene.delete_entity and scene.remove_tag are ours too, but they
+		// destroy authored work, so they stay out of this list.
+		bool isAutoApprovableTool(const std::string& toolName)
+		{
+			static const char* kSafeTools[] = {
+				"scene.list_entities",
+				"scene.create_primitive",
+				"scene.set_position",
+				"scene.duplicate_entity",
+				"scene.import_model",
+				"scene.attach_script",
+				"scene.add_tag",
+			};
+			for (const char* safe : kSafeTools)
+			{
+				if (toolName == safe) return true;
+			}
+			return false;
+		}
+
+		// Arbitrary Python inside Blender. Never auto-approved, in any mode,
+		// under any setting - this is the one capability that can do anything
+		// the user's account can.
+		bool isAlwaysGatedTool(const std::string& toolName)
+		{
+			return toolName.find("execute_python") != std::string::npos;
+		}
+
 		bool requiresApproval(const AICockpitState& state, const std::string& toolName)
 		{
+			if (isAlwaysGatedTool(toolName))
+			{
+				return true;
+			}
 			// Non-autonomous mode: everything needs approval (except read-only
 			// scene.list_entities which is safe).
 			if (!state.autonomousMode)
 			{
-				if (toolName == "scene.list_entities") return false;
-				return true;
+				return toolName != "scene.list_entities";
 			}
-			// Autonomous mode: only destructive tools need approval.
-			if (!isDestructiveTool(toolName)) return false;
-			if (state.approveDestructiveAutomatically)
+			// Autonomous mode: run the known-safe editor tools unattended.
+			if (isAutoApprovableTool(toolName))
 			{
-				// Even in "auto approve destructive" mode, ALWAYS require
-				// approval for arbitrary python execution.
-				return toolName.find("execute_python") != std::string::npos;
+				return false;
 			}
-			return true;
+			// Everything else - our own destructive tools, and every tool
+			// discovered from the MCP server - needs approval unless the user
+			// has explicitly opted into blanket auto-approval.
+			return !state.approveDestructiveAutomatically;
 		}
 
 		// Blocks the worker until the main thread calls approve/reject.
@@ -505,7 +552,15 @@ namespace gameforger::editor
 
 	void requestCockpitStop(AICockpitState& state)
 	{
-		state.loopRunning.store(false);
+		// loopRunning is part of the approvalGate predicate (see
+		// waitForApproval), so it must be mutated under approvalMutex. Storing
+		// it unlocked lets this notify land while the worker still holds the
+		// mutex evaluating that predicate - the wakeup is then lost and the
+		// worker blocks forever on an approval that will never come again.
+		{
+			std::lock_guard lock(state.approvalMutex);
+			state.loopRunning.store(false);
+		}
 		state.approvalGate.notify_all();
 	}
 
@@ -530,7 +585,13 @@ namespace gameforger::editor
 
 	void joinCockpitWorker(AICockpitState& state)
 	{
-		state.loopRunning.store(false);
+		// Same lost-wakeup hazard as requestCockpitStop, and worse here: this
+		// runs on editor shutdown, so a missed notify hangs the process on
+		// join() with its window already gone.
+		{
+			std::lock_guard lock(state.approvalMutex);
+			state.loopRunning.store(false);
+		}
 		state.approvalGate.notify_all();
 		if (state.worker.joinable())
 		{

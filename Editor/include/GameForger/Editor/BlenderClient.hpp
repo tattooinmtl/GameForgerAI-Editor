@@ -36,7 +36,11 @@ namespace gameforger::editor
 		{
 			std::string host = "127.0.0.1";
 			int port = 8765;
-			// Optional shared secret. If non-empty, sent as "Authorization: Bearer <token>".
+			// Shared secret, sent as "Authorization: Bearer <token>". Leave
+			// empty and the constructor fills it with 32 bytes of
+			// BCryptGenRandom entropy; BlenderLauncher then hands the same
+			// value to the addon, so an editor-launched Blender is
+			// authenticated end to end. Only ever empty if the OS RNG failed.
 			std::string bearerToken;
 			std::chrono::milliseconds requestTimeout{15000};
 			// URL path for the MCP endpoint. The upstream addon serves at "/mcp".

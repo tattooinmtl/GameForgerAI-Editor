@@ -28,6 +28,11 @@ namespace gameforger::editor
 			std::wstring path;
 			std::wstring model;
 			std::wstring key;
+			// "anthropic" | "openai-compatible" | "custom", straight from
+			// Providers.json. Defaults to openai-compatible when the field is
+			// absent, which is what every provider in the shipped file except
+			// Anthropic itself uses.
+			std::string protocol = "openai-compatible";
 		};
 
 		std::string readFile(const std::filesystem::path& path)
@@ -176,6 +181,12 @@ namespace gameforger::editor
 			settings.host = widen(endpoint.substr(hostStart, pathStart - hostStart));
 			settings.path = widen(endpoint.substr(pathStart));
 			settings.model = widen(model);
+			if (const json::Value* protocolValue = match->find("protocol");
+				protocolValue != nullptr && protocolValue->type == json::Value::Type::String &&
+				!protocolValue->stringValue.empty())
+			{
+				settings.protocol = protocolValue->stringValue;
+			}
 
 			// Local secrets file uses the same JSON shape: an object whose
 			// keys are environment variable names and whose values are the
@@ -199,6 +210,46 @@ namespace gameforger::editor
 				settings.key = widen(key);
 			}
 			return !settings.host.empty() && !settings.path.empty() && !settings.key.empty();
+		}
+
+		// Anthropic caps generation with a REQUIRED max_tokens; OpenAI-compatible
+		// providers default it server-side. 4096 is comfortably above what any
+		// send() caller asks for (a script, an animation clip, a command plan).
+		constexpr int kAnthropicMaxTokens = 4096;
+
+		std::string buildRequestBody(const ProviderSettings& settings, const AIProviderRequest& request)
+		{
+			const std::string model = escapeJson(narrow(settings.model));
+			if (settings.protocol == "anthropic")
+			{
+				std::string body = "{\"model\":\"" + model +
+					"\",\"max_tokens\":" + std::to_string(kAnthropicMaxTokens);
+				if (!request.systemPrompt.empty())
+				{
+					body += ",\"system\":\"" + escapeJson(request.systemPrompt) + "\"";
+				}
+				body += ",\"messages\":[{\"role\":\"user\",\"content\":\"" +
+					escapeJson(request.prompt) + "\"}],\"temperature\":0.2}";
+				return body;
+			}
+			return "{\"model\":\"" + model +
+				"\",\"messages\":[{\"role\":\"system\",\"content\":\"" +
+				escapeJson(request.systemPrompt) + "\"},{\"role\":\"user\",\"content\":\"" +
+				escapeJson(request.prompt) + "\"}],\"temperature\":0.2}";
+		}
+
+		// Both auth schemes on every request, matching what sendRaw() has always
+		// done: Anthropic reads x-api-key + anthropic-version, OpenAI-compatible
+		// providers read Authorization. Unknown headers are ignored, so this
+		// costs nothing and removes a way for the two paths to disagree.
+		std::wstring buildRequestHeaders(const ProviderSettings& settings)
+		{
+			return
+				L"Content-Type: application/json\r\n"
+				L"Accept: application/json\r\n"
+				L"Authorization: Bearer " + settings.key + L"\r\n"
+				L"x-api-key: " + settings.key + L"\r\n"
+				L"anthropic-version: 2023-06-01";
 		}
 	}
 
@@ -303,11 +354,14 @@ namespace gameforger::editor
 			return {false, 0, {}, "Provider configuration or API key is unavailable."};
 		}
 
-		const std::string body =
-			"{\"model\":\"" + escapeJson(narrow(settings.model)) +
-			"\",\"messages\":[{\"role\":\"system\",\"content\":\"" +
-			escapeJson(request.systemPrompt) + "\"},{\"role\":\"user\",\"content\":\"" +
-			escapeJson(request.prompt) + "\"}],\"temperature\":0.2}";
+		// Anthropic's Messages API is NOT OpenAI-shaped: the system prompt is a
+		// top-level "system" field rather than a messages[] entry, and
+		// "max_tokens" is required. Sending the OpenAI body here used to make
+		// every send() caller (ScriptGenerator, AICommandPlanner,
+		// AIAnimationGenerator, the Calibrate button) fail against the DEFAULT
+		// provider, which is Anthropic. sendRaw() has always branched on
+		// protocol; send() now does the same.
+		const std::string body = buildRequestBody(settings, request);
 
 		HINTERNET session = WinHttpOpen(
 			L"GameForgerAIEditor/0.1",
@@ -340,17 +394,14 @@ namespace gameforger::editor
 			return {false, 0, {}, "Cancelled."};
 		}
 
-		const std::wstring headers = L"Content-Type: application/json\r\nAuthorization: Bearer " + settings.key;
+		const std::wstring headers = buildRequestHeaders(settings);
 		const BOOL sent = WinHttpSendRequest(
 			requestHandle,
 			headers.c_str(),
 			// WinHttpSendRequest's 3rd arg is BYTE count, not wchar_t
-			// count. Today the headers are pure ASCII ("Content-Type",
-			// "Authorization: Bearer ..."), so size() happens to be the
-			// right answer; the moment any header name gains a non-ASCII
-			// character, the server will silently truncate. -1 (and a
-			// null-terminated wide string) lets WinHTTP compute the
-			// length itself.
+			// count. -1 (with a null-terminated wide string) lets WinHTTP
+			// compute the length itself, which stays correct if any header
+			// ever gains a non-ASCII character.
 			static_cast<DWORD>(-1),
 			const_cast<char*>(body.data()),
 			static_cast<DWORD>(body.size()),
@@ -439,16 +490,7 @@ namespace gameforger::editor
 			return {false, 0, {}, "Cancelled."};
 		}
 
-		// Anthropic requires x-api-key + anthropic-version headers; OpenAI-
-		// compatible providers just want Authorization: Bearer. Send BOTH -
-		// unknown headers are ignored, and this keeps the caller from having
-		// to know which provider it's talking to.
-		const std::wstring headers =
-			L"Content-Type: application/json\r\n"
-			L"Accept: application/json\r\n"
-			L"Authorization: Bearer " + settings.key + L"\r\n"
-			L"x-api-key: " + settings.key + L"\r\n"
-			L"anthropic-version: 2023-06-01";
+		const std::wstring headers = buildRequestHeaders(settings);
 		const BOOL sent = WinHttpSendRequest(
 			request, headers.c_str(), static_cast<DWORD>(-1),
 			const_cast<char*>(body.data()), static_cast<DWORD>(body.size()),

@@ -8,6 +8,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/Json.hpp"
@@ -752,6 +753,45 @@ void testColliderBoxMeshConvexTypes()
 }
 
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Provider response parsing. The editor ships with Anthropic as the DEFAULT
+// provider, and its Messages API returns a content[] block array rather than
+// OpenAI's choices[0].message.content. Parsing only the OpenAI shape silently
+// broke AI script/animation/command generation on a clean install, so both
+// shapes are pinned here.
+// ----------------------------------------------------------------------------
+static void testChatResponseBothProtocols()
+{
+	// OpenAI-compatible.
+	const std::optional<std::string> openai = extractChatMessageContent(
+		R"({"choices":[{"message":{"role":"assistant","content":"hello from openai"}}]})");
+	TEST_ASSERT(openai.has_value() && *openai == "hello from openai",
+		"OpenAI choices[0].message.content must be extracted");
+
+	// Anthropic Messages.
+	const std::optional<std::string> anthropic = extractChatMessageContent(
+		R"({"content":[{"type":"text","text":"hello from anthropic"}],"stop_reason":"end_turn"})");
+	TEST_ASSERT(anthropic.has_value() && *anthropic == "hello from anthropic",
+		"Anthropic content[] text block must be extracted");
+
+	// Anthropic with a non-text block interleaved: text blocks concatenate,
+	// everything else is skipped rather than derailing the parse.
+	const std::optional<std::string> mixed = extractChatMessageContent(
+		R"({"content":[{"type":"thinking","thinking":"ignore me"},)"
+		R"({"type":"text","text":"part one "},{"type":"text","text":"part two"}]})");
+	TEST_ASSERT(mixed.has_value() && *mixed == "part one part two",
+		"Anthropic text blocks must concatenate and skip non-text blocks");
+
+	// A body with neither shape must report absence, not an empty string.
+	TEST_ASSERT(!extractChatMessageContent(R"({"unexpected":true})").has_value(),
+		"Unrecognised response shape must yield nullopt");
+
+	// Anthropic's error envelope must still surface through the shared path.
+	const std::string err = extractErrorMessage(
+		R"({"type":"error","error":{"type":"invalid_request_error","message":"max_tokens is required"}})");
+	TEST_ASSERT(err == "max_tokens is required", "Anthropic error.message must be extracted");
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -774,6 +814,7 @@ int main()
 	RUN_TEST(testImportedMeshColliderUsesTrianglesNotScaleBox);
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testColliderBoxMeshConvexTypes);
+	RUN_TEST(testChatResponseBothProtocols);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

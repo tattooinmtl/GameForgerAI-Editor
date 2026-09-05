@@ -11,11 +11,50 @@
 
 #include <windows.h>
 #include <winhttp.h>
+#include <bcrypt.h>
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 namespace gameforger::editor
 {
+	namespace
+	{
+		// The MCP server binds 127.0.0.1 with no transport security, and its
+		// tool surface includes code.execute_python - arbitrary Python inside
+		// Blender with the user's privileges. Any local process can reach that
+		// port, so the shared secret is the only thing standing between a
+		// stray process and RCE. Generated once per BlenderClient and handed
+		// to the addon via BlenderLauncher's --python-expr, so the editor and
+		// the Blender it spawns agree without the token ever touching disk.
+		//
+		// BCryptGenRandom, not std::random_device/mt19937: this is a security
+		// token, and the standard library gives no portable guarantee about
+		// the entropy source behind random_device.
+		std::string generateBearerToken()
+		{
+			unsigned char bytes[32] = {};
+			const NTSTATUS status = BCryptGenRandom(
+				nullptr, bytes, sizeof(bytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+			if (status != 0)
+			{
+				// Never fall back to a weak/predictable token - an empty one
+				// makes the missing Authorization header obvious at the call
+				// site instead of silently pretending to be authenticated.
+				return {};
+			}
+			static constexpr char kHex[] = "0123456789abcdef";
+			std::string token;
+			token.reserve(sizeof(bytes) * 2);
+			for (const unsigned char byte : bytes)
+			{
+				token += kHex[(byte >> 4) & 0x0F];
+				token += kHex[byte & 0x0F];
+			}
+			return token;
+		}
+	}
+
 	namespace
 	{
 		std::wstring widen(const std::string& value)
@@ -226,6 +265,10 @@ namespace gameforger::editor
 		: config_(std::move(config))
 		, cancel_(std::make_unique<CancelState>())
 	{
+		if (config_.bearerToken.empty())
+		{
+			config_.bearerToken = generateBearerToken();
+		}
 	}
 
 	BlenderClient::~BlenderClient()
@@ -251,7 +294,16 @@ namespace gameforger::editor
 
 	void BlenderClient::setConfig(Config config)
 	{
+		// Preserve the existing token rather than blanking it - a caller
+		// changing the port shouldn't silently drop authentication on a
+		// Blender that was already launched with the old token.
+		std::string previousToken = std::move(config_.bearerToken);
 		config_ = std::move(config);
+		if (config_.bearerToken.empty())
+		{
+			config_.bearerToken =
+				previousToken.empty() ? generateBearerToken() : std::move(previousToken);
+		}
 	}
 
 	BlenderClient::Response BlenderClient::ping()

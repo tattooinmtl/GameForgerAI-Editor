@@ -106,11 +106,21 @@ set_target_properties(GameForgerEngine PROPERTIES FOLDER "GameForger")
 
 add_executable(GameForgerTests
     tests/TestMain.cpp
+    # Provider response parsing lives in the Editor target, which is an
+    # executable and so cannot be linked. Its only dependency is Engine's
+    # Json.hpp, so compile the one translation unit straight into the test
+    # binary rather than restructuring Editor into a library for it.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Editor/src/AIChatResponse.cpp
 )
 
 target_link_libraries(GameForgerTests
     PRIVATE
         GameForgerEngine
+)
+
+target_include_directories(GameForgerTests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../Editor/include
 )
 
 target_compile_features(GameForgerTests PRIVATE cxx_std_20)

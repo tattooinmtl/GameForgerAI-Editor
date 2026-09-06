@@ -66,21 +66,6 @@ namespace gameforger::editor
 		}
 	}
 
-	void fireAudioHooks(
-		core::AudioEngine& audio,
-		const std::filesystem::path& projectRoot,
-		const std::vector<AudioHook>& hooks,
-		const AudioHook::Event event)
-	{
-		for (const AudioHook& hook : hooks)
-		{
-			if (hook.event == event && !hook.clipPath.empty())
-			{
-				audio.play(projectRoot, hook.clipPath, hook.volume);
-			}
-		}
-	}
-
 	void drawAudioPanel(
 		ProjectSettingsBus& bus,
 		core::AudioEngine& audio,
@@ -169,10 +154,11 @@ namespace gameforger::editor
 		for (int i = 0; i < static_cast<int>(hooks.size()); ++i)
 		{
 			ImGui::PushID(i);
-			ImGui::Text("%s  %s  (%.2f)",
+			ImGui::Text("%s  %s  (%.2f)%s",
 				audioHookEventName(hooks[static_cast<std::size_t>(i)].event),
 				hooks[static_cast<std::size_t>(i)].clipPath.c_str(),
-				static_cast<double>(hooks[static_cast<std::size_t>(i)].volume));
+				static_cast<double>(hooks[static_cast<std::size_t>(i)].volume),
+				hooks[static_cast<std::size_t>(i)].loop ? "  [loop]" : "");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Remove"))
 			{
@@ -216,6 +202,14 @@ namespace gameforger::editor
 			ImGui::EndCombo();
 		}
 		ImGui::SliderFloat("Volume", &state.newHookVolume, 0.0F, 1.0F, "%.2f");
+		ImGui::Checkbox("Loop (background music)", &state.newHookLoop);
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip(
+				"On: the clip repeats until Play stops - this is how you get\n"
+				"background music. Pair it with the on_play_start event.\n"
+				"Off: the clip fires once each time the event happens.");
+		}
 		if (ImGui::Button("Add hook") && !clips.empty())
 		{
 			AddAudioHookCommand command;
@@ -223,6 +217,7 @@ namespace gameforger::editor
 			command.hook.clipPath = clips[static_cast<std::size_t>(
 				std::clamp(state.newHookClip, 0, static_cast<int>(clips.size()) - 1))];
 			command.hook.volume = state.newHookVolume;
+			command.hook.loop = state.newHookLoop;
 			submit(bus, command, log);
 		}
 

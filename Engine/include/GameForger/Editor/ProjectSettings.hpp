@@ -60,6 +60,10 @@ namespace gameforger::editor
 		Event event = Event::OnPlayStart;
 		std::string clipPath;
 		float volume = 1.0F;
+		// Background music is an on_play_start hook with this set. Without it
+		// the track played once and stopped, which made BG music impossible
+		// even though AudioEngine::play has always taken a loop argument.
+		bool loop = false;
 	};
 
 	[[nodiscard]] const char* audioHookEventName(AudioHook::Event event) noexcept;

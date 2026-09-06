@@ -217,6 +217,15 @@ namespace gameforger::editor
 						hook.volume = static_cast<float>(*number);
 					}
 				}
+				// Absent in files written before looping existed - defaults to
+				// false, so an existing one-shot hook behaves exactly as before.
+				if (const json::Value* loop = entry.find("loop"))
+				{
+					if (std::optional<bool> flag = loop->asBool())
+					{
+						hook.loop = *flag;
+					}
+				}
 				outHooks.push_back(std::move(hook));
 			}
 		}
@@ -231,6 +240,7 @@ namespace gameforger::editor
 					{"event", json::makeString(audioHookEventName(hook.event))},
 					{"clipPath", json::makeString(hook.clipPath)},
 					{"volume", json::makeNumber(hook.volume)},
+					{"loop", json::makeBool(hook.loop)},
 				}));
 			}
 			return json::makeArray(std::move(items));

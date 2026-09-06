@@ -317,3 +317,21 @@ namespace gameforger::core
 		return static_cast<float>(frameCount) / static_cast<float>(sampleRate);
 	}
 }
+
+namespace gameforger::editor
+{
+	void fireAudioHooks(
+		core::AudioEngine& audio,
+		const std::filesystem::path& projectRoot,
+		const std::vector<AudioHook>& hooks,
+		const AudioHook::Event event)
+	{
+		for (const AudioHook& hook : hooks)
+		{
+			if (hook.event == event && !hook.clipPath.empty())
+			{
+				(void)audio.play(projectRoot, hook.clipPath, hook.volume, 1.0F, hook.loop);
+			}
+		}
+	}
+}

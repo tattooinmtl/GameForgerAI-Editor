@@ -30,14 +30,10 @@ namespace gameforger::editor
 		int newHookEvent = 0;
 		int newHookClip = 0;
 		float newHookVolume = 1.0F;
+		// Tick this for background music: an on_play_start hook that loops.
+		bool newHookLoop = false;
 		bool dockPlacementDone = false;
 	};
-
-	void fireAudioHooks(
-		core::AudioEngine& audio,
-		const std::filesystem::path& projectRoot,
-		const std::vector<AudioHook>& hooks,
-		AudioHook::Event event);
 
 	void drawAudioPanel(
 		ProjectSettingsBus& bus,

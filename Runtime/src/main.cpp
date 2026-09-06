@@ -21,6 +21,8 @@
 #include <glm/common.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/GlfwInputSource.hpp"
@@ -431,6 +433,17 @@ int main()
 	commandBus.setHandler([&scene](const AIEditorCommand& command) { return scene.execute(command); });
 
 	GlfwInputSource inputSource(window);
+	// Runtime had no audio at all: hooks and self.audio were silent here
+	// while working in the Editor's Play mode. A scene has to behave the same
+	// standalone, so the engine and the hook list live here too.
+	gameforger::core::AudioEngine audioEngine;
+	if (!audioEngine.initialize())
+	{
+		std::fprintf(stderr, "[audio] No audio device - continuing silently.\n");
+	}
+	ProjectSettings projectSettings;
+	(void)loadProjectSettings(projectRoot, projectSettings);
+
 	GameplayState gameplay;
 	if (resumedFromSave)
 	{
@@ -476,9 +489,21 @@ int main()
 		// identically standalone.
 		scriptConfig.cursorLockSetCallback =
 			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
-		// Runtime has no AudioEngine instance yet - wired in D2, where
-		// Runtime audio parity belongs. Silent until then, never null.
-		scriptConfig.audioCommandCallback = [](const std::string&, float, bool) {};
+		scriptConfig.audioCommandCallback =
+			[&audioEngine, &projectRoot](const std::string& clipPath, const float volume, const bool loop)
+			{
+				if (clipPath.empty())
+				{
+					audioEngine.stopAll();
+					return;
+				}
+				if (clipPath == "@master")
+				{
+					audioEngine.setMasterVolume(volume);
+					return;
+				}
+				(void)audioEngine.play(projectRoot, clipPath, volume, 1.0F, loop);
+			};
 		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
 		for (const SceneEntity& entity : scene.entities())
 		{
@@ -489,6 +514,11 @@ int main()
 		}
 	};
 	startAllScripts();
+
+	// Standalone has one continuous session, so on_play_start fires once here
+	// rather than on a Play button. This is what makes a looping background
+	// music hook actually play in the shipped game.
+	fireAudioHooks(audioEngine, projectRoot, projectSettings.audioHooks, AudioHook::Event::OnPlayStart);
 
 	// Mouse-look state for the scripted Game camera - same fields/meaning as
 	// the Editor's PlayModeState (main.cpp), just local here since Runtime

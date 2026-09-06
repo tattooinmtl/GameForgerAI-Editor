@@ -1,5 +1,9 @@
 #pragma once
 
+#include <vector>
+
+#include "GameForger/Editor/ProjectSettings.hpp"
+
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -80,4 +84,16 @@ namespace gameforger::core
 		struct Impl;
 		std::unique_ptr<Impl> impl_;
 	};
+}
+
+namespace gameforger::editor
+{
+	// Plays every hook bound to `event`. Lives in Engine, not the Editor's
+	// audio panel: GameForgerRuntime fires the same hooks, and a scene has to
+	// sound the same standalone as it does in Play mode.
+	void fireAudioHooks(
+		core::AudioEngine& audio,
+		const std::filesystem::path& projectRoot,
+		const std::vector<AudioHook>& hooks,
+		AudioHook::Event event);
 }

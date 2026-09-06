@@ -1416,6 +1416,63 @@ static void testManagerRegistryAndOnEnd()
 	std::filesystem::remove(scriptFile);
 }
 
+// ----------------------------------------------------------------------------
+// AudioHook::loop. Background music is an on_play_start hook with this set;
+// without it the track fired once and stopped, so BG music was impossible even
+// though AudioEngine::play always took a loop argument. A file written before
+// the field existed must still load, with loop defaulting to false.
+// ----------------------------------------------------------------------------
+static void testAudioHookLoopRoundTrip()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_audio_hook_loop_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Audio");
+	{ std::ofstream(root / "Game" / "Audio" / "music.wav") << "x"; }
+	{
+		std::ofstream out(root / "Game" / "Project.json");
+		out << R"({"format":"GameForgerProject","version":1})";
+	}
+
+	ProjectSettingsBus bus(root);
+
+	AddAudioHookCommand music;
+	music.hook.event = AudioHook::Event::OnPlayStart;
+	music.hook.clipPath = "Game/Audio/music.wav";
+	music.hook.volume = 0.5F;
+	music.hook.loop = true;
+	TEST_ASSERT(bus.execute(music).success, "Adding a looping hook must succeed");
+
+	AddAudioHookCommand oneShot;
+	oneShot.hook.event = AudioHook::Event::OnPickup;
+	oneShot.hook.clipPath = "Game/Audio/music.wav";
+	TEST_ASSERT(bus.execute(oneShot).success, "Adding a one-shot hook must succeed");
+	TEST_ASSERT(!oneShot.hook.loop, "loop must default to false");
+
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reload must succeed");
+	TEST_ASSERT(reloaded.audioHooks.size() == 2, "Both hooks must persist");
+	TEST_ASSERT(reloaded.audioHooks[0].loop, "loop=true must survive the round-trip");
+	TEST_ASSERT(!reloaded.audioHooks[1].loop, "loop=false must survive the round-trip");
+
+	// A settings file written before `loop` existed: the key is simply absent
+	// and must read as false rather than failing or defaulting to true.
+	// Note audioHooks live in Settings.json, not Project.json - reader and
+	// writer agree on that, so this fixture has to match.
+	{
+		std::ofstream out(root / "Game" / "Settings.json");
+		out << R"({"audioHooks":[{"event":"on_play_start","clipPath":"Game/Audio/music.wav","volume":1.0}]})";
+	}
+	ProjectSettings legacy;
+	TEST_ASSERT(loadProjectSettings(root, legacy).success, "A pre-loop file must still load");
+	TEST_ASSERT(legacy.audioHooks.size() == 1, "The legacy hook must load");
+	TEST_ASSERT(!legacy.audioHooks[0].loop, "A missing loop key must default to false");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1447,6 +1504,7 @@ int main()
 	RUN_TEST(testStoryboardSerialization);
 	RUN_TEST(testAudioCueOrdering);
 	RUN_TEST(testManagerRegistryAndOnEnd);
+	RUN_TEST(testAudioHookLoopRoundTrip);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

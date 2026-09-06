@@ -4,6 +4,10 @@ add_library(GameForgerEngine STATIC
     src/Core/AssetDatabase.cpp
     src/Core/Material.cpp
     src/Core/AudioEngine.cpp
+    # Per-frame CPU timing split into named zones, with the worst frames kept
+    # so a dip can be inspected after the fact. In Engine so Runtime can use
+    # the same instrumentation later.
+    src/Core/FrameProfiler.cpp
     src/Animation/Skeleton.cpp
     src/Animation/AnimationClip.cpp
     # Scene data model + serialization + mesh generation - shared between

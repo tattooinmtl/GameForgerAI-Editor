@@ -33,6 +33,8 @@
     # panels rather than growing main.cpp.
     src/TimelinePanel.cpp
     src/AudioPanel.cpp
+    # FPS + frame-time graph + per-zone breakdown of recorded dips.
+    src/PerformancePanel.cpp
     # Editor-only InputSource implementation (ImGui-backed) - see
     # GameForger/Editor/InputSource.hpp (Engine, shared interface) and
     # Engine/src/Editor/GlfwInputSource.cpp (Runtime's equivalent).

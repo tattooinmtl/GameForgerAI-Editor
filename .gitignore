@@ -29,3 +29,8 @@ vc140.pdb
 # `git add -A` can't commit it into a history that already carries 331 MB of
 # binary assets with no LFS.
 /models/
+
+# Performance panel exports (Reports/performance-<timestamp>.md). Diagnostic
+# output about a particular run on a particular machine - useful to share by
+# hand, not to version.
+/Reports/

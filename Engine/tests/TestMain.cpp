@@ -9,6 +9,7 @@
 #include <glm/vec3.hpp>
 
 #include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Core/FrameProfiler.hpp"
 #include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ProjectSettingsBus.hpp"
@@ -1574,6 +1575,75 @@ static void testAllShippedScriptsLoad()
 	TEST_ASSERT(failed == 0, "Every script in Game/Scripts must load and tick without error");
 }
 
+// ----------------------------------------------------------------------------
+// The frame profiler and its exported report. buildReport returns a string
+// rather than writing a file precisely so it can be checked here: the export
+// is meant to be read after a stutter, so it has to contain the breakdown of
+// the dip and not just a frame count.
+// ----------------------------------------------------------------------------
+static void testFrameProfilerReport()
+{
+	gameforger::core::FrameProfiler profiler;
+	profiler.setDipThresholdMs(5.0F);
+
+	// An empty profiler must produce a report, not crash or lie.
+	TEST_ASSERT(profiler.buildReport().find("No frames were recorded") != std::string::npos,
+		"An empty profiler must say so rather than emitting an empty report");
+
+	// A fast frame: two cheap zones, well under the threshold.
+	for (int i = 0; i < 3; ++i)
+	{
+		profiler.beginFrame();
+		profiler.beginZone("Cheap");
+		profiler.endZone();
+		profiler.endFrame();
+	}
+	TEST_ASSERT(profiler.dipCount() == 0, "Fast frames must not be recorded as dips");
+	TEST_ASSERT(profiler.history().size() == 3, "Every frame must land in the rolling window");
+
+	// A deliberately slow frame, with the cost inside a named zone so the
+	// report can attribute it.
+	profiler.beginFrame();
+	profiler.beginZone("Slow Zone");
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+	while (std::chrono::steady_clock::now() < until) { /* burn wall time */ }
+	profiler.endZone();
+	profiler.endFrame();
+
+	TEST_ASSERT(profiler.dipCount() == 1, "A frame over the threshold must be recorded as a dip");
+	TEST_ASSERT(!profiler.worstFrames().empty(), "The dip must be retained for inspection");
+	const auto& dip = profiler.worstFrames().front();
+	TEST_ASSERT(dip.totalMilliseconds >= 10.0F, "The dip must record its real cost");
+	TEST_ASSERT(!dip.zones.empty() && dip.zones.front().name == "Slow Zone",
+		"The dominant zone must be first, so the report names the culprit");
+
+	// Zones accumulate rather than overwrite when entered twice in one frame.
+	profiler.beginFrame();
+	profiler.beginZone("Twice");
+	profiler.endZone();
+	profiler.beginZone("Twice");
+	profiler.endZone();
+	profiler.endFrame();
+	int twiceCount = 0;
+	for (const auto& zone : profiler.lastFrame().zones)
+	{
+		if (zone.name == "Twice") { ++twiceCount; }
+	}
+	TEST_ASSERT(twiceCount == 1, "A zone entered twice must accumulate into one entry, not duplicate");
+
+	const std::string report = profiler.buildReport("Test report");
+	TEST_ASSERT(report.find("# Test report") != std::string::npos, "Report must carry its title");
+	TEST_ASSERT(report.find("## Summary") != std::string::npos, "Report must have a summary");
+	TEST_ASSERT(report.find("## Average cost per zone") != std::string::npos, "Report must average zones");
+	TEST_ASSERT(report.find("Slow Zone") != std::string::npos,
+		"Report must name the zone responsible for the dip");
+	TEST_ASSERT(report.find("## Raw frame times") != std::string::npos, "Report must include raw samples");
+
+	profiler.clearWorst();
+	TEST_ASSERT(profiler.dipCount() == 0 && profiler.worstFrames().empty(),
+		"Clearing dips must reset both the list and the counter");
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1607,6 +1677,7 @@ int main()
 	RUN_TEST(testManagerRegistryAndOnEnd);
 	RUN_TEST(testAudioHookLoopRoundTrip);
 	RUN_TEST(testAllShippedScriptsLoad);
+	RUN_TEST(testFrameProfilerReport);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

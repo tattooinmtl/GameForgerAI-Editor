@@ -44,6 +44,7 @@
 #include <glm/vec3.hpp>
 
 #include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Core/FrameProfiler.hpp"
 #include "GameForger/Core/Engine.hpp"
 #include "GameForger/Editor/AIAnimationGenerator.hpp"
 #include "GameForger/Editor/AudioPanel.hpp"
@@ -57,6 +58,7 @@
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
+#include "GameForger/Editor/PerformancePanel.hpp"
 #include "GameForger/Editor/ProjectSettingsPanel.hpp"
 #include "GameForger/Editor/TimelinePanel.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
@@ -113,6 +115,8 @@ namespace
     using gameforger::editor::AudioHook;
     using gameforger::editor::TimelinePanelState;
     using gameforger::editor::drawTimelinePanel;
+    using gameforger::editor::PerformancePanelState;
+    using gameforger::editor::drawPerformancePanel;
     using gameforger::editor::AudioPanelState;
     using gameforger::editor::drawAudioPanel;
     using gameforger::editor::drawProjectSettingsPanel;
@@ -8438,6 +8442,8 @@ int main()
     gameforger::core::AudioEngine audioEngine;
     audioEngine.initialize();
     AudioPanelState audioPanel;
+    gameforger::core::FrameProfiler frameProfiler;
+    PerformancePanelState performancePanel;
     TimelinePanelState timelinePanel;
     bool wasPlayingAudio = false;
     std::string previousGameOverMessage;
@@ -8451,12 +8457,15 @@ int main()
 
     while (glfwWindowShouldClose(window) == GLFW_FALSE)
     {
+        frameProfiler.beginFrame();
         const double currentTime = glfwGetTime();
         currentFrameTime = currentTime;
         const float deltaTime = static_cast<float>(currentTime - lastFrameTime);
         lastFrameTime = currentTime;
 
+        frameProfiler.beginZone("Input/Events");
         glfwPollEvents();
+        frameProfiler.endZone();
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -8488,6 +8497,7 @@ int main()
             aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
         const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
+        frameProfiler.beginZone("Panels + Simulation");
         drawEditorPanels(
             viewportRenderer,
             camera,
@@ -8520,6 +8530,7 @@ int main()
             terrainSculpt,
             deltaTime,
             nativeWindowHandle);
+        frameProfiler.endZone();
         drawToolboxPanel(
             textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
             nativeWindowHandle);
@@ -8554,6 +8565,12 @@ int main()
             [&console](const bool success, const std::string& message)
             {
                 logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
+        drawPerformancePanel(
+            frameProfiler, projectRoot, performancePanel,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Error, message);
             });
         drawAudioPanel(
             projectSettingsBus,
@@ -8656,8 +8673,11 @@ int main()
         }
         previousGameOverMessage = playMode.gameplay.gameOverMessage;
 
+        frameProfiler.beginZone("ImGui Render");
         ImGui::Render();
+        frameProfiler.endZone();
 
+        frameProfiler.beginZone("GPU Submit");
         int width = 0;
         int height = 0;
         glfwGetFramebufferSize(window, &width, &height);
@@ -8665,8 +8685,16 @@ int main()
         glClearColor(0.055F, 0.067F, 0.09F, 1.0F);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        frameProfiler.endZone();
 
+        // Present blocks until vsync, so it is normally the largest zone by
+        // far. It is idle waiting, not work - the panel says so explicitly, or
+        // every dip would look like it was the renderer's fault.
+        frameProfiler.beginZone("Present (vsync wait)");
         glfwSwapBuffers(window);
+        frameProfiler.endZone();
+
+        frameProfiler.endFrame();
     }
 
     aiProviderClient.requestCancel();

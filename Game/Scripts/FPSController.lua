@@ -15,6 +15,11 @@ function FPSController:on_start()
     self.velocity_y = 0.0
     self.grounded = true
     self.camera:setMode("fps")
+    -- Cursor lock moved off the per-entity Inspector checkbox onto
+    -- whatever actually drives the player. Without this registration
+    -- wantsCursorLock stays false and the mouse is never captured.
+    self.gameManager:setCursorLock(true)
+    self.managers:register("FPSController")
 end
 
 function FPSController:on_update(delta_time)
@@ -50,6 +55,14 @@ function FPSController:on_update(delta_time)
     end
 
     self.entity:setPosition(position)
+end
+
+
+-- Releasing the registration tells the engine nothing is driving the
+-- player any more, so the cursor is not left captured.
+function FPSController:on_end()
+    self.managers:unregister("FPSController")
+    self.gameManager:setCursorLock(false)
 end
 
 return FPSController

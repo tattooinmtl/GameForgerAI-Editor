@@ -1473,6 +1473,107 @@ static void testAudioHookLoopRoundTrip()
 	fs::remove_all(root, cleanup);
 }
 
+// ----------------------------------------------------------------------------
+// Every script shipped in Game/Scripts must actually load and run. Several did
+// not: controller.lua was written against a Unity-shaped API that never existed
+// here (Input./Entity./Vector()/Raycast()/UI. and an Update() entry point),
+// test.lua was a LOVE 2D sketch, SlidingPuzzle.lua was a bare print() with no
+// returned table, BlockDragger.lua registered mouse callbacks that do not
+// exist, Script.lua called camera:setCrosshair, and Script_2.lua multiplied a
+// table by a number. All of them failed the moment they were attached.
+//
+// Nothing caught that, because the C++ tests never loaded a .lua file. This
+// walks the real directory, so a newly added broken script fails the suite
+// rather than waiting to be discovered by someone pressing Play.
+// ----------------------------------------------------------------------------
+static void testAllShippedScriptsLoad()
+{
+	namespace fs = std::filesystem;
+
+	// ctest runs this from the build directory, and other tests create an
+	// empty Game/Scripts there for their own probe files - so "does
+	// Game/Scripts exist relative to cwd" finds the wrong one. Walk up until a
+	// Game/Scripts is found that holds at least one non-probe script, which
+	// lands on the real source tree both locally and on CI.
+	fs::path scriptsDir;
+	{
+		std::error_code walkError;
+		fs::path candidate = fs::current_path(walkError);
+		for (int depth = 0; depth < 6 && !candidate.empty(); ++depth)
+		{
+			const fs::path guess = candidate / "Game" / "Scripts";
+			std::error_code ec;
+			if (fs::is_directory(guess, ec))
+			{
+				for (const fs::directory_entry& entry : fs::directory_iterator(guess, ec))
+				{
+					const std::string name = entry.path().filename().string();
+					if (entry.path().extension() == ".lua" && name.rfind("test_", 0) != 0)
+					{
+						scriptsDir = guess;
+						break;
+					}
+				}
+			}
+			if (!scriptsDir.empty() || !candidate.has_parent_path() ||
+				candidate.parent_path() == candidate)
+			{
+				break;
+			}
+			candidate = candidate.parent_path();
+		}
+	}
+	TEST_ASSERT(!scriptsDir.empty(), "Could not locate the project's Game/Scripts from the test working directory");
+
+	std::vector<std::string> scripts;
+	std::error_code ec;
+	for (const fs::directory_entry& entry : fs::directory_iterator(scriptsDir, ec))
+	{
+		if (entry.is_regular_file(ec) && entry.path().extension() == ".lua")
+		{
+			// The suite writes its own probe scripts into this directory; skip
+			// those so this test only judges what the project ships.
+			const std::string name = entry.path().filename().string();
+			if (name.rfind("test_", 0) == 0)
+			{
+				continue;
+			}
+			scripts.push_back("Game/Scripts/" + name);
+		}
+	}
+	TEST_ASSERT(!scripts.empty(), "Game/Scripts must contain at least one script to check");
+
+	// startScript confines paths under projectRoot/Game/Scripts and REJECTS
+	// absolute ones, so pass the relative form plus the root it resolves against.
+	const fs::path projectRoot = scriptsDir.parent_path().parent_path();
+
+	int failed = 0;
+	for (const std::string& scriptPath : scripts)
+	{
+		// A fresh scene and runtime per script: one script leaving the VM in a
+		// bad state must not be reported against the next one.
+		EditorScene scene(".");
+		AICommandBus bus;
+		bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+		MockInputSource input;
+		ScriptRuntime runtime;
+		runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
+
+		if (!runtime.startScript(1, scriptPath, projectRoot))
+		{
+			std::cerr << "       script failed to start: " << scriptPath << "\n";
+			++failed;
+			continue;
+		}
+		// on_start ran; drive one frame so on_update is exercised too - most of
+		// the fictional-API calls lived there, not in on_start.
+		runtime.updateEntity(1, 0.016F);
+		runtime.shutdown();
+	}
+
+	TEST_ASSERT(failed == 0, "Every script in Game/Scripts must load and tick without error");
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1505,6 +1606,7 @@ int main()
 	RUN_TEST(testAudioCueOrdering);
 	RUN_TEST(testManagerRegistryAndOnEnd);
 	RUN_TEST(testAudioHookLoopRoundTrip);
+	RUN_TEST(testAllShippedScriptsLoad);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

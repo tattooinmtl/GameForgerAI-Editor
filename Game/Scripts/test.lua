@@ -1,21 +1,28 @@
--- Cube movement script
-local speed = 200  -- movement speed in pixels per second
+-- Minimal smoke-test script: moves the entity in a slow circle.
+--
+-- Rewritten 2026-09-06. The previous version was a LOVE (love2d) 2D sketch -
+-- love.load / love.update / love.draw, love.keyboard.isDown,
+-- love.graphics.rectangle - for a different engine entirely. None of those
+-- exist here, and it returned no table, so attaching it did nothing.
+--
+-- Kept as the smallest script that proves the runtime works end to end:
+-- lifecycle hooks fire, self.entity reads and writes, delta_time advances.
+local Test = {}
 
-function love.load()
-    cube = {x = 400, y = 300, size = 50}
+function Test:on_start()
+    self.elapsed = 0.0
+    self.radius = 2.0
+    self.speed = 1.0
+    self.origin = self.entity:getPosition()
 end
 
-function love.update(dt)
-    -- accumulate movement from all directions before applying delta time
-    local dx, dy = 0, 0
-    if love.keyboard.isDown('a') then dx = dx - speed end
-    if love.keyboard.isDown('d') then dx = dx + speed end
-    if love.keyboard.isDown('w') then dy = dy - speed end
-    if love.keyboard.isDown('s') then dy = dy + speed end
-    cube.x = cube.x + dx * dt
-    cube.y = cube.y + dy * dt
+function Test:on_update(delta_time)
+    self.elapsed = self.elapsed + delta_time * self.speed
+
+    local position = self.entity:getPosition()
+    position.x = self.origin.x + math.cos(self.elapsed) * self.radius
+    position.z = self.origin.z + math.sin(self.elapsed) * self.radius
+    self.entity:setPosition(position)
 end
 
-function love.draw()
-    love.graphics.rectangle('fill', cube.x, cube.y, cube.size, cube.size)
-end
+return Test

@@ -1,87 +1,130 @@
--- FPS controller for Capsule
-local entity = "Capsule"
+-- Stamina FPS controller: WASD to move, Space to jump, Left Shift to sprint.
+--
+-- Sprinting drains a stamina pool. Once you stop sprinting there is a delay
+-- before it starts refilling, so repeatedly tapping Shift gains you nothing -
+-- that delay is the whole point of the mechanic.
+--
+-- Rewritten 2026-09-06. The previous version was written against an API that
+-- does not exist in this engine (globals Input/Entity/Vector/Raycast/UI/
+-- DeltaTime, an Update() entry point, and no returned table). It could never
+-- have run - it would have failed on the first line of its own body. The
+-- behaviour it described is preserved here on the real API.
+--
+-- Differs from fps_controller.lua, which meters sprint as a 0..1 power bar
+-- with a cooldown: this one is a classic drain-and-regen stamina pool.
+local Controller = {}
 
--- movement constants
-local walkSpeed = 5
-local sprintSpeed = 10
-local jumpForce = 7
-local gravity = 20
+function Controller:on_start()
+    self.walk_speed = 5.0
+    self.sprint_speed = 10.0
+    self.jump_speed = 7.0
+    self.gravity = -20.0
 
--- stamina (sprint) settings
-local maxStamina = 100
-local stamina = maxStamina
-local sprintDrainRate = 20   -- per second while sprinting
-local regenDelay = 2           -- seconds to wait before regen starts
-local regenRate = 30           -- per second after delay
-local regenTimer = 0
-local isSprinting = false
+    self.max_stamina = 100.0
+    self.stamina = self.max_stamina
+    self.sprint_drain_per_sec = 20.0
+    self.regen_delay_seconds = 2.0
+    self.regen_per_sec = 30.0
+    self.regen_timer = 0.0
+    self.is_sprinting = false
 
--- input keys
-local KEY_W = "W"
-local KEY_A = "A"
-local KEY_S = "S"
-local KEY_D = "D"
-local KEY_SPACE = "Space"
-local KEY_LSHIFT = "LeftShift"
+    self.velocity_y = 0.0
+    self.grounded = true
 
-function Update()
-    -- read movement input
-    local moveX, moveZ = 0, 0
-    if Input.IsKeyDown(KEY_W) then moveZ = moveZ + 1 end
-    if Input.IsKeyDown(KEY_S) then moveZ = moveZ - 1 end
-    if Input.IsKeyDown(KEY_D) then moveX = moveX + 1 end
-    if Input.IsKeyDown(KEY_A) then moveX = moveX - 1 end
+    -- Collision box for self.physics:resolve() - half-width in X/Z, full
+    -- height in Y, matching fps_controller.lua's capsule.
+    self.collider_radius = 0.35
+    self.collider_height = 1.8
 
-    -- normalize movement vector
-    if moveX ~= 0 or moveZ ~= 0 then
-        local len = math.sqrt(moveX*moveX + moveZ*moveZ)
-        moveX, moveZ = moveX/len, moveZ/len
+    self.camera:setMode("fps")
+
+    -- Cursor lock belongs to whatever is actually driving the player, not to
+    -- a per-entity checkbox. wantsCursorLock needs a registered manager, so
+    -- without this the mouse is never captured.
+    self.gameManager:setCursorLock(true)
+    self.managers:register("controller")
+end
+
+function Controller:on_end()
+    self.managers:unregister("controller")
+    self.gameManager:setCursorLock(false)
+end
+
+-- 0..1, ready to drive a HUD stamina bar once one exists. The old version
+-- pushed this to a HUD bar every frame through an API that does not exist,
+-- so the value is exposed here for the host to read instead.
+function Controller:get_stamina_percent()
+    return self.stamina / self.max_stamina
+end
+
+function Controller:on_update(delta_time)
+    -- Same WASD contract as fps_controller.lua. getRight() is screen-right;
+    -- do not swap A/D - see the DO NOT CHANGE note on luaEntityGetRight.
+    local forward_input = self.input:getAxis("W", "S")
+    local strafe_input = self.input:getAxis("D", "A")
+
+    local forward = self.entity:getForward()
+    local right = self.entity:getRight()
+
+    local move_x = forward.x * forward_input + right.x * strafe_input
+    local move_z = forward.z * forward_input + right.z * strafe_input
+
+    -- Normalise so diagonals are not faster than cardinals.
+    local length = math.sqrt(move_x * move_x + move_z * move_z)
+    if length > 0.0001 then
+        move_x = move_x / length
+        move_z = move_z / length
     end
 
-    -- determine speed and handle stamina
-    local speed = walkSpeed
-    isSprinting = Input.IsKeyDown(KEY_LSHIFT)
-    if isSprinting and stamina > 0 then
-        speed = sprintSpeed
-        stamina = stamina - sprintDrainRate * DeltaTime()
+    -- Sprint only while held, moving, and with stamina left.
+    local wants_sprint = self.input:isKeyDown("LeftShift")
+    local moving = length > 0.0001
+    self.is_sprinting = wants_sprint and moving and self.stamina > 0.0
+
+    local speed = self.walk_speed
+    if self.is_sprinting then
+        speed = self.sprint_speed
+        self.stamina = self.stamina - self.sprint_drain_per_sec * delta_time
+        -- Any sprinting restarts the wait before regen begins.
+        self.regen_timer = 0.0
     else
-        -- regen timer logic (non‑obvious: start regen only after delay)
-        if regenTimer < regenDelay then
-            regenTimer = regenTimer + DeltaTime()
-        elseif regenTimer >= regenDelay then
-            stamina = stamina + regenRate * DeltaTime()
-            if stamina > maxStamina then stamina = maxStamina end
+        if self.regen_timer < self.regen_delay_seconds then
+            self.regen_timer = self.regen_timer + delta_time
+        else
+            self.stamina = self.stamina + self.regen_per_sec * delta_time
         end
     end
-    if stamina < 0 then stamina = 0 end
 
-    -- apply horizontal movement
-    local forward = Vector(moveX, 0, moveZ)
-    local moveVec = forward * speed
-    local vel = Entity.GetVelocity(entity)
-    vel.x, vel.z = moveVec.x, moveVec.z
-    Entity.SetVelocity(entity, vel)
+    if self.stamina > self.max_stamina then self.stamina = self.max_stamina end
+    if self.stamina < 0.0 then self.stamina = 0.0 end
 
-    -- jump handling
-    if Input.IsKeyDown(KEY_SPACE) and IsGrounded(entity) then
-        local v = Entity.GetVelocity(entity)
-        v.y = jumpForce
-        Entity.SetVelocity(entity, v)
+    if self.grounded and self.input:isKeyPressed("Space") then
+        self.velocity_y = self.jump_speed
+        self.grounded = false
+    end
+    self.velocity_y = self.velocity_y + self.gravity * delta_time
+
+    local position = self.entity:getPosition()
+    position.x = position.x + move_x * speed * delta_time
+    position.z = position.z + move_z * speed * delta_time
+    position.y = position.y + self.velocity_y * delta_time
+
+    -- Replaces the old downward Raycast() ground check, which did not exist.
+    local resolved, grounded = self.physics:resolve(position, self.collider_radius, self.collider_height)
+    position = resolved
+    self.grounded = grounded
+    if grounded then
+        self.velocity_y = 0.0
     end
 
-    -- apply gravity
-    local gVel = Entity.GetVelocity(entity)
-    gVel.y = gVel.y - gravity * DeltaTime()
-    Entity.SetVelocity(entity, gVel)
+    -- Fallback world floor for scenes with no Collider-enabled objects.
+    if position.y <= 0.0 then
+        position.y = 0.0
+        self.velocity_y = 0.0
+        self.grounded = true
+    end
 
-    -- update sprint bar (UI bar must be refreshed each frame)
-    UI.SetBar("SprintBar", stamina / maxStamina)
+    self.entity:setPosition(position)
 end
 
--- simple ground check using a short raycast downward
-function IsGrounded(e)
-    local pos = Entity.GetPosition(e)
-    local rayPos = Vector(pos.x, 0.1, pos.z)
-    local hit = Raycast(rayPos, Vector(0, -1, 0), 0.2)
-    return hit
-end
+return Controller

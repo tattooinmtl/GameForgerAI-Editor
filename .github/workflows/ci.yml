@@ -26,8 +26,23 @@ jobs:
         with:
           arch: x64
 
+      # This step used ashley-taylor/setup-ninja, whose repository has since
+      # been removed from GitHub - every run then failed at "Set up job" in
+      # about three seconds, without compiling anything. Rather than swap in
+      # another third-party action (the obvious candidate is archived, i.e.
+      # the same failure waiting to happen), resolve Ninja from what the
+      # runner already has and fall back to Chocolatey, which is preinstalled
+      # on GitHub's Windows images. No external action to rot.
       - name: Setup Ninja
-        uses: ashley-taylor/setup-ninja@v1.0.0
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            Write-Host "Ninja already on PATH: $((Get-Command ninja).Source)"
+          } else {
+            Write-Host "Ninja not found; installing via Chocolatey."
+            choco install ninja -y --no-progress
+          }
+          ninja --version
 
       - name: Configure CMake
         run: |

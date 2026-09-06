@@ -42,6 +42,12 @@ namespace gameforger::editor::json
 	// which stay in-memory strings only briefly. Escaping matches parse().
 	[[nodiscard]] std::string serialize(const Value& value);
 
+	// Same output, indented and newline-separated, with a trailing newline.
+	// For the config files a human reads and diffs in git (Project.json,
+	// Settings.json) - compact serialize() would collapse them to one line the
+	// first time the editor saved one. Re-parses to a tree equal to the input.
+	[[nodiscard]] std::string serializePretty(const Value& value, int indentWidth = 2);
+
 	// Small builder helpers so callsites don't have to fiddle with Value's
 	// tagged-union fields directly.
 	[[nodiscard]] Value makeString(std::string text);

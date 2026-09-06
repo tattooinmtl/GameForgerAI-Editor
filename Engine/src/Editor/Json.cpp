@@ -519,8 +519,23 @@ namespace gameforger::editor::json
 			out += '"';
 		}
 
-		void serializeInto(const Value& value, std::string& out)
+		// `indentWidth == 0` means compact - byte-for-byte what serialize() has
+		// always emitted, which the AI Cockpit's tool-argument path depends on.
+		// Anything larger pretty-prints with that many spaces per level, for
+		// the config files a human reads and diffs (Project.json, Settings.json).
+		void serializeInto(const Value& value, std::string& out, const int indentWidth, const int depth)
 		{
+			const bool pretty = indentWidth > 0;
+			const auto newlineIndent = [&out, indentWidth, pretty](const int level)
+			{
+				if (!pretty)
+				{
+					return;
+				}
+				out += '\n';
+				out.append(static_cast<std::size_t>(indentWidth * level), ' ');
+			};
+
 			switch (value.type)
 			{
 				case Value::Type::Null:
@@ -552,11 +567,15 @@ namespace gameforger::editor::json
 					break;
 				case Value::Type::Array:
 					out += '[';
+					// An empty container stays on one line even when pretty-
+					// printing; "[]" reads better than "[\n]".
 					for (std::size_t i = 0; i < value.arrayValue.size(); ++i)
 					{
 						if (i > 0) out += ',';
-						serializeInto(value.arrayValue[i], out);
+						newlineIndent(depth + 1);
+						serializeInto(value.arrayValue[i], out, indentWidth, depth + 1);
 					}
+					if (!value.arrayValue.empty()) newlineIndent(depth);
 					out += ']';
 					break;
 				case Value::Type::Object:
@@ -564,10 +583,13 @@ namespace gameforger::editor::json
 					for (std::size_t i = 0; i < value.objectValue.size(); ++i)
 					{
 						if (i > 0) out += ',';
+						newlineIndent(depth + 1);
 						appendEscapedString(out, value.objectValue[i].first);
 						out += ':';
-						serializeInto(value.objectValue[i].second, out);
+						if (pretty) out += ' ';
+						serializeInto(value.objectValue[i].second, out, indentWidth, depth + 1);
 					}
+					if (!value.objectValue.empty()) newlineIndent(depth);
 					out += '}';
 					break;
 			}
@@ -578,7 +600,18 @@ namespace gameforger::editor::json
 	{
 		std::string out;
 		out.reserve(64);
-		serializeInto(value, out);
+		serializeInto(value, out, 0, 0);
+		return out;
+	}
+
+	std::string serializePretty(const Value& value, const int indentWidth)
+	{
+		std::string out;
+		out.reserve(256);
+		serializeInto(value, out, indentWidth < 1 ? 1 : indentWidth, 0);
+		// Config files are line-oriented; a trailing newline keeps diffs from
+		// reporting "\ No newline at end of file" on every save.
+		out += '\n';
 		return out;
 	}
 

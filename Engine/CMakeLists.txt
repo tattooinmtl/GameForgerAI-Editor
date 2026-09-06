@@ -15,6 +15,12 @@ add_library(GameForgerEngine STATIC
     # whole codebase for a cosmetic change.
     src/Editor/Json.cpp
     src/Editor/AICommandBus.cpp
+    # Typed view of Game/Project.json + Game/Settings.json, plus the command
+    # bus that is the only writer to it. Lives in Engine (not Editor) because
+    # GameForgerRuntime reads the same settings - notably the boot sequence,
+    # which must play identically standalone and in the Editor's Play mode.
+    src/Editor/ProjectSettings.cpp
+    src/Editor/ProjectSettingsBus.cpp
     src/Editor/EditorScene.cpp
     src/Editor/SceneSerializer.cpp
     src/Editor/Transform.cpp

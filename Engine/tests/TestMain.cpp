@@ -9,6 +9,8 @@
 #include <glm/vec3.hpp>
 
 #include "GameForger/Core/ProjectPaths.hpp"
+#include "GameForger/Editor/ProjectSettings.hpp"
+#include "GameForger/Editor/ProjectSettingsBus.hpp"
 #include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
@@ -888,6 +890,172 @@ static void testResolveProjectFileConfinement()
 	fs::remove_all(root, cleanup);
 }
 
+// ----------------------------------------------------------------------------
+// json::serializePretty must produce a tree equal to what it was given -
+// Project.json/Settings.json are written through it, so a bug here corrupts
+// project config rather than just looking untidy.
+// ----------------------------------------------------------------------------
+static void testJsonPrettyPrinter()
+{
+	const std::string source =
+		R"({"a":1,"b":[1,2,{"c":"x \" y"}],"d":{"e":true,"f":null},"g":[],"h":{}})";
+	const std::optional<json::Value> original = json::parse(source);
+	TEST_ASSERT(original.has_value(), "Pretty-printer fixture must parse");
+
+	const std::string pretty = json::serializePretty(*original);
+	TEST_ASSERT(pretty.find('\n') != std::string::npos, "Pretty output must contain newlines");
+	TEST_ASSERT(!pretty.empty() && pretty.back() == '\n', "Pretty output must end with a newline");
+	// Empty containers stay inline rather than becoming "[\n]".
+	TEST_ASSERT(pretty.find("[]") != std::string::npos, "Empty array must stay inline");
+	TEST_ASSERT(pretty.find("{}") != std::string::npos, "Empty object must stay inline");
+
+	const std::optional<json::Value> reparsed = json::parse(pretty);
+	TEST_ASSERT(reparsed.has_value(), "Pretty output must re-parse");
+	// Round-tripping through the compact serialiser is the equality check:
+	// same tree => byte-identical compact form.
+	TEST_ASSERT(json::serialize(*reparsed) == json::serialize(*original),
+		"Pretty output must re-parse to an equal tree");
+
+	// Compact serialize() must be untouched - the AI Cockpit's tool-argument
+	// path depends on it staying single-line.
+	TEST_ASSERT(json::serialize(*original).find('\n') == std::string::npos,
+		"Compact serialize() must remain newline-free");
+}
+
+// ----------------------------------------------------------------------------
+// ProjectSettings round-trip + the command bus's validation. The bus is the
+// only writer to project config and the AI drives it, so the rejection cases
+// matter more than the happy path.
+// ----------------------------------------------------------------------------
+static void testProjectSettingsAndBus()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_project_settings_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Scenes");
+	{
+		std::ofstream(root / "Game" / "Scenes" / "Main.gfprod") << "{}";
+	}
+
+	// A Project.json with a UTF-8 BOM and NO bootSequence key - exactly the
+	// shape this project ships today. Must load cleanly.
+	{
+		std::ofstream out(root / "Game" / "Project.json", std::ios::binary);
+		out << "\xEF\xBB\xBF"
+			<< R"({"format":"GameForgerProject","version":1,"name":"Demo",)"
+			<< R"("startupScene":"Game/Scenes/Main.gfprod","assetDirectories":["Game/Audio"],)"
+			<< R"("customKeySomeoneAddedByHand":42})";
+	}
+	{
+		std::ofstream out(root / "Game" / "Settings.json");
+		out << R"({"mouseSensitivity":0.25,"targetFps":144})";
+	}
+
+	ProjectSettings loaded;
+	TEST_ASSERT(loadProjectSettings(root, loaded).success, "Loading project settings must succeed");
+	TEST_ASSERT(loaded.name == "Demo", "name must load (past the BOM)");
+	TEST_ASSERT(loaded.startupScene == "Game/Scenes/Main.gfprod", "startupScene must load");
+	TEST_ASSERT(loaded.assetDirectories.size() == 1, "assetDirectories must load");
+	TEST_ASSERT(loaded.bootSequence.empty(), "A file with no bootSequence key must load as empty");
+	TEST_ASSERT(std::abs(loaded.mouseSensitivity - 0.25F) < 0.0001F, "mouseSensitivity must load");
+	TEST_ASSERT(loaded.targetFps == 144, "targetFps must load");
+
+	ProjectSettingsBus bus(root);
+	TEST_ASSERT(bus.settings().name == "Demo", "Bus must load settings on construction");
+
+	// --- rejections -------------------------------------------------------
+	SetProjectSettingCommand unknown;
+	unknown.key = "notARealKey";
+	unknown.stringValue = "x";
+	TEST_ASSERT(!bus.validate(unknown).success, "An unknown setting key must be rejected");
+
+	SetProjectSettingCommand missingScene;
+	missingScene.key = "startupScene";
+	missingScene.stringValue = "Game/Scenes/DoesNotExist.gfprod";
+	TEST_ASSERT(!bus.validate(missingScene).success,
+		"A startupScene that does not exist on disk must be rejected");
+
+	SetProjectSettingCommand badFps;
+	badFps.key = "targetFps";
+	badFps.numberValue = 5000.0;
+	TEST_ASSERT(!bus.validate(badFps).success, "An out-of-range targetFps must be rejected");
+
+	SetProjectSettingCommand nanSensitivity;
+	nanSensitivity.key = "mouseSensitivity";
+	nanSensitivity.numberValue = std::nan("");
+	TEST_ASSERT(!bus.validate(nanSensitivity).success, "A non-finite number must be rejected");
+
+	TEST_ASSERT(!bus.validate(RemoveBootStepCommand{0}).success,
+		"Removing from an empty boot sequence must be rejected");
+
+	AddBootStepCommand incomplete;
+	incomplete.step.kind = BootStep::Kind::PlayCutscene; // shotName left empty
+	TEST_ASSERT(!bus.validate(incomplete).success,
+		"play_cutscene with no shotName must be rejected");
+
+	// A rejected command must not have mutated anything.
+	TEST_ASSERT(bus.settings().targetFps == 144, "A rejected command must leave settings untouched");
+
+	// --- accepted ---------------------------------------------------------
+	SetProjectSettingCommand goodFps;
+	goodFps.key = "targetFps";
+	goodFps.numberValue = 60.0;
+	TEST_ASSERT(bus.execute(goodFps).success, "A valid targetFps must be accepted");
+	TEST_ASSERT(bus.settings().targetFps == 60, "targetFps must be applied");
+
+	AddBootStepCommand addWait;
+	addWait.step.kind = BootStep::Kind::WaitSeconds;
+	addWait.step.seconds = 2.5F;
+	TEST_ASSERT(bus.execute(addWait).success, "Adding a wait step must succeed");
+
+	AddBootStepCommand addCutscene;
+	addCutscene.step.kind = BootStep::Kind::PlayCutscene;
+	addCutscene.step.shotName = "Intro";
+	TEST_ASSERT(bus.execute(addCutscene).success, "Adding a cutscene step must succeed");
+	TEST_ASSERT(bus.settings().bootSequence.size() == 2, "Boot sequence must have 2 steps");
+
+	TEST_ASSERT(bus.execute(MoveBootStepCommand{1, 0}).success, "Moving a step must succeed");
+	TEST_ASSERT(bus.settings().bootSequence[0].kind == BootStep::Kind::PlayCutscene,
+		"Move must reorder the sequence");
+
+	// --- persistence ------------------------------------------------------
+	// execute() writes through to disk, so a fresh load must agree.
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reload after execute must succeed");
+	TEST_ASSERT(reloaded.targetFps == 60, "targetFps must have been persisted");
+	TEST_ASSERT(reloaded.bootSequence.size() == 2, "Boot sequence must have been persisted");
+	TEST_ASSERT(reloaded.bootSequence[0].kind == BootStep::Kind::PlayCutscene &&
+			reloaded.bootSequence[0].shotName == "Intro",
+		"Boot step kind and fields must survive the round-trip");
+	TEST_ASSERT(std::abs(reloaded.bootSequence[1].seconds - 2.5F) < 0.0001F,
+		"Boot step seconds must survive the round-trip");
+
+	// A hand-added key must not be destroyed by an editor save.
+	{
+		std::ifstream in(root / "Game" / "Project.json", std::ios::binary);
+		const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		TEST_ASSERT(text.find("customKeySomeoneAddedByHand") != std::string::npos,
+			"Saving must preserve unknown keys already in Project.json");
+		TEST_ASSERT(text.find('\n') != std::string::npos,
+			"Saved Project.json must stay pretty-printed, not collapse to one line");
+	}
+
+	// An unknown boot-step kind (a newer editor's file) is skipped, not fatal.
+	{
+		std::ofstream out(root / "Game" / "Project.json", std::ios::binary);
+		out << R"({"bootSequence":[{"kind":"from_the_future"},{"kind":"lock_player_input"}]})";
+	}
+	ProjectSettings forward;
+	TEST_ASSERT(loadProjectSettings(root, forward).success, "A file with an unknown step kind must still load");
+	TEST_ASSERT(forward.bootSequence.size() == 1 &&
+			forward.bootSequence[0].kind == BootStep::Kind::LockPlayerInput,
+		"An unknown boot step kind must be skipped, keeping the ones we understand");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -912,6 +1080,8 @@ int main()
 	RUN_TEST(testColliderBoxMeshConvexTypes);
 	RUN_TEST(testChatResponseBothProtocols);
 	RUN_TEST(testResolveProjectFileConfinement);
+	RUN_TEST(testJsonPrettyPrinter);
+	RUN_TEST(testProjectSettingsAndBus);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

@@ -58,6 +58,7 @@
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
 #include "GameForger/Editor/ProjectSettingsPanel.hpp"
+#include "GameForger/Editor/TimelinePanel.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/ScriptGenerator.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
@@ -110,6 +111,8 @@ namespace
     using gameforger::editor::ProjectSettingsBus;
     using gameforger::editor::ProjectSettingsPanelState;
     using gameforger::editor::AudioHook;
+    using gameforger::editor::TimelinePanelState;
+    using gameforger::editor::drawTimelinePanel;
     using gameforger::editor::AudioPanelState;
     using gameforger::editor::drawAudioPanel;
     using gameforger::editor::drawProjectSettingsPanel;
@@ -8319,6 +8322,7 @@ int main()
     gameforger::core::AudioEngine audioEngine;
     audioEngine.initialize();
     AudioPanelState audioPanel;
+    TimelinePanelState timelinePanel;
     bool wasPlayingAudio = false;
     std::string previousGameOverMessage;
     TerrainSculptState terrainSculpt;
@@ -8440,6 +8444,18 @@ int main()
             audioEngine,
             projectRoot,
             audioPanel,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
+        // Edits shots in place; persistence is the scene's job (saveScene
+        // carries storyboard.shots), so nothing here writes to disk.
+        drawTimelinePanel(
+            storyboard.shots,
+            audioEngine,
+            projectRoot,
+            timelinePanel,
+            deltaTime,
             [&console](const bool success, const std::string& message)
             {
                 logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);

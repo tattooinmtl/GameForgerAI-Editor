@@ -28,6 +28,10 @@
     # because it needs imgui_internal.h for DockBuilder, whose ImGuiInputSource
     # enum collides with this project's class of the same name in main.cpp.
     src/EditorLayout.cpp
+    # Track view over a storyboard shot: camera keyframes and audio cues on
+    # one shared clock, with scrub/drag/delete. Its own TU like the other
+    # panels rather than growing main.cpp.
+    src/TimelinePanel.cpp
     src/AudioPanel.cpp
     # Editor-only InputSource implementation (ImGui-backed) - see
     # GameForger/Editor/InputSource.hpp (Engine, shared interface) and

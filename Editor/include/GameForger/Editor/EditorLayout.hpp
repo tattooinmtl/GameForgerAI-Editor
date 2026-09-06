@@ -21,4 +21,10 @@ namespace gameforger::editor
 	// imgui_internal.h, whose ImGuiInputSource enum collides with this
 	// project's class of the same name in main.cpp.
 	bool dockWindowBetween(const char* newWindow, const char* firstWindow, const char* secondWindow);
+
+	// Places `newWindow` as the tab immediately AFTER `anchorWindow`, in
+	// whatever node the anchor already occupies. Same contract as
+	// dockWindowBetween: no splits, no resizes, only this window's tab index
+	// changes, and the caller stops asking once it returns true.
+	bool dockWindowAfter(const char* newWindow, const char* anchorWindow);
 }

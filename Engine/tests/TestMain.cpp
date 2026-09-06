@@ -19,6 +19,7 @@
 #include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
+#include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
 
@@ -1254,6 +1255,95 @@ static void testAudioSourceAndHooks()
 	fs::remove_all(root, ec);
 }
 
+// ----------------------------------------------------------------------------
+// Storyboard shots used to live only in session state and were lost on every
+// restart. They now ride along in the scene file, so the round-trip - and the
+// backward compatibility of a scene saved before they existed - is pinned.
+// ----------------------------------------------------------------------------
+static void testStoryboardSerialization()
+{
+	const std::filesystem::path sceneFile = "test_storyboard.scene";
+
+	CineShot intro;
+	intro.name = "Intro";
+	intro.cameraPath.enabled = true;
+	intro.cameraPath.looping = true;
+	intro.cameraPath.keyframes.push_back(TransformKeyframe{0.0F, glm::vec3(1.0F, 2.0F, 3.0F), glm::vec3(0.0F), glm::vec3(1.0F)});
+	intro.cameraPath.keyframes.push_back(TransformKeyframe{2.5F, glm::vec3(4.0F, 5.0F, 6.0F), glm::vec3(0.0F, 90.0F, 0.0F), glm::vec3(1.0F)});
+	// Deliberately out of order: the loader must sort these.
+	(void)insertAudioCueSorted(intro.audioCues, AudioCue{2.0F, "Game/Audio/late.wav", 0.5F});
+	(void)insertAudioCueSorted(intro.audioCues, AudioCue{0.5F, "Game/Audio/early.wav", 1.0F});
+
+	CineShot empty;
+	empty.name = "NoCues";
+
+	std::vector<SceneEntity> entities;
+	SceneEntity camera;
+	camera.name = "CineCam";
+	camera.isCineCamera = true;
+	entities.push_back(camera);
+
+	TEST_ASSERT(saveScene(sceneFile, entities, {intro, empty}).success, "Saving a scene with shots must succeed");
+
+	const SceneLoadResult loaded = loadScene(sceneFile);
+	TEST_ASSERT(loaded.success, "Loading a scene with shots must succeed");
+	TEST_ASSERT(loaded.shots.size() == 2, "Both shots must round-trip");
+	TEST_ASSERT(loaded.shots[0].name == "Intro", "Shot name must round-trip");
+	TEST_ASSERT(loaded.shots[0].cameraPath.looping, "Shot looping flag must round-trip");
+	TEST_ASSERT(loaded.shots[0].cameraPath.keyframes.size() == 2, "Camera path keyframes must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].cameraPath.keyframes[1].time - 2.5F) < 0.001F,
+		"Keyframe time must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].cameraPath.keyframes[1].rotationEuler.y - 90.0F) < 0.01F,
+		"Keyframe rotation must round-trip");
+
+	TEST_ASSERT(loaded.shots[0].audioCues.size() == 2, "Audio cues must round-trip");
+	TEST_ASSERT(loaded.shots[0].audioCues[0].clipPath == "Game/Audio/early.wav",
+		"Audio cues must come back sorted by time, earliest first");
+	TEST_ASSERT(std::abs(loaded.shots[0].audioCues[0].time - 0.5F) < 0.001F, "Cue time must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].audioCues[1].volume - 0.5F) < 0.001F, "Cue volume must round-trip");
+	TEST_ASSERT(loaded.shots[1].audioCues.empty(), "A shot with no cues must load with none");
+
+	// A scene written before storyboards existed has no "storyboard" key at
+	// all. It must load cleanly with an empty shot list, not fail.
+	TEST_ASSERT(saveScene(sceneFile, entities).success, "Saving with no shots must succeed");
+	const SceneLoadResult noShots = loadScene(sceneFile);
+	TEST_ASSERT(noShots.success, "A scene with no storyboard must load");
+	TEST_ASSERT(noShots.shots.empty(), "A scene with no storyboard must yield no shots");
+	TEST_ASSERT(noShots.entities.size() == 1, "Entities must still load alongside an empty storyboard");
+
+	std::filesystem::remove(sceneFile);
+	std::filesystem::remove(sceneFile.string() + ".bak");
+}
+
+// ----------------------------------------------------------------------------
+// Cue ordering helpers. Playback walks the list assuming it is sorted, and the
+// timeline drags cues around freely, so a retimed cue must land in the right
+// slot AND the caller's selection must follow it.
+// ----------------------------------------------------------------------------
+static void testAudioCueOrdering()
+{
+	std::vector<AudioCue> cues;
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{5.0F, "e.wav", 1.0F}) == 0, "First insert lands at 0");
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{1.0F, "a.wav", 1.0F}) == 0, "Earlier cue lands at the front");
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{3.0F, "c.wav", 1.0F}) == 1, "Middle cue lands between");
+	TEST_ASSERT(cues[0].clipPath == "a.wav" && cues[1].clipPath == "c.wav" && cues[2].clipPath == "e.wav",
+		"Cues must be ordered by time");
+
+	// Ties keep insertion order rather than jumping ahead of what is there.
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{3.0F, "c2.wav", 1.0F}) == 2,
+		"A cue at the same time must land after the existing one");
+
+	// Retime the first cue past the end; the returned index must track it.
+	cues[0].time = 99.0F;
+	const std::size_t moved = resortAudioCues(cues, 0);
+	TEST_ASSERT(moved == cues.size() - 1, "A cue dragged to the end must report its new index");
+	TEST_ASSERT(cues[moved].clipPath == "a.wav", "The reported index must be the cue that moved");
+	for (std::size_t i = 1; i < cues.size(); ++i)
+	{
+		TEST_ASSERT(cues[i - 1].time <= cues[i].time, "Cues must remain sorted after a retime");
+	}
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1282,6 +1372,8 @@ int main()
 	RUN_TEST(testProjectSettingsAndBus);
 	RUN_TEST(testBootSequence);
 	RUN_TEST(testAudioSourceAndHooks);
+	RUN_TEST(testStoryboardSerialization);
+	RUN_TEST(testAudioCueOrdering);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

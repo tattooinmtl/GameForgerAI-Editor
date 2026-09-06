@@ -573,7 +573,110 @@ namespace gameforger::editor
 		}
 	}
 
-	SceneSaveResult saveScene(const std::filesystem::path& filePath, const std::vector<SceneEntity>& entities)
+	namespace
+	{
+		// Storyboard shots ride along in the scene file: a shot references the
+		// scene's own cine cameras, so the list is meaningless without the
+		// scene it was recorded against. Absent from files written before this
+		// existed, which load as an empty storyboard rather than failing.
+		void appendShot(std::string& json, const CineShot& shot, const std::string& indent)
+		{
+			json += indent + "{\n";
+			json += indent + "  \"name\": \"" + escapeJson(shot.name) + "\",\n";
+			json += indent + "  \"looping\": " +
+				std::string(shot.cameraPath.looping ? "true" : "false") + ",\n";
+			json += indent + "  \"keyframes\": [";
+			for (std::size_t index = 0; index < shot.cameraPath.keyframes.size(); ++index)
+			{
+				json += (index == 0 ? "\n" : ",\n");
+				appendKeyframe(json, shot.cameraPath.keyframes[index], indent + "    ");
+			}
+			json += shot.cameraPath.keyframes.empty() ? "],\n" : ("\n" + indent + "  ],\n");
+			json += indent + "  \"audioCues\": [";
+			for (std::size_t index = 0; index < shot.audioCues.size(); ++index)
+			{
+				const AudioCue& cue = shot.audioCues[index];
+				std::array<char, 32> timeBuffer{};
+				std::array<char, 32> volumeBuffer{};
+				std::snprintf(timeBuffer.data(), timeBuffer.size(), "%.4f", static_cast<double>(cue.time));
+				std::snprintf(volumeBuffer.data(), volumeBuffer.size(), "%.4f", static_cast<double>(cue.volume));
+				json += (index == 0 ? "\n" : ",\n");
+				json += indent + "    {\"time\": " + timeBuffer.data() +
+					", \"clipPath\": \"" + escapeJson(cue.clipPath) +
+					"\", \"volume\": " + volumeBuffer.data() + "}";
+			}
+			json += shot.audioCues.empty() ? "]\n" : ("\n" + indent + "  ]\n");
+			json += indent + "}";
+		}
+
+		// Mirrors appendShot. A malformed shot is skipped rather than failing
+		// the whole scene load - losing one storyboard entry beats refusing to
+		// open the scene it belongs to.
+		std::vector<CineShot> parseStoryboard(const json::Value& root)
+		{
+			std::vector<CineShot> shots;
+			const json::Value* array = root.find("storyboard");
+			if (array == nullptr || array->type != json::Value::Type::Array)
+			{
+				return shots;
+			}
+			for (const json::Value& shotValue : array->arrayValue)
+			{
+				if (shotValue.type != json::Value::Type::Object)
+				{
+					continue;
+				}
+				CineShot shot;
+				shot.name = readString(shotValue, "name");
+				shot.cameraPath.enabled = true;
+				shot.cameraPath.looping = readBool(shotValue, "looping", false);
+				if (const json::Value* keyframes = shotValue.find("keyframes");
+					keyframes != nullptr && keyframes->type == json::Value::Type::Array)
+				{
+					for (const json::Value& keyframeValue : keyframes->arrayValue)
+					{
+						if (keyframeValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						TransformKeyframe keyframe;
+						keyframe.time = readFloat(keyframeValue, "time", 0.0F);
+						keyframe.position = readVec3(keyframeValue, "position", glm::vec3(0.0F));
+						keyframe.rotationEuler = readVec3(keyframeValue, "rotation", glm::vec3(0.0F));
+						keyframe.scale = readVec3(keyframeValue, "scale", glm::vec3(1.0F));
+						shot.cameraPath.keyframes.push_back(keyframe);
+					}
+				}
+				if (const json::Value* cues = shotValue.find("audioCues");
+					cues != nullptr && cues->type == json::Value::Type::Array)
+				{
+					for (const json::Value& cueValue : cues->arrayValue)
+					{
+						if (cueValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						AudioCue cue;
+						cue.time = readFloat(cueValue, "time", 0.0F);
+						cue.clipPath = readString(cueValue, "clipPath");
+						cue.volume = readFloat(cueValue, "volume", 1.0F);
+						if (!cue.clipPath.empty())
+						{
+							(void)insertAudioCueSorted(shot.audioCues, std::move(cue));
+						}
+					}
+				}
+				shots.push_back(std::move(shot));
+			}
+			return shots;
+		}
+	}
+
+
+	SceneSaveResult saveScene(
+		const std::filesystem::path& filePath,
+		const std::vector<SceneEntity>& entities,
+		const std::vector<CineShot>& shots)
 	{
 		if (filePath.has_parent_path() && !filePath.parent_path().empty())
 		{
@@ -594,7 +697,14 @@ namespace gameforger::editor
 			json += (index == 0 ? "\n" : ",\n");
 			appendEntity(json, entities[index], "    ");
 		}
-		json += entities.empty() ? "]\n" : "\n  ]\n";
+		json += entities.empty() ? "],\n" : "\n  ],\n";
+		json += "  \"storyboard\": [";
+		for (std::size_t index = 0; index < shots.size(); ++index)
+		{
+			json += (index == 0 ? "\n" : ",\n");
+			appendShot(json, shots[index], "    ");
+		}
+		json += shots.empty() ? "]\n" : "\n  ]\n";
 		json += "}\n";
 
 		// Atomic write: serialize into a sibling temp file, flush + close,
@@ -722,6 +832,11 @@ namespace gameforger::editor
 		{
 			message += " (" + std::to_string(skipped) + " skipped)";
 		}
-		return {true, message, std::move(entities)};
+		std::vector<CineShot> shots = parseStoryboard(*parsed);
+		if (!shots.empty())
+		{
+			message += ", " + std::to_string(shots.size()) + " storyboard shot(s)";
+		}
+		return {true, message, std::move(entities), std::move(shots)};
 	}
 }

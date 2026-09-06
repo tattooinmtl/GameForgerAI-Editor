@@ -103,6 +103,10 @@ namespace
     using gameforger::editor::describeCommand;
     using gameforger::editor::EditorScene;
     using gameforger::editor::EntityAnimation;
+    using gameforger::editor::CineShot;
+    using gameforger::editor::AudioCue;
+    using gameforger::editor::insertAudioCueSorted;
+    using gameforger::editor::resortAudioCues;
     using gameforger::editor::ProjectSettingsBus;
     using gameforger::editor::ProjectSettingsPanelState;
     using gameforger::editor::AudioHook;
@@ -530,11 +534,10 @@ namespace
     // a full scene snapshot) - see StoryboardState below and the Storyboard
     // panel, which lists these by number and can play them back in sequence
     // as "the movie".
-    struct CineShot
-    {
-        std::string name;
-        EntityAnimation cameraPath;
-    };
+    // CineShot/AudioCue now live in Engine (GameForger/Editor/Storyboard.hpp)
+    // so SceneSerializer can persist them - shots used to be session-only and
+    // vanished on restart. StoryboardState below stays here: it is playback
+    // and window bookkeeping, not saved data.
 
     struct StoryboardState
     {
@@ -1039,9 +1042,16 @@ namespace
         return true;
     }
 
-    void saveSceneAndLog(const EditorScene& scene, const std::filesystem::path& scenePath, ConsoleState& console)
+    // Storyboard shots are saved with the scene they were recorded against -
+    // a shot's camera path is meaningless without it. Before this they were
+    // session-only and lost on every restart.
+    void saveSceneAndLog(
+        const EditorScene& scene,
+        const std::filesystem::path& scenePath,
+        const StoryboardState& storyboard,
+        ConsoleState& console)
     {
-        const SceneSaveResult result = saveScene(scenePath, scene.entities());
+        const SceneSaveResult result = saveScene(scenePath, scene.entities(), storyboard.shots);
         logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
     }
 
@@ -1053,6 +1063,7 @@ namespace
         const std::filesystem::path& filePath,
         SelectionState& selection,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         ConsoleState& console)
     {
         SceneLoadResult result = loadScene(filePath);
@@ -1062,6 +1073,15 @@ namespace
             return false;
         }
         scene.loadEntities(std::move(result.entities));
+        // Replace rather than merge: the incoming shots belong to the scene
+        // being opened, and keeping the outgoing scene's would leave shots
+        // pointing at cine cameras that no longer exist. Playback state is
+        // reset for the same reason.
+        storyboard.shots = std::move(result.shots);
+        storyboard.isPlaying = false;
+        storyboard.playingMovie = false;
+        storyboard.previewShotIndex = -1;
+        storyboard.movieShotIndex = -1;
         clearSelection(selection);
         history.undoStack.clear();
         history.redoStack.clear();
@@ -2045,6 +2065,7 @@ namespace
         ConsoleState& console,
         SettingsState& settings,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         std::filesystem::path& currentScenePath,
         const HWND nativeWindowHandle,
         bool& resetLayout,
@@ -2068,7 +2089,7 @@ namespace
             if (const std::optional<std::filesystem::path> picked =
                     showOpenSceneDialog(nativeWindowHandle, scenesDirectory))
             {
-                if (loadSceneAndLog(scene, *picked, selection, history, console))
+                if (loadSceneAndLog(scene, *picked, selection, history, storyboard, console))
                 {
                     currentScenePath = *picked;
                 }
@@ -2088,7 +2109,7 @@ namespace
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             else if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
             {
@@ -2126,14 +2147,14 @@ namespace
             }
             if (ImGui::MenuItem("Save Scene", "Ctrl+S"))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             if (ImGui::MenuItem("Save Scene As..."))
             {
                 if (const std::optional<std::filesystem::path> picked =
                         showSaveSceneDialog(nativeWindowHandle, scenesDirectory))
                 {
-                    saveSceneAndLog(scene, *picked, console);
+                    saveSceneAndLog(scene, *picked, storyboard, console);
                     currentScenePath = *picked;
                 }
             }
@@ -2149,7 +2170,7 @@ namespace
                 // new ones.
                 const std::filesystem::path builtPath =
                     currentScenePath.parent_path() / (currentScenePath.stem().string() + ".gfai");
-                saveSceneAndLog(scene, builtPath, console);
+                saveSceneAndLog(scene, builtPath, storyboard, console);
                 const std::filesystem::path relativeBuiltPath =
                     std::filesystem::relative(builtPath, projectRoot);
                 std::string relativeBuiltPathText = relativeBuiltPath.generic_string();
@@ -7464,6 +7485,7 @@ namespace
         // the project.* tools.
         ProjectSettingsBus& projectSettingsBus,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         const std::filesystem::path& currentScenePath,
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
@@ -7536,7 +7558,7 @@ namespace
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
@@ -8339,7 +8361,7 @@ int main()
         gameforger::editor::pumpCockpit(aiCockpit);
         drawMainMenu(
             scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
-            settings, history, currentScenePath, nativeWindowHandle, resetLayout,
+            settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
             blenderLauncher, blenderClient, blenderPanel, aiCockpit);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
         drawCockpitPanel(
@@ -8372,6 +8394,7 @@ int main()
             projectSettingsPanel,
             projectSettingsBus,
             history,
+            storyboard,
             currentScenePath,
             gizmoOperation,
             terrainSculpt,

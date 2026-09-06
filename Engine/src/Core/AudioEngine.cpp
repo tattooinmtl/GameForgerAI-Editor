@@ -414,6 +414,16 @@ namespace gameforger::core
 		// surprising than a missing sound.
 		(void)buildEffectChain(impl_->engine, *voice.sound, effects, voice.effects);
 
+		// -1 as the start volume means "ramp from wherever it is now", which
+		// for a sound that has not started yet is its set volume. Ramping from
+		// 0 to the target is what a fade-in actually is.
+		if (effects.fadeInSeconds > 0.0F)
+		{
+			ma_sound_set_fade_in_milliseconds(
+				voice.sound.get(), 0.0F, clampVolume(volume),
+				static_cast<ma_uint64>(effects.fadeInSeconds * 1000.0F));
+		}
+
 		if (ma_sound_start(voice.sound.get()) != MA_SUCCESS)
 		{
 			return false;
@@ -527,6 +537,35 @@ namespace gameforger::core
 					return voice.clipPath == clipRelativePath;
 				}),
 			impl_->voices.end());
+	}
+
+	void AudioEngine::stopWithFade(const std::string& clipRelativePath, const float fadeSeconds)
+	{
+		if (!impl_ || fadeSeconds <= 0.0F)
+		{
+			// No fade requested is just a stop; don't leave a voice running
+			// silently forever waiting for a ramp that never happens.
+			stop(clipRelativePath);
+			return;
+		}
+		const auto fadeMs = static_cast<ma_uint64>(fadeSeconds * 1000.0F);
+		// set_stop_time takes an ABSOLUTE point on the engine clock, not a
+		// duration - handing it the fade length alone would schedule a stop in
+		// the past and cut the sound instantly.
+		const ma_uint64 stopAtMs = ma_engine_get_time_in_milliseconds(&impl_->engine) + fadeMs;
+		for (Impl::Voice& voice : impl_->voices)
+		{
+			if (voice.clipPath != clipRelativePath || voice.sound == nullptr)
+			{
+				continue;
+			}
+			// Ramp from the current volume to silence, then schedule the stop
+			// at the end of the ramp. Without the scheduled stop the voice
+			// would sit at zero volume forever, never pruned, holding its
+			// effect nodes alive.
+			ma_sound_set_fade_in_milliseconds(voice.sound.get(), -1.0F, 0.0F, fadeMs);
+			ma_sound_set_stop_time_in_milliseconds(voice.sound.get(), stopAtMs);
+		}
 	}
 
 	bool AudioEngine::isAnyPlaying() const

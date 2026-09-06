@@ -611,6 +611,31 @@ namespace gameforger::editor
 						// caller: the panel, the AI and a hand-edited scene file
 						// all reach this same handler, and a delay of 0 seconds
 						// or a feedback of 1.0 would hang or run away.
+						// Fades are on the source, not the effects, so they are
+						// handled here rather than in the AudioEffects table below.
+						if (value.property == "fadeInSeconds" || value.property == "fadeOutSeconds")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								if (!std::isfinite(*number))
+								{
+									return {false, false, value.property + " must be a finite number."};
+								}
+								// 0 means "no fade"; 30s is well past any sane
+								// ramp and stops a typo holding a voice alive.
+								const float seconds = std::clamp(*number, 0.0F, 30.0F);
+								if (value.property == "fadeInSeconds")
+								{
+									entity->audioSource.fadeInSeconds = seconds;
+								}
+								else
+								{
+									entity->audioSource.fadeOutSeconds = seconds;
+								}
+								return {true, false, value.property + " updated."};
+							}
+							return {false, false, value.property + " expects a number."};
+						}
 						if (value.property == "fxReverb")
 						{
 							if (const auto* enabled = std::get_if<bool>(&value.value))

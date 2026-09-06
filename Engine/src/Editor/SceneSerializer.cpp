@@ -233,6 +233,10 @@ namespace gameforger::editor
 				entity.audioSource.is3D = readBool(*audioSource, "is3D", entity.audioSource.is3D);
 				entity.audioSource.minDistance = readFloat(*audioSource, "minDistance", entity.audioSource.minDistance);
 				entity.audioSource.maxDistance = readFloat(*audioSource, "maxDistance", entity.audioSource.maxDistance);
+				entity.audioSource.fadeInSeconds =
+					readFloat(*audioSource, "fadeInSeconds", entity.audioSource.fadeInSeconds);
+				entity.audioSource.fadeOutSeconds =
+					readFloat(*audioSource, "fadeOutSeconds", entity.audioSource.fadeOutSeconds);
 				// Absent in scenes written before effects existed, so every field
 				// falls back to its default and an old scene loads dry.
 				if (const json::Value* fx = audioSource->find("effects"))
@@ -451,6 +455,10 @@ namespace gameforger::editor
 				json += indent + "    \"minDistance\": " + audioScalar.data() + ",\n";
 				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.maxDistance);
 				json += indent + "    \"maxDistance\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.fadeInSeconds);
+				json += indent + "    \"fadeInSeconds\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.fadeOutSeconds);
+				json += indent + "    \"fadeOutSeconds\": " + audioScalar.data() + ",\n";
 				{
 					const AudioEffects& fx = entity.audioSource.effects;
 					const auto scalar = [&audioScalar](const float value)

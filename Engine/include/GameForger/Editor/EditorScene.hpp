@@ -176,6 +176,13 @@ namespace gameforger::editor
 		bool is3D = true;
 		float minDistance = 1.0F;
 		float maxDistance = 50.0F;
+		// Fades are a property of the sound itself, not a DSP node - miniaudio
+		// ramps the voice's own volume - so they live here beside volume and
+		// pitch rather than in AudioEffects. Putting them in AudioEffects would
+		// also make anyEnabled() true and build a node graph for nothing.
+		// 0 means no fade: start at full volume, stop instantly.
+		float fadeInSeconds = 0.0F;
+		float fadeOutSeconds = 0.0F;
 		AudioEffects effects;
 	};
 

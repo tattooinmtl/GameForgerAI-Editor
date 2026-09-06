@@ -45,9 +45,22 @@ namespace gameforger::core
 		Filter filter = Filter::None;
 		float cutoffHz = 1000.0F;
 
+		// Volume ramps on the voice itself, not nodes. Carried here because
+		// this is the per-source bundle the engine already receives.
+		float fadeInSeconds = 0.0F;
+		float fadeOutSeconds = 0.0F;
+
+		// NODE effects only. Fades deliberately do not count: they need no
+		// node graph, and treating them as "enabled" would build one for
+		// nothing on every faded sound.
 		[[nodiscard]] bool anyEnabled() const noexcept
 		{
 			return reverb || delay || filter != Filter::None;
+		}
+
+		[[nodiscard]] bool anyFade() const noexcept
+		{
+			return fadeInSeconds > 0.0F || fadeOutSeconds > 0.0F;
 		}
 	};
 
@@ -117,6 +130,11 @@ namespace gameforger::core
 		// stopAll() from one script also killed every other script's sound -
 		// a music manager stopping its track silenced the whole game.
 		void stop(const std::string& clipRelativePath);
+
+		// Ramps the clip's voices down over `fadeSeconds` and lets them finish
+		// on their own, instead of cutting them off mid-sample. Voices that are
+		// fading are still reported by isPlaying() until they actually end.
+		void stopWithFade(const std::string& clipRelativePath, float fadeSeconds);
 
 		// True while any voice is still running. Finished voices are pruned
 		// first, so this reflects reality rather than what was once started.

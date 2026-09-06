@@ -1748,6 +1748,21 @@ static void testAudioEffectsRoundTripAndClamping()
 	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbRoomSize", 0.8F}).success,
 		"Setting room size must succeed");
 
+	// Fades live on the source, not in AudioEffects - they ramp the voice's own
+	// volume and need no node graph, so anyEnabled() must stay false for them.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", 1.5F}).success,
+		"Setting fade in must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeOutSeconds", 99.0F}).success,
+		"An over-long fade is clamped, not rejected");
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", std::nanf("")}).success,
+		"A non-finite fade must be rejected");
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr, "Entity must exist");
+		TEST_ASSERT(std::abs(e->audioSource.fadeInSeconds - 1.5F) < 0.001F, "Fade in must be stored");
+		TEST_ASSERT(e->audioSource.fadeOutSeconds <= 30.0F, "Fade out must be clamped");
+	}
+
 	TEST_ASSERT(saveScene(sceneFile, scene.entities()).success, "Saving must succeed");
 	const SceneLoadResult loaded = loadScene(sceneFile);
 	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "Loading must succeed");
@@ -1757,6 +1772,9 @@ static void testAudioEffectsRoundTripAndClamping()
 	TEST_ASSERT(fx.filter == AudioEffects::Filter::LowPass, "filter must round-trip by NAME");
 	TEST_ASSERT(std::abs(fx.reverbRoomSize - 0.8F) < 0.001F, "reverb room size must round-trip");
 	TEST_ASSERT(fx.delayDecay <= 0.99F, "clamped decay must persist clamped");
+	TEST_ASSERT(std::abs(loaded.entities[0].audioSource.fadeInSeconds - 1.5F) < 0.001F,
+		"fade in must round-trip");
+	TEST_ASSERT(loaded.entities[0].audioSource.fadeOutSeconds <= 30.0F, "fade out must round-trip clamped");
 
 	// A scene written before effects existed has no "effects" key at all and
 	// must load dry rather than failing.
@@ -1769,6 +1787,9 @@ static void testAudioEffectsRoundTripAndClamping()
 	TEST_ASSERT(legacy.success && legacy.entities.size() == 1, "A pre-effects scene must still load");
 	TEST_ASSERT(!legacy.entities[0].audioSource.effects.anyEnabled(),
 		"A pre-effects scene must load with effects off");
+	TEST_ASSERT(legacy.entities[0].audioSource.fadeInSeconds == 0.0F &&
+			legacy.entities[0].audioSource.fadeOutSeconds == 0.0F,
+		"A pre-fade scene must load with no fades, i.e. instant start and stop");
 
 	std::filesystem::remove(sceneFile);
 	std::filesystem::remove(sceneFile.string() + ".bak");

@@ -134,11 +134,20 @@ void main()
 		// Fullscreen quad, position(2) + uv(2). stb_image's row 0 (the top of the
 		// source image) lands at OpenGL texture v=0; pairing it with the screen's
 		// top edge here keeps the splash image right-side up.
+		// x, y, u, v. The V coordinates run 0 at the BOTTOM of the quad and 1
+		// at the top, which is the opposite of the usual convention, because
+		// StbImageImpl.cpp sets stbi_set_flip_vertically_on_load(1) for the
+		// whole process: the first row stb hands back is the image's bottom
+		// row, and glTexImage2D uploads that first row at v=0.
+		//
+		// These used to be written as if there were no flip (top of the quad
+		// at v=0), which drew the splash upside down - the logo's text ended
+		// up at the top with every glyph vertically reflected.
 		constexpr std::array<float, 16> quadVertices{
-			-1.0F, -1.0F, 0.0F, 1.0F,
-			1.0F, -1.0F, 1.0F, 1.0F,
-			1.0F, 1.0F, 1.0F, 0.0F,
-			-1.0F, 1.0F, 0.0F, 0.0F,
+			-1.0F, -1.0F, 0.0F, 0.0F,
+			1.0F, -1.0F, 1.0F, 0.0F,
+			1.0F, 1.0F, 1.0F, 1.0F,
+			-1.0F, 1.0F, 0.0F, 1.0F,
 		};
 		constexpr std::array<unsigned int, 6> quadIndices{0, 1, 2, 0, 2, 3};
 

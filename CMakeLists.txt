@@ -63,7 +63,14 @@ FetchContent_Declare(
     imguizmo
     GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
     GIT_TAG 5ab7676402ace03cdf930b2d972f59c7d03c6fa8
-    GIT_SHALLOW TRUE
+    # NOT shallow, unlike every other dependency here. GIT_SHALLOW does
+    # `git clone --depth 1 --branch <ref>`, which can only resolve a branch or
+    # a tag - this is the one dependency pinned to a raw commit SHA, and a
+    # shallow clone of it fails with "fatal: unable to read tree". It went
+    # unnoticed because an existing out/_deps already had the commit; a truly
+    # fresh clone (CI, or a new machine) could not configure the project at
+    # all. ImGuizmo is small, so the full clone costs little.
+    GIT_SHALLOW FALSE
 )
 
 FetchContent_Declare(

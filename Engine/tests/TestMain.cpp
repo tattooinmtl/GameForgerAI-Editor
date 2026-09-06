@@ -8,9 +8,11 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
 #include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ProjectSettingsBus.hpp"
+#include "GameForger/Runtime/GameplayLoop.hpp"
 #include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
@@ -1056,6 +1058,202 @@ static void testProjectSettingsAndBus()
 	fs::remove_all(root, cleanup);
 }
 
+// ----------------------------------------------------------------------------
+// The boot sequence gates player control, so "does it ever unlock" is the
+// property that matters - a sequence that never finishes leaves the game
+// permanently unplayable.
+// ----------------------------------------------------------------------------
+static void testBootSequence()
+{
+	EditorScene scene(".");
+	GameplayState gameplay;
+
+	// No steps: control is immediate, exactly as before the feature existed.
+	resetBootSequence(gameplay, {});
+	TEST_ASSERT(!gameplay.bootSequence.running, "An empty boot sequence must not arm");
+	TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "An empty boot sequence must not block input");
+
+	// Two waits totalling 0.3s, then control.
+	std::vector<BootStep> steps;
+	{
+		BootStep a;
+		a.kind = BootStep::Kind::WaitSeconds;
+		a.seconds = 0.1F;
+		BootStep b;
+		b.kind = BootStep::Kind::WaitSeconds;
+		b.seconds = 0.2F;
+		steps.push_back(a);
+		steps.push_back(b);
+	}
+	resetBootSequence(gameplay, steps);
+	TEST_ASSERT(bootSequenceBlocksInput(gameplay), "An armed boot sequence must block input");
+
+	// Not playing => no progress at all.
+	tickBootSequence(steps, scene, gameplay, false, 1.0F);
+	TEST_ASSERT(bootSequenceBlocksInput(gameplay), "A paused game must not advance the boot sequence");
+
+	for (int i = 0; i < 10 && gameplay.bootSequence.running; ++i)
+	{
+		tickBootSequence(steps, scene, gameplay, true, 0.05F);
+	}
+	TEST_ASSERT(!gameplay.bootSequence.running, "A wait-only sequence must finish");
+	TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "Input must be released once the sequence ends");
+
+	// unlock_player_input hands control back early, mid-sequence.
+	{
+		std::vector<BootStep> early;
+		BootStep unlock;
+		unlock.kind = BootStep::Kind::UnlockPlayerInput;
+		BootStep wait;
+		wait.kind = BootStep::Kind::WaitSeconds;
+		wait.seconds = 5.0F;
+		early.push_back(unlock);
+		early.push_back(wait);
+
+		resetBootSequence(gameplay, early);
+		TEST_ASSERT(bootSequenceBlocksInput(gameplay), "Sequence must start locked");
+		tickBootSequence(early, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!bootSequenceBlocksInput(gameplay),
+			"unlock_player_input must release control while later steps still run");
+		TEST_ASSERT(gameplay.bootSequence.running, "The sequence must keep running after an early unlock");
+	}
+
+	// A cutscene step waits on the host rather than guessing a duration, but
+	// must not deadlock once the host reports back.
+	{
+		std::vector<BootStep> cut;
+		BootStep shot;
+		shot.kind = BootStep::Kind::PlayCutscene;
+		shot.shotName = "Intro";
+		cut.push_back(shot);
+
+		resetBootSequence(gameplay, cut);
+		tickBootSequence(cut, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(gameplay.bootSequence.requestedCutsceneShot == "Intro",
+			"A cutscene step must publish the shot name for the host");
+		tickBootSequence(cut, scene, gameplay, true, 10.0F);
+		TEST_ASSERT(gameplay.bootSequence.running,
+			"A cutscene step must NOT time out on its own - it waits for the host");
+
+		gameplay.bootSequence.hostStepFinished = true;
+		tickBootSequence(cut, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running, "Host completion must advance past the cutscene");
+		TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "Control must return after the cutscene");
+	}
+
+	// A play_animation step naming an entity that does not exist must not
+	// stall the sequence forever.
+	{
+		std::vector<BootStep> anim;
+		BootStep play;
+		play.kind = BootStep::Kind::PlayAnimation;
+		play.targetEntity = "NoSuchEntity";
+		anim.push_back(play);
+
+		resetBootSequence(gameplay, anim);
+		tickBootSequence(anim, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running,
+			"play_animation on a missing entity must complete rather than hang");
+	}
+
+	// Steps deleted mid-Play must not index out of bounds.
+	{
+		resetBootSequence(gameplay, steps);
+		const std::vector<BootStep> emptied;
+		tickBootSequence(emptied, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running && !bootSequenceBlocksInput(gameplay),
+			"Emptying the sequence mid-Play must release control, not read past the end");
+	}
+}
+
+static void writeMinimalWav(const std::filesystem::path& path)
+{
+	// 44-byte PCM header + 8 silent 16-bit samples (mono, 8000 Hz).
+	const unsigned char wav[] = {
+		'R','I','F','F', 36 + 16, 0, 0, 0, 'W','A','V','E',
+		'f','m','t',' ', 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1F, 0, 0,
+		0x80, 0x3E, 0, 0, 2, 0, 16, 0, 'd','a','t','a', 16, 0, 0, 0,
+		0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0
+	};
+	std::ofstream out(path, std::ios::binary);
+	out.write(reinterpret_cast<const char*>(wav), sizeof(wav));
+}
+
+static void testAudioSourceAndHooks()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::temp_directory_path() / "gf_audio_test";
+	std::error_code ec;
+	fs::remove_all(root, ec);
+	fs::create_directories(root / "Game" / "Audio", ec);
+	fs::create_directories(root / "Game" / "Scenes", ec);
+	writeMinimalWav(root / "Game" / "Audio" / "beep.wav");
+	{
+		std::ofstream project(root / "Game" / "Project.json");
+		project << R"({"format":"GameForgerProject","version":1,"name":"t","startupScene":"Game/Scenes/Main.gfprod"})";
+	}
+	{
+		std::ofstream scene(root / "Game" / "Scenes" / "Main.gfprod");
+		scene << "{}";
+	}
+
+	TEST_ASSERT(gameforger::core::resolveProjectFile(
+		root, "Game/Audio/beep.wav", "Game/Audio", gameforger::core::audioClipExtensions()).has_value(),
+		"A clip under Game/Audio must resolve");
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(
+		root, "Game/Audio/../Scripts/x.wav", "Game/Audio", gameforger::core::audioClipExtensions()).has_value(),
+		"A clip that escapes Game/Audio must be rejected");
+
+	gameforger::core::AudioEngine audio;
+	(void)audio.initialize();
+	TEST_ASSERT(audio.play(root, "Game/Audio/beep.wav"),
+		"play() must succeed for a valid clip even in silent mode");
+	TEST_ASSERT(!audio.play(root, "Game/Audio/missing.wav"),
+		"play() must reject a clip that does not exist");
+	TEST_ASSERT(audio.clipDurationSeconds(root, "Game/Audio/beep.wav") > 0.0F,
+		"A real wav must report a positive duration");
+	audio.shutdown();
+
+	EditorScene scene(root.string());
+	SceneEntity entity;
+	entity.name = "Speaker";
+	entity.hasAudioSource = true;
+	entity.audioSource.clipAssetPath = "Game/Audio/beep.wav";
+	entity.audioSource.loop = true;
+	entity.audioSource.is3D = false;
+	scene.replaceEntities({entity});
+
+	const fs::path scenePath = root / "Game" / "Scenes" / "audio.gfprod";
+	TEST_ASSERT(saveScene(scenePath, scene.entities()).success, "Saving a scene with an audio source must succeed");
+	const SceneLoadResult loaded = loadScene(scenePath);
+	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "Loading a scene with an audio source must succeed");
+	TEST_ASSERT(loaded.entities[0].hasAudioSource &&
+		loaded.entities[0].audioSource.clipAssetPath == "Game/Audio/beep.wav" && loaded.entities[0].audioSource.loop,
+		"AudioSourceData must round-trip through the scene file");
+
+	ProjectSettingsBus bus(root);
+	AddAudioHookCommand add;
+	add.hook.event = AudioHook::Event::OnPickup;
+	add.hook.clipPath = "Game/Audio/beep.wav";
+	add.hook.volume = 0.5F;
+	TEST_ASSERT(bus.execute(add).success, "Adding an audio hook must succeed");
+	TEST_ASSERT(bus.settings().audioHooks.size() == 1 &&
+		bus.settings().audioHooks[0].event == AudioHook::Event::OnPickup,
+		"The hook must persist in memory");
+
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reloading settings must succeed");
+	TEST_ASSERT(reloaded.audioHooks.size() == 1 &&
+		reloaded.audioHooks[0].clipPath == "Game/Audio/beep.wav",
+		"Audio hooks must round-trip through Settings.json");
+
+	AddAudioHookCommand bad;
+	bad.hook.event = AudioHook::Event::OnPickup;
+	TEST_ASSERT(!bus.validate(bad).success, "A hook with an empty clipPath must be rejected");
+
+	fs::remove_all(root, ec);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1082,6 +1280,8 @@ int main()
 	RUN_TEST(testResolveProjectFileConfinement);
 	RUN_TEST(testJsonPrettyPrinter);
 	RUN_TEST(testProjectSettingsAndBus);
+	RUN_TEST(testBootSequence);
+	RUN_TEST(testAudioSourceAndHooks);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

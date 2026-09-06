@@ -3,6 +3,7 @@ add_library(GameForgerEngine STATIC
     src/Core/ProjectPaths.cpp
     src/Core/AssetDatabase.cpp
     src/Core/Material.cpp
+    src/Core/AudioEngine.cpp
     src/Animation/Skeleton.cpp
     src/Animation/AnimationClip.cpp
     # Scene data model + serialization + mesh generation - shared between
@@ -98,7 +99,13 @@ target_link_libraries(GameForgerEngine
         # PRIVATE since no public header of this library exposes lua_State
         # or any other Lua type.
         GameForgerLua
+        miniaudio
 )
+
+if(WIN32)
+    # miniaudio WASAPI / COM on Windows.
+    target_link_libraries(GameForgerEngine PRIVATE ole32)
+endif()
 
 target_compile_features(GameForgerEngine PUBLIC cxx_std_20)
 

@@ -43,8 +43,10 @@
 #include <glm/matrix.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
 #include "GameForger/Core/Engine.hpp"
 #include "GameForger/Editor/AIAnimationGenerator.hpp"
+#include "GameForger/Editor/AudioPanel.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/AICommandPlanner.hpp"
 #include "GameForger/Editor/AICockpit.hpp"
@@ -94,13 +96,20 @@ namespace
     using gameforger::editor::DetachScriptCommand;
     using gameforger::editor::DuplicateEntityCommand;
     using gameforger::editor::applyParentConstraints;
+    using gameforger::editor::bootSequenceBlocksInput;
+    using gameforger::editor::resetBootSequence;
+    using gameforger::editor::tickBootSequence;
     using gameforger::editor::cameraLookingAt;
     using gameforger::editor::describeCommand;
     using gameforger::editor::EditorScene;
     using gameforger::editor::EntityAnimation;
     using gameforger::editor::ProjectSettingsBus;
     using gameforger::editor::ProjectSettingsPanelState;
+    using gameforger::editor::AudioHook;
+    using gameforger::editor::AudioPanelState;
+    using gameforger::editor::drawAudioPanel;
     using gameforger::editor::drawProjectSettingsPanel;
+    using gameforger::editor::fireAudioHooks;
     using gameforger::editor::GameCameraState;
     using gameforger::editor::GameplayState;
     using gameforger::editor::generateAnimation;
@@ -475,6 +484,16 @@ namespace
         // (saved pre-Play snapshots, the Editor's own separate Play-mode
         // viewport camera, etc).
         GameplayState gameplay;
+
+        // Editor-only: true after serviceBootSequenceHost has started the
+        // Storyboard preview for the current play_cutscene step. Cleared
+        // when that step finishes (or Play stops) so a later cutscene step
+        // can arm a different shot.
+        bool bootHostCutsceneArmed = false;
+        bool bootHostAudioArmed = false;
+        float bootHostAudioElapsedSeconds = 0.0F;
+        float bootHostAudioDurationSeconds = 0.0F;
+        bool audioPickupThisFrame = false;
     };
 
     // Height sculpting for a selected isTerrain entity - while active,
@@ -1863,6 +1882,7 @@ namespace
 
     void drawCockpitPanel(
         AICockpitState& cockpit,
+        ProjectSettingsBus& projectSettingsBus,
         AIProviderClient& providerClient,
         AISetupState& aiSetup,
         BlenderClient& blenderClient,
@@ -1991,6 +2011,7 @@ namespace
                 blenderClient,
                 scene,
                 commandBus,
+                projectSettingsBus,
                 std::move(prompt));
         }
         if (!canSend) ImGui::EndDisabled();
@@ -2013,6 +2034,7 @@ namespace
 
     void drawMainMenu(
         EditorScene& scene,
+        ProjectSettingsBus& projectSettingsBus,
         AICommandBus& commandBus,
         SelectionState& selection,
         EditorCameraState& camera,
@@ -2367,6 +2389,15 @@ namespace
                 playMode.gameplay.playerOperatingCatapult = false;
                 playMode.gameplay.enemyCatapultFireTimerSeconds = 8.0F;
                 playMode.gameplay.gameOverMessage.clear();
+                // Arms the authored startup sequence (Project Settings >
+                // Startup Sequence). With no steps this is a no-op and the
+                // player has control from the first frame, exactly as before.
+                resetBootSequence(playMode.gameplay, projectSettingsBus.settings().bootSequence);
+                playMode.bootHostCutsceneArmed = false;
+                playMode.bootHostAudioArmed = false;
+                playMode.bootHostAudioElapsedSeconds = 0.0F;
+                playMode.bootHostAudioDurationSeconds = 0.0F;
+                playMode.audioPickupThisFrame = false;
                 playMode.isPlaying = true;
                 clearSelection(selection);
 
@@ -2386,6 +2417,7 @@ namespace
                         const glm::vec3 velocity =
                             distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
                         playMode.gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
+                        ++playMode.gameplay.projectilesFiredThisTick;
                     },
                     [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); },
                     [&playMode]() { return playMode.gameplay.playerOperatingCatapult; },
@@ -2399,6 +2431,7 @@ namespace
                             length > 0.0001F ? (direction / length) * speed : glm::vec3(0.0F, 0.0F, speed);
                         playMode.gameplay.projectiles.push_back(
                             GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
+                        ++playMode.gameplay.projectilesFiredThisTick;
                     });
                 for (const SceneEntity& entity : scene.entities())
                 {
@@ -3505,6 +3538,7 @@ namespace
                         const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
                         const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
                         executeLogged(commandBus,DeleteEntityCommand{candidate->name});
+                        playMode.audioPickupThisFrame = true;
                         const auto existing = std::find_if(
                             playMode.gameplay.inventoryItems.begin(),
                             playMode.gameplay.inventoryItems.end(),
@@ -3942,6 +3976,108 @@ namespace
     // defined earlier in the file for proximity to drawGameViewPanel.
     void tickCineAnimatedEntities(
         EditorScene& scene, AICommandBus& commandBus, float elapsedTime, int excludeEntityId);
+
+    // Consumes play_cutscene / play_audio requests from tickBootSequence.
+    // Those steps wait on hostStepFinished; without this they deadlock and
+    // the player never gets control back. play_audio has no engine yet, so
+    // it completes immediately rather than hanging Play.
+    void serviceBootSequenceHost(
+        PlayModeState& playMode,
+        StoryboardState& storyboard,
+        ConsoleState& console,
+        gameforger::core::AudioEngine& audio,
+        const std::filesystem::path& projectRoot,
+        const std::vector<AudioHook>& audioHooks,
+        const float deltaTime)
+    {
+        if (!playMode.isPlaying)
+        {
+            playMode.bootHostCutsceneArmed = false;
+            playMode.bootHostAudioArmed = false;
+            return;
+        }
+
+        GameplayState::BootSequenceState& boot = playMode.gameplay.bootSequence;
+        if (!boot.running || boot.hostStepFinished)
+        {
+            return;
+        }
+
+        if (!boot.requestedAudioClip.empty())
+        {
+            if (!playMode.bootHostAudioArmed)
+            {
+                fireAudioHooks(audio, projectRoot, audioHooks, AudioHook::Event::OnBootStep);
+                if (!audio.play(projectRoot, boot.requestedAudioClip))
+                {
+                    logMessage(console, LogLevel::Warning,
+                        "Boot sequence play_audio: could not play '" + boot.requestedAudioClip + "'.");
+                    boot.hostStepFinished = true;
+                    return;
+                }
+                playMode.bootHostAudioDurationSeconds = audio.clipDurationSeconds(projectRoot, boot.requestedAudioClip);
+                playMode.bootHostAudioElapsedSeconds = 0.0F;
+                playMode.bootHostAudioArmed = true;
+                if (playMode.bootHostAudioDurationSeconds <= 0.0F)
+                {
+                    boot.hostStepFinished = true;
+                    playMode.bootHostAudioArmed = false;
+                }
+                return;
+            }
+            playMode.bootHostAudioElapsedSeconds += deltaTime;
+            if (playMode.bootHostAudioElapsedSeconds >= playMode.bootHostAudioDurationSeconds)
+            {
+                boot.hostStepFinished = true;
+                playMode.bootHostAudioArmed = false;
+            }
+            return;
+        }
+
+        if (boot.requestedCutsceneShot.empty())
+        {
+            return;
+        }
+
+        int shotIndex = -1;
+        for (int i = 0; i < static_cast<int>(storyboard.shots.size()); ++i)
+        {
+            if (storyboard.shots[static_cast<std::size_t>(i)].name == boot.requestedCutsceneShot)
+            {
+                shotIndex = i;
+                break;
+            }
+        }
+        if (shotIndex < 0)
+        {
+            logMessage(console, LogLevel::Warning,
+                "Boot sequence play_cutscene: no Storyboard shot named '" + boot.requestedCutsceneShot + "'.");
+            boot.hostStepFinished = true;
+            playMode.bootHostCutsceneArmed = false;
+            return;
+        }
+
+        const CineShot& shot = storyboard.shots[static_cast<std::size_t>(shotIndex)];
+        if (!playMode.bootHostCutsceneArmed)
+        {
+            storyboard.windowOpen = true;
+            storyboard.playingMovie = false;
+            storyboard.movieShotIndex = -1;
+            storyboard.previewShotIndex = shotIndex;
+            storyboard.isPlaying = true;
+            storyboard.playTime = 0.0F;
+            playMode.bootHostCutsceneArmed = true;
+            return;
+        }
+
+        const float duration = shot.cameraPath.keyframes.empty() ? 0.0F : shot.cameraPath.keyframes.back().time;
+        if (!storyboard.isPlaying || storyboard.playTime >= duration)
+        {
+            storyboard.isPlaying = false;
+            boot.hostStepFinished = true;
+            playMode.bootHostCutsceneArmed = false;
+        }
+    }
 
     // A separate camera from the player/Game view camera, for cutscenes only.
     // Only appears once StoryboardState::windowOpen is set (from the Toolbox
@@ -5437,6 +5573,51 @@ namespace
                 entity.pickupItem.iconPath,
                 [&](const std::string& v)
                 { executeLogged(commandBus,SetPropertyCommand{entity.name, "PickupItem", "iconPath", v}); });
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Audio Source");
+        bool hasAudioSource = entity.hasAudioSource;
+        if (ImGui::Checkbox("Has Audio Source", &hasAudioSource))
+        {
+            executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "enabled", hasAudioSource});
+        }
+        if (entity.hasAudioSource)
+        {
+            std::array<char, 256> clipBuffer{};
+            std::snprintf(
+                clipBuffer.data(), clipBuffer.size(), "%s", entity.audioSource.clipAssetPath.c_str());
+            ImGui::TextDisabled("Clip path under Game/Audio");
+            if (ImGui::InputText("##AudioClip", clipBuffer.data(), clipBuffer.size()))
+            {
+                executeLogged(commandBus,
+                    SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", std::string(clipBuffer.data())});
+            }
+            float volume = entity.audioSource.volume;
+            if (ImGui::SliderFloat("Volume", &volume, 0.0F, 1.0F, "%.2f"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "volume", volume});
+            }
+            float pitch = entity.audioSource.pitch;
+            if (ImGui::SliderFloat("Pitch", &pitch, 0.1F, 2.0F, "%.2f"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "pitch", pitch});
+            }
+            bool loop = entity.audioSource.loop;
+            if (ImGui::Checkbox("Loop", &loop))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "loop", loop});
+            }
+            bool playOnAwake = entity.audioSource.playOnAwake;
+            if (ImGui::Checkbox("Play On Awake", &playOnAwake))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "playOnAwake", playOnAwake});
+            }
+            bool is3D = entity.audioSource.is3D;
+            if (ImGui::Checkbox("3D", &is3D))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "is3D", is3D});
+            }
         }
 
         ImGui::Separator();
@@ -7279,6 +7460,9 @@ namespace
         // Only so clicking Project.json/Settings.json in the browser can pull
         // the inspector to the front; the panel itself is drawn from main().
         ProjectSettingsPanelState& projectSettingsPanel,
+        // AI Forge routes prompts through the Cockpit, which needs this for
+        // the project.* tools.
+        ProjectSettingsBus& projectSettingsBus,
         EditHistoryState& history,
         const std::filesystem::path& currentScenePath,
         ImGuizmo::OPERATION& gizmoOperation,
@@ -7288,10 +7472,17 @@ namespace
     {
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
+        playMode.gameplay.projectilesFiredThisTick = 0;
+        playMode.audioPickupThisFrame = false;
 
         applyParentConstraints(scene, commandBus);
         tickPlayModeAnimations(scene, commandBus, playMode.gameplay, advanceSim, simDt);
-        tickScripts(scene, scriptRuntime, advanceSim, simDt);
+        tickBootSequence(
+            projectSettingsBus.settings().bootSequence, scene, playMode.gameplay, advanceSim, simDt);
+        // Freezing scripts is what actually stops the player moving during an
+        // intro. Animations above still tick, so a logo or camera move plays
+        // over a stationary player.
+        tickScripts(scene, scriptRuntime, advanceSim && !bootSequenceBlocksInput(playMode.gameplay), simDt);
         tickProjectiles(scene, commandBus, playMode.gameplay, advanceSim, simDt);
 
         // Enemy catapult auto-fire - the "two-sided battle" simplification
@@ -7533,6 +7724,7 @@ namespace
                     blenderClient,
                     scene,
                     commandBus,
+                    projectSettingsBus,
                     promptText);
             }
         }
@@ -8102,6 +8294,11 @@ int main()
     // to defaults rather than refusing to open the editor.
     ProjectSettingsBus projectSettingsBus(projectRoot);
     ProjectSettingsPanelState projectSettingsPanel;
+    gameforger::core::AudioEngine audioEngine;
+    audioEngine.initialize();
+    AudioPanelState audioPanel;
+    bool wasPlayingAudio = false;
+    std::string previousGameOverMessage;
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
@@ -8141,12 +8338,12 @@ int main()
 
         gameforger::editor::pumpCockpit(aiCockpit);
         drawMainMenu(
-            scene, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
+            scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
             settings, history, currentScenePath, nativeWindowHandle, resetLayout,
             blenderLauncher, blenderClient, blenderPanel, aiCockpit);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
         drawCockpitPanel(
-            aiCockpit, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
+            aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
         const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
         drawEditorPanels(
@@ -8173,6 +8370,7 @@ int main()
             console,
             projectBrowser,
             projectSettingsPanel,
+            projectSettingsBus,
             history,
             currentScenePath,
             gizmoOperation,
@@ -8193,6 +8391,16 @@ int main()
         }
         drawCineCameraPreviewPanel(
             cineCameraRenderer, scene, commandBus, selection, storyboard, projectRoot, deltaTime);
+        // After the preview tick so a finishing shot can release the boot
+        // sequence on the same frame it ends, rather than a frame later.
+        serviceBootSequenceHost(
+            playMode,
+            storyboard,
+            console,
+            audioEngine,
+            projectRoot,
+            projectSettingsBus.settings().audioHooks,
+            deltaTime);
         drawStoryboardPanel(scene, selection, storyboard);
         drawProjectSettingsPanel(
             projectSettingsBus, projectRoot, projectSettingsPanel,
@@ -8204,6 +8412,83 @@ int main()
             {
                 logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
             });
+        drawAudioPanel(
+            projectSettingsBus,
+            audioEngine,
+            projectRoot,
+            audioPanel,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
+
+        if (playMode.isPlaying && !wasPlayingAudio)
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnPlayStart);
+            for (const SceneEntity& entity : scene.entities())
+            {
+                if (!entity.hasAudioSource || !entity.audioSource.playOnAwake ||
+                    entity.audioSource.clipAssetPath.empty())
+                {
+                    continue;
+                }
+                if (entity.audioSource.is3D)
+                {
+                    audioEngine.play3D(
+                        projectRoot,
+                        entity.audioSource.clipAssetPath,
+                        entity.position,
+                        entity.audioSource.volume,
+                        entity.audioSource.pitch,
+                        entity.audioSource.loop,
+                        entity.audioSource.minDistance,
+                        entity.audioSource.maxDistance);
+                }
+                else
+                {
+                    audioEngine.play(
+                        projectRoot,
+                        entity.audioSource.clipAssetPath,
+                        entity.audioSource.volume,
+                        entity.audioSource.pitch,
+                        entity.audioSource.loop);
+                }
+            }
+        }
+        if (!playMode.isPlaying && wasPlayingAudio)
+        {
+            audioEngine.stopAll();
+        }
+        wasPlayingAudio = playMode.isPlaying;
+
+        if (playMode.audioPickupThisFrame)
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnPickup);
+        }
+        if (playMode.gameplay.projectilesFiredThisTick > 0)
+        {
+            fireAudioHooks(
+                audioEngine,
+                projectRoot,
+                projectSettingsBus.settings().audioHooks,
+                AudioHook::Event::OnProjectileFire);
+        }
+        if (playMode.gameplay.projectilesHitThisTick > 0)
+        {
+            fireAudioHooks(
+                audioEngine,
+                projectRoot,
+                projectSettingsBus.settings().audioHooks,
+                AudioHook::Event::OnProjectileHit);
+        }
+        if (!playMode.gameplay.gameOverMessage.empty() && previousGameOverMessage.empty())
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnGameOver);
+        }
+        previousGameOverMessage = playMode.gameplay.gameOverMessage;
 
         ImGui::Render();
 
@@ -8247,6 +8532,7 @@ int main()
         DestroyIcon(iconSmall);
     }
 
+    audioEngine.shutdown();
     viewportRenderer.shutdown();
     gameViewRenderer.shutdown();
     cineCameraRenderer.shutdown();

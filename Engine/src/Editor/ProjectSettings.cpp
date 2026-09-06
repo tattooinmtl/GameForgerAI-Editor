@@ -34,6 +34,21 @@ namespace gameforger::editor
 			{BootStep::Kind::UnlockPlayerInput, "unlock_player_input"},
 		}};
 
+		struct HookEventName
+		{
+			AudioHook::Event event;
+			const char* name;
+		};
+
+		constexpr std::array<HookEventName, 6> kHookEventNames{{
+			{AudioHook::Event::OnPlayStart, "on_play_start"},
+			{AudioHook::Event::OnPickup, "on_pickup"},
+			{AudioHook::Event::OnProjectileFire, "on_projectile_fire"},
+			{AudioHook::Event::OnProjectileHit, "on_projectile_hit"},
+			{AudioHook::Event::OnGameOver, "on_game_over"},
+			{AudioHook::Event::OnBootStep, "on_boot_step"},
+		}};
+
 		std::string readFile(const std::filesystem::path& path)
 		{
 			std::ifstream input(path, std::ios::binary);
@@ -176,6 +191,51 @@ namespace gameforger::editor
 			return json::makeArray(std::move(items));
 		}
 
+		void readAudioHooks(const json::Value& root, std::vector<AudioHook>& outHooks)
+		{
+			const json::Value* hooks = root.find("audioHooks");
+			if (hooks == nullptr || hooks->type != json::Value::Type::Array)
+			{
+				return;
+			}
+			for (const json::Value& entry : hooks->arrayValue)
+			{
+				if (entry.type != json::Value::Type::Object)
+				{
+					continue;
+				}
+				AudioHook hook;
+				if (!audioHookEventFromName(readString(entry, "event", ""), hook.event))
+				{
+					continue;
+				}
+				hook.clipPath = readString(entry, "clipPath", "");
+				if (const json::Value* volume = entry.find("volume"))
+				{
+					if (std::optional<double> number = volume->asNumber())
+					{
+						hook.volume = static_cast<float>(*number);
+					}
+				}
+				outHooks.push_back(std::move(hook));
+			}
+		}
+
+		json::Value audioHooksToJson(const std::vector<AudioHook>& hooks)
+		{
+			std::vector<json::Value> items;
+			items.reserve(hooks.size());
+			for (const AudioHook& hook : hooks)
+			{
+				items.push_back(json::makeObject({
+					{"event", json::makeString(audioHookEventName(hook.event))},
+					{"clipPath", json::makeString(hook.clipPath)},
+					{"volume", json::makeNumber(hook.volume)},
+				}));
+			}
+			return json::makeArray(std::move(items));
+		}
+
 		// Replace `key` in `object` if present, otherwise append it. Keeps the
 		// existing key order so a save does not reshuffle the whole file.
 		void setMemberPreservingOrder(json::Value& object, const std::string& key, json::Value value)
@@ -211,6 +271,31 @@ namespace gameforger::editor
 			if (name == entry.name)
 			{
 				outKind = entry.kind;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	const char* audioHookEventName(const AudioHook::Event event) noexcept
+	{
+		for (const HookEventName& entry : kHookEventNames)
+		{
+			if (entry.event == event)
+			{
+				return entry.name;
+			}
+		}
+		return "on_play_start";
+	}
+
+	bool audioHookEventFromName(const std::string& name, AudioHook::Event& outEvent) noexcept
+	{
+		for (const HookEventName& entry : kHookEventNames)
+		{
+			if (name == entry.name)
+			{
+				outEvent = entry.event;
 				return true;
 			}
 		}
@@ -292,6 +377,7 @@ namespace gameforger::editor
 					outSettings.targetFps = static_cast<int>(*number);
 				}
 			}
+			readAudioHooks(*root, outSettings.audioHooks);
 		}
 		else
 		{
@@ -355,11 +441,21 @@ namespace gameforger::editor
 			return {false, error};
 		}
 
-		const json::Value settingsRoot = json::makeObject({
-			{"mouseSensitivity", json::makeNumber(settings.mouseSensitivity)},
-			{"targetFps", json::makeNumber(settings.targetFps)},
-		});
-		if (!writeFileAtomically(projectRoot / kSettingsFile, json::serializePretty(settingsRoot), error))
+		json::Value settingsDocument;
+		if (const std::optional<json::Value> existing = json::parse(readFile(projectRoot / kSettingsFile));
+			existing.has_value() && existing->type == json::Value::Type::Object)
+		{
+			settingsDocument = *existing;
+		}
+		else
+		{
+			settingsDocument = json::makeObject({});
+		}
+		setMemberPreservingOrder(
+			settingsDocument, "mouseSensitivity", json::makeNumber(settings.mouseSensitivity));
+		setMemberPreservingOrder(settingsDocument, "targetFps", json::makeNumber(settings.targetFps));
+		setMemberPreservingOrder(settingsDocument, "audioHooks", audioHooksToJson(settings.audioHooks));
+		if (!writeFileAtomically(projectRoot / kSettingsFile, json::serializePretty(settingsDocument), error))
 		{
 			return {false, error};
 		}

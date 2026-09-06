@@ -96,6 +96,7 @@ namespace gameforger::editor
 	AICommandResult ProjectSettingsBus::validate(const ProjectSettingsCommand& command) const
 	{
 		const int stepCount = static_cast<int>(settings_.bootSequence.size());
+		const int hookCount = static_cast<int>(settings_.audioHooks.size());
 
 		return std::visit(
 			[&](const auto& value) -> AICommandResult
@@ -176,15 +177,39 @@ namespace gameforger::editor
 					}
 					return ok("Remove boot step.");
 				}
-				else
+				else if constexpr (std::is_same_v<Command, MoveBootStepCommand>)
 				{
-					static_assert(std::is_same_v<Command, MoveBootStepCommand>);
 					if (value.fromIndex < 0 || value.fromIndex >= stepCount ||
 						value.toIndex < 0 || value.toIndex >= stepCount)
 					{
 						return invalid("Boot step index out of range.");
 					}
 					return ok("Move boot step.");
+				}
+				else if constexpr (std::is_same_v<Command, AddAudioHookCommand>)
+				{
+					if (value.hook.clipPath.empty())
+					{
+						return invalid("Audio hook needs a clipPath under Game/Audio.");
+					}
+					if (!std::isfinite(value.hook.volume) || value.hook.volume < 0.0F || value.hook.volume > 4.0F)
+					{
+						return invalid("Audio hook volume must be between 0 and 4.");
+					}
+					if (value.index < -1 || value.index > hookCount)
+					{
+						return invalid("Audio hook index out of range.");
+					}
+					return ok("Add audio hook.");
+				}
+				else
+				{
+					static_assert(std::is_same_v<Command, RemoveAudioHookCommand>);
+					if (value.index < 0 || value.index >= hookCount)
+					{
+						return invalid("Audio hook index out of range.");
+					}
+					return ok("Remove audio hook.");
 				}
 			},
 			command);
@@ -230,14 +255,27 @@ namespace gameforger::editor
 					settings_.bootSequence.erase(
 						settings_.bootSequence.begin() + static_cast<std::ptrdiff_t>(value.index));
 				}
-				else
+				else if constexpr (std::is_same_v<Command, MoveBootStepCommand>)
 				{
-					static_assert(std::is_same_v<Command, MoveBootStepCommand>);
 					BootStep moved = settings_.bootSequence[static_cast<std::size_t>(value.fromIndex)];
 					settings_.bootSequence.erase(
 						settings_.bootSequence.begin() + static_cast<std::ptrdiff_t>(value.fromIndex));
 					settings_.bootSequence.insert(
 						settings_.bootSequence.begin() + static_cast<std::ptrdiff_t>(value.toIndex), std::move(moved));
+				}
+				else if constexpr (std::is_same_v<Command, AddAudioHookCommand>)
+				{
+					const std::size_t at = value.index < 0
+						? settings_.audioHooks.size()
+						: static_cast<std::size_t>(value.index);
+					settings_.audioHooks.insert(
+						settings_.audioHooks.begin() + static_cast<std::ptrdiff_t>(at), value.hook);
+				}
+				else
+				{
+					static_assert(std::is_same_v<Command, RemoveAudioHookCommand>);
+					settings_.audioHooks.erase(
+						settings_.audioHooks.begin() + static_cast<std::ptrdiff_t>(value.index));
 				}
 			},
 			command);

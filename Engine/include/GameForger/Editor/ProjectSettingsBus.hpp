@@ -41,11 +41,24 @@ namespace gameforger::editor
 		int toIndex = 0;
 	};
 
+	struct AddAudioHookCommand
+	{
+		AudioHook hook;
+		int index = -1;
+	};
+
+	struct RemoveAudioHookCommand
+	{
+		int index = 0;
+	};
+
 	using ProjectSettingsCommand = std::variant<
 		SetProjectSettingCommand,
 		AddBootStepCommand,
 		RemoveBootStepCommand,
-		MoveBootStepCommand>;
+		MoveBootStepCommand,
+		AddAudioHookCommand,
+		RemoveAudioHookCommand>;
 
 	// Owns the in-memory ProjectSettings and is the only writer to it. Every
 	// mutation - from the inspector panel and from the AI alike - goes through

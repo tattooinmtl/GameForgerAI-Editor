@@ -42,6 +42,29 @@ namespace gameforger::editor
 	// rows and for project.get_settings' reply to the AI.
 	[[nodiscard]] std::string describeBootStep(const BootStep& step);
 
+	// Game-event → clip bindings. These fire from real existing events
+	// (Play start, pickup, projectile fire/hit, game over, boot play_audio)
+	// rather than invented ones. Stored in Settings.json.
+	struct AudioHook
+	{
+		enum class Event
+		{
+			OnPlayStart,
+			OnPickup,
+			OnProjectileFire,
+			OnProjectileHit,
+			OnGameOver,
+			OnBootStep
+		};
+
+		Event event = Event::OnPlayStart;
+		std::string clipPath;
+		float volume = 1.0F;
+	};
+
+	[[nodiscard]] const char* audioHookEventName(AudioHook::Event event) noexcept;
+	[[nodiscard]] bool audioHookEventFromName(const std::string& name, AudioHook::Event& outEvent) noexcept;
+
 	// The typed view of Game/Project.json + Game/Settings.json. Both the
 	// inspector panel and the AI go through this rather than editing raw JSON,
 	// so there is exactly one place that knows the file layout.
@@ -59,6 +82,7 @@ namespace gameforger::editor
 		// Game/Settings.json
 		float mouseSensitivity = 0.15F;
 		int targetFps = 60;
+		std::vector<AudioHook> audioHooks;
 	};
 
 	struct ProjectSettingsIoResult

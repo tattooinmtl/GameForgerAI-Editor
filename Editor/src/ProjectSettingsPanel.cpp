@@ -234,16 +234,6 @@ namespace gameforger::editor
 			state.focusRequested = false;
 		}
 
-		// Dock alongside the Console the first time this panel is ever shown,
-		// and only then. ImGuiCond_FirstUseEver means a saved arrangement in
-		// GameForgerEditorLayout.ini always wins, so this cannot disturb an
-		// existing layout - and once the panel has been dragged somewhere,
-		// that position is what persists.
-		if (const ImGuiID consoleDock = dockIdOfWindow("Console"); consoleDock != 0)
-		{
-			ImGui::SetNextWindowDockID(consoleDock, ImGuiCond_FirstUseEver);
-		}
-
 		ImGui::Begin("Project Settings");
 
 		if (!state.sceneChoicesLoaded)
@@ -353,5 +343,34 @@ namespace gameforger::editor
 		drawBootStepEditor(bus, state, log);
 
 		ImGui::End();
+
+		// Requested placement: a tab between Console and Storyboard, in the
+		// node those two already share. Done after End() so the window
+		// object exists. Never splits or resizes the layout - only this
+		// panel's tab index changes, and only while it still lives in that
+		// same node (or is not docked yet).
+		if (!state.dockPlacementDone)
+		{
+			const ImGuiID consoleId = dockIdOfWindow("Console");
+			const ImGuiID storyboardId = dockIdOfWindow("Storyboard");
+			const ImGuiID settingsId = dockIdOfWindow("Project Settings");
+			if (consoleId == 0 || storyboardId == 0)
+			{
+				// Anchors have not been submitted yet this session.
+			}
+			else if (consoleId != storyboardId)
+			{
+				state.dockPlacementDone = true;
+			}
+			else if (settingsId != 0 && settingsId != consoleId)
+			{
+				// User dragged this panel into a different node. Leave it.
+				state.dockPlacementDone = true;
+			}
+			else if (dockWindowBetween("Project Settings", "Console", "Storyboard"))
+			{
+				state.dockPlacementDone = true;
+			}
+		}
 	}
 }

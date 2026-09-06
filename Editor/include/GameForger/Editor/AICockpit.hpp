@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "GameForger/Editor/AICommandBus.hpp"
+#include "GameForger/Editor/ProjectSettingsBus.hpp"
 #include "GameForger/Editor/BlenderClient.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/Json.hpp"
@@ -140,6 +141,11 @@ namespace gameforger::editor
 		BlenderClient& blenderClient,
 		EditorScene& scene,
 		AICommandBus& commandBus,
+		// Project-level config (Game/Project.json + Game/Settings.json). The
+		// project.* tools route here rather than to commandBus: these settings
+		// outlive scene loads, and the bus validates before anything reaches
+		// disk so the model cannot write a broken config.
+		ProjectSettingsBus& projectSettingsBus,
 		std::string userPrompt);
 
 	// Emergency stop for a running loop. Sets a flag the worker checks

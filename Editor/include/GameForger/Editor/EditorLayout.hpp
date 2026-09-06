@@ -5,17 +5,20 @@
 namespace gameforger::editor
 {
 	// The dock node `windowName` currently sits in, or 0 if it is not docked
-	// (or does not exist yet this session).
+	// (or has not been submitted yet this session).
+	[[nodiscard]] ImGuiID dockIdOfWindow(const char* windowName);
+
+	// Places `newWindow` as a tab BETWEEN `firstWindow` and `secondWindow`, in
+	// the node those two already share. Returns true once the tab order is
+	// `… firstWindow, newWindow, secondWindow …`.
 	//
-	// Used to place a NEW panel beside an existing one without rebuilding the
-	// layout: the caller pairs this with
-	// ImGui::SetNextWindowDockID(id, ImGuiCond_FirstUseEver), which applies
-	// only to a window that has no entry in GameForgerEditorLayout.ini yet.
-	// An existing saved arrangement is therefore never disturbed, and once the
-	// user drags the panel somewhere else that choice sticks.
+	// This does not move, split, or resize anything: the node is whatever
+	// `firstWindow` is already docked in, and the only change is the tab
+	// index of `newWindow`. If the user has docked `newWindow` into a
+	// different node, the caller must not call this.
 	//
 	// Its own translation unit because the implementation needs
 	// imgui_internal.h, whose ImGuiInputSource enum collides with this
 	// project's class of the same name in main.cpp.
-	[[nodiscard]] ImGuiID dockIdOfWindow(const char* windowName);
+	bool dockWindowBetween(const char* newWindow, const char* firstWindow, const char* secondWindow);
 }

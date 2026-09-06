@@ -9,6 +9,7 @@
 
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
 
 namespace gameforger::editor
@@ -91,7 +92,60 @@ namespace gameforger::editor
 		// auto-fire timer (main.cpp). Set once, never cleared during a Play
 		// session.
 		std::string gameOverMessage;
+
+		// Set by tickProjectiles when a projectile despawns from a hit this
+		// frame. The host fires OnProjectileHit audio hooks from this, so
+		// GameplayLoop does not have to know about AudioEngine.
+		int projectilesHitThisTick = 0;
+		int projectilesFiredThisTick = 0;
+
+		// Runtime state for ProjectSettings::bootSequence - the steps that run
+		// once when Play starts, before the player gets control. Lives here
+		// rather than in the Editor's PlayModeState because Runtime must play
+		// the identical sequence standalone.
+		struct BootSequenceState
+		{
+			// True from Play start until the last step finishes. Never
+			// restarts mid-session.
+			bool running = false;
+			std::size_t stepIndex = 0;
+			float stepElapsedSeconds = 0.0F;
+
+			// While true the host skips tickScripts, which is what actually
+			// stops the player moving. Animations still tick, so a logo or
+			// intro camera move plays over a frozen player.
+			bool playerInputLocked = false;
+
+			// Set when a play_cutscene / play_audio step begins, and cleared
+			// by the host once it has acted on it. The sequence does not
+			// advance past such a step until the host reports it finished, so
+			// a cutscene of unknown length still gates correctly.
+			std::string requestedCutsceneShot;
+			std::string requestedAudioClip;
+			// Host sets this to signal "the thing you asked for is done".
+			bool hostStepFinished = false;
+		};
+		BootSequenceState bootSequence;
 	};
+
+	// Call once when Play starts. Arms the sequence and locks player input if
+	// there is anything to run; with no steps the player has control
+	// immediately, exactly as before this feature existed.
+	void resetBootSequence(GameplayState& gameplay, const std::vector<BootStep>& steps);
+
+	// Advances the sequence. No-op unless isPlaying and the sequence is still
+	// running. `scene` is used to drive play_animation steps, which wait for
+	// the target entity's own authored animation to finish.
+	void tickBootSequence(
+		const std::vector<BootStep>& steps,
+		const EditorScene& scene,
+		GameplayState& gameplay,
+		bool isPlaying,
+		float deltaTime);
+
+	// True while the boot sequence is holding the player still. The host uses
+	// this to gate tickScripts - see BootSequenceState::playerInputLocked.
+	[[nodiscard]] bool bootSequenceBlocksInput(const GameplayState& gameplay) noexcept;
 
 	// Resolves every parented entity's world position/rotation/scale from
 	// its parent chain's current transform + its own local* fields,

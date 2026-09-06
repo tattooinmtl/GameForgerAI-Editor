@@ -96,7 +96,22 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui imguizmo lua assimp)
+# Single-header audio backend (WAV/MP3/FLAC). No CMakeLists in the repo, so
+# MakeAvailable only populates the source dir; we wrap it as an INTERFACE
+# include below. Public-domain / MIT-0, same class of vendoring as stb_*.
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.22
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad imgui imguizmo lua assimp miniaudio)
+
+if(NOT TARGET miniaudio)
+    add_library(miniaudio INTERFACE)
+    target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
+endif()
 
 # Upstream ImGuizmo's own "imguizmo" target compiles GraphEditor.cpp/ImCurveEdit.cpp/ImGradient.cpp
 # without an imgui include path (it only adds one under IMGUIZMO_BUILD_EXAMPLE, which we don't set).

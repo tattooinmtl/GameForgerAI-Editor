@@ -221,6 +221,20 @@ namespace gameforger::editor
 				entity.pickupItem.iconPath = readString(*pickupItem, "iconPath", entity.pickupItem.iconPath);
 			}
 
+			entity.hasAudioSource = readBool(obj, "hasAudioSource", false);
+			if (const json::Value* audioSource = obj.find("audioSource"))
+			{
+				entity.audioSource.clipAssetPath =
+					readString(*audioSource, "clipAssetPath", entity.audioSource.clipAssetPath);
+				entity.audioSource.volume = readFloat(*audioSource, "volume", entity.audioSource.volume);
+				entity.audioSource.pitch = readFloat(*audioSource, "pitch", entity.audioSource.pitch);
+				entity.audioSource.loop = readBool(*audioSource, "loop", entity.audioSource.loop);
+				entity.audioSource.playOnAwake = readBool(*audioSource, "playOnAwake", entity.audioSource.playOnAwake);
+				entity.audioSource.is3D = readBool(*audioSource, "is3D", entity.audioSource.is3D);
+				entity.audioSource.minDistance = readFloat(*audioSource, "minDistance", entity.audioSource.minDistance);
+				entity.audioSource.maxDistance = readFloat(*audioSource, "maxDistance", entity.audioSource.maxDistance);
+			}
+
 			entity.isCastle = readBool(obj, "isCastle", false);
 			if (const json::Value* castle = obj.find("castle"))
 			{
@@ -401,6 +415,25 @@ namespace gameforger::editor
 			json += indent + "    \"itemName\": \"" + escapeJson(entity.pickupItem.itemName) + "\",\n";
 			json += indent + "    \"iconPath\": \"" + escapeJson(entity.pickupItem.iconPath) + "\"\n";
 			json += indent + "  },\n";
+			json += indent + "  \"hasAudioSource\": " + std::string(entity.hasAudioSource ? "true" : "false") + ",\n";
+			{
+				std::array<char, 32> audioScalar{};
+				json += indent + "  \"audioSource\": {\n";
+				json += indent + "    \"clipAssetPath\": \"" + escapeJson(entity.audioSource.clipAssetPath) + "\",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.volume);
+				json += indent + "    \"volume\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.pitch);
+				json += indent + "    \"pitch\": " + audioScalar.data() + ",\n";
+				json += indent + "    \"loop\": " + std::string(entity.audioSource.loop ? "true" : "false") + ",\n";
+				json += indent + "    \"playOnAwake\": " +
+					std::string(entity.audioSource.playOnAwake ? "true" : "false") + ",\n";
+				json += indent + "    \"is3D\": " + std::string(entity.audioSource.is3D ? "true" : "false") + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.minDistance);
+				json += indent + "    \"minDistance\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.maxDistance);
+				json += indent + "    \"maxDistance\": " + audioScalar.data() + "\n";
+				json += indent + "  },\n";
+			}
 			json += indent + "  \"isCastle\": " + std::string(entity.isCastle ? "true" : "false") + ",\n";
 			{
 				std::array<char, 32> castleScalarBuffer{};

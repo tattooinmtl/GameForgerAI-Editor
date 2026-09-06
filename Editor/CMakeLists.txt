@@ -28,6 +28,7 @@
     # because it needs imgui_internal.h for DockBuilder, whose ImGuiInputSource
     # enum collides with this project's class of the same name in main.cpp.
     src/EditorLayout.cpp
+    src/AudioPanel.cpp
     # Editor-only InputSource implementation (ImGui-backed) - see
     # GameForger/Editor/InputSource.hpp (Engine, shared interface) and
     # Engine/src/Editor/GlfwInputSource.cpp (Runtime's equivalent).

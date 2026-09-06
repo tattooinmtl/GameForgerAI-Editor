@@ -46,6 +46,12 @@ namespace gameforger::editor
 		// Set by the Project browser when Project.json/Settings.json is
 		// clicked, so the panel can pull itself to the front.
 		bool focusRequested = false;
+
+		// Retry until this panel is a tab between Console and Storyboard
+		// (same node, no splits). Stops immediately if the user has already
+		// docked it somewhere else, or if Console and Storyboard no longer
+		// share a node.
+		bool dockPlacementDone = false;
 	};
 
 	// Draws the "Project Settings" window. Every mutation is routed through

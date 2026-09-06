@@ -527,6 +527,65 @@ namespace gameforger::editor
 							}
 						}
 					}
+					else if (value.component == "AudioSource")
+					{
+						if (value.property == "enabled")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->hasAudioSource = *enabled;
+								return {true, false, "Audio source flag updated."};
+							}
+						}
+						if (value.property == "clipAssetPath")
+						{
+							if (const auto* text = std::get_if<std::string>(&value.value))
+							{
+								entity->audioSource.clipAssetPath = *text;
+								return {true, false, "Audio clip updated."};
+							}
+						}
+						if (value.property == "volume")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								entity->audioSource.volume = *number;
+								return {true, false, "Audio volume updated."};
+							}
+						}
+						if (value.property == "pitch")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								entity->audioSource.pitch = *number;
+								return {true, false, "Audio pitch updated."};
+							}
+						}
+						if (value.property == "loop")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.loop = *enabled;
+								return {true, false, "Audio loop updated."};
+							}
+						}
+						if (value.property == "playOnAwake")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.playOnAwake = *enabled;
+								return {true, false, "Audio playOnAwake updated."};
+							}
+						}
+						if (value.property == "is3D")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.is3D = *enabled;
+								return {true, false, "Audio 3D flag updated."};
+							}
+						}
+					}
 					else if (value.component == "Castle")
 					{
 						if (value.property == "enabled")

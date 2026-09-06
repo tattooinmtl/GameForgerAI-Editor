@@ -132,6 +132,21 @@ namespace gameforger::editor
 		std::string iconPath;
 	};
 
+	// Additive audio source, same shape as the unused AudioSourceComponent
+	// stub. Playback goes through core::AudioEngine; this is the authored
+	// data that round-trips through the scene file.
+	struct AudioSourceData
+	{
+		std::string clipAssetPath;
+		float volume = 1.0F;
+		float pitch = 1.0F;
+		bool loop = false;
+		bool playOnAwake = true;
+		bool is3D = true;
+		float minDistance = 1.0F;
+		float maxDistance = 50.0F;
+	};
+
 	// Data for an entity with isCastle=true (see below) - additive, like
 	// hasCollider/isPickupItem. Projectile hit-testing uses colliderWorldAabb
 	// (mesh bounds for imported models, otherwise position +/- scale).
@@ -241,6 +256,8 @@ namespace gameforger::editor
 		// additive, like hasCollider, not a shape replacement.
 		bool isPickupItem = false;
 		PickupItemData pickupItem;
+		bool hasAudioSource = false;
+		AudioSourceData audioSource;
 		// Whether this entity is a destructible castle (see CastleData
 		// above) - additive, like hasCollider. Normally paired with
 		// hasCollider=true, since colliderWorldAabb is what a gravity

@@ -5,6 +5,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <variant>
@@ -12,6 +13,7 @@
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/AIProviderClient.hpp"
 #include "GameForger/Editor/AIChatResponse.hpp"
+#include "GameForger/Editor/ProjectSettingsBus.hpp"
 
 namespace gameforger::editor
 {
@@ -217,6 +219,62 @@ namespace gameforger::editor
 			}),
 			{"entity_name", "script_path"}));
 
+		// Project-level tools. These deliberately do NOT let the model write
+		// raw JSON into Game/Project.json - it goes through
+		// ProjectSettingsBus, which validates before anything reaches disk
+		// (unknown key, a startup scene that does not exist, an out-of-range
+		// fps). A model that invents a plausible-looking but wrong value gets
+		// a rejection message it can act on, instead of silently breaking the
+		// project's config.
+		tools.push_back(makeToolSchema(
+			"project.get_settings",
+			"Read the current project settings: name, startup scene, asset paths, "
+			"player settings, and the startup sequence. Read-only.",
+			json::makeObject({}), {}));
+
+		tools.push_back(makeToolSchema(
+			"project.set_setting",
+			"Change one project setting. String keys: name, startupScene, skeletonProfile, "
+			"aiProviders, scriptDirectory. Numeric keys: mouseSensitivity, targetFps.",
+			json::makeObject({
+				{"key",   makeProperty("string", "Which setting to change.")},
+				{"value", makeProperty("string", "New value. For numeric keys, the number as a string.")},
+			}),
+			{"key", "value"}));
+
+		tools.push_back(makeToolSchema(
+			"project.add_boot_step",
+			"Append a step to the startup sequence, which runs when Play starts before the "
+			"player gets control. Use this for intro cutscenes, logos and loading animations.",
+			json::makeObject({
+				{"kind", makeProperty("string",
+					"One of: wait_seconds, play_animation, play_cutscene, play_audio, "
+					"lock_player_input, unlock_player_input.")},
+				{"seconds",      makeProperty("number", "For wait_seconds: how long to pause.")},
+				{"targetEntity", makeProperty("string", "For play_animation: the entity to animate.")},
+				{"shotName",     makeProperty("string", "For play_cutscene: the storyboard shot name.")},
+				{"clipPath",     makeProperty("string", "For play_audio: a path under Game/Audio.")},
+				{"index",        makeProperty("number", "Optional insert position; omit to append.")},
+			}),
+			{"kind"}));
+
+		tools.push_back(makeToolSchema(
+			"project.remove_boot_step",
+			"Remove a step from the startup sequence by its zero-based index.",
+			json::makeObject({
+				{"index", makeProperty("number", "Zero-based index of the step to remove.")},
+			}),
+			{"index"}));
+
+		tools.push_back(makeToolSchema(
+			"project.move_boot_step",
+			"Reorder the startup sequence by moving one step to a new index.",
+			json::makeObject({
+				{"from", makeProperty("number", "Current zero-based index.")},
+				{"to",   makeProperty("number", "Target zero-based index.")},
+			}),
+			{"from", "to"}));
+
 		tools.push_back(makeToolSchema(
 			"scene.add_tag",
 			"Add a string tag to an entity.",
@@ -249,6 +307,113 @@ namespace gameforger::editor
 			if (lower == "plane")    return PrimitiveType::Plane;
 			if (lower == "capsule")  return PrimitiveType::Capsule;
 			return PrimitiveType::Cube;
+		}
+
+		// Route a project.* tool call to ProjectSettingsBus. Kept separate from
+		// dispatchSceneTool because the two write to different documents:
+		// scene tools mutate the open EditorScene, these mutate project config
+		// that outlives scene loads.
+		ToolCallResult dispatchProjectTool(
+			ProjectSettingsBus& settings,
+			const std::string& name,
+			const json::Value& args)
+		{
+			ToolCallResult out;
+
+			if (name == "project.get_settings")
+			{
+				const ProjectSettings& s = settings.settings();
+				std::ostringstream summary;
+				summary << "{\"name\":\"" << s.name
+				        << "\",\"startupScene\":\"" << s.startupScene
+				        << "\",\"skeletonProfile\":\"" << s.skeletonProfile
+				        << "\",\"scriptDirectory\":\"" << s.scriptDirectory
+				        << "\",\"mouseSensitivity\":" << s.mouseSensitivity
+				        << ",\"targetFps\":" << s.targetFps
+				        << ",\"bootSequence\":[";
+				for (std::size_t i = 0; i < s.bootSequence.size(); ++i)
+				{
+					if (i > 0) summary << ",";
+					summary << "{\"index\":" << i
+					        << ",\"kind\":\"" << bootStepKindName(s.bootSequence[i].kind)
+					        << "\",\"describe\":\"" << describeBootStep(s.bootSequence[i]) << "\"}";
+				}
+				summary << "]}";
+				out.ok = true;
+				out.summary = summary.str();
+				return out;
+			}
+
+			if (name == "project.set_setting")
+			{
+				SetProjectSettingCommand cmd;
+				cmd.key = readString(args.find("key"));
+				const std::string raw = readString(args.find("value"));
+				cmd.stringValue = raw;
+				// Numeric keys arrive as a string because that is what the
+				// schema asks for (models are more reliable emitting strings
+				// than mixed-type values). Parse leniently; the bus rejects
+				// anything non-finite or out of range.
+				try
+				{
+					cmd.numberValue = raw.empty() ? 0.0 : std::stod(raw);
+				}
+				catch (const std::exception&)
+				{
+					cmd.numberValue = std::numeric_limits<double>::quiet_NaN();
+				}
+				const AICommandResult result = settings.execute(cmd);
+				out.ok = result.success;
+				out.summary = result.message;
+				return out;
+			}
+
+			if (name == "project.add_boot_step")
+			{
+				AddBootStepCommand cmd;
+				if (!bootStepKindFromName(readString(args.find("kind")), cmd.step.kind))
+				{
+					out.ok = false;
+					out.summary = "Unknown boot step kind. Use one of: wait_seconds, play_animation, "
+					              "play_cutscene, play_audio, lock_player_input, unlock_player_input.";
+					return out;
+				}
+				cmd.step.seconds = readFloat(args.find("seconds"), 1.0F);
+				cmd.step.targetEntity = readString(args.find("targetEntity"));
+				cmd.step.shotName = readString(args.find("shotName"));
+				cmd.step.clipPath = readString(args.find("clipPath"));
+				cmd.index = args.find("index") != nullptr
+					? static_cast<int>(readFloat(args.find("index"), -1.0F))
+					: -1;
+				const AICommandResult result = settings.execute(cmd);
+				out.ok = result.success;
+				out.summary = result.message;
+				return out;
+			}
+
+			if (name == "project.remove_boot_step")
+			{
+				const AICommandResult result =
+					settings.execute(RemoveBootStepCommand{static_cast<int>(readFloat(args.find("index"), -1.0F))});
+				out.ok = result.success;
+				out.summary = result.message;
+				return out;
+			}
+
+			if (name == "project.move_boot_step")
+			{
+				MoveBootStepCommand cmd;
+				cmd.fromIndex = static_cast<int>(readFloat(args.find("from"), -1.0F));
+				cmd.toIndex = static_cast<int>(readFloat(args.find("to"), -1.0F));
+				const AICommandResult result = settings.execute(cmd);
+				out.ok = result.success;
+				out.summary = result.message;
+				return out;
+			}
+
+			out.ok = false;
+			out.summary = "Unknown project tool: " + name;
+			return out;
 		}
 
 		// Route a scene tool call to AICommandBus. Returns a summary string
@@ -465,6 +630,9 @@ namespace gameforger::editor
 				"scene.import_model",
 				"scene.attach_script",
 				"scene.add_tag",
+				// Read-only. Every other project.* tool mutates config that
+				// outlives the scene, so it goes through approval.
+				"project.get_settings",
 			};
 			for (const char* safe : kSafeTools)
 			{
@@ -949,6 +1117,7 @@ namespace gameforger::editor
 			BlenderClient* blenderPtr,
 			EditorScene* scenePtr,
 			AICommandBus* busPtr,
+			ProjectSettingsBus* settingsPtr,
 			std::string userPrompt)
 		{
 			AICockpitState& state = *statePtr;
@@ -956,6 +1125,7 @@ namespace gameforger::editor
 			BlenderClient& blender = *blenderPtr;
 			EditorScene& scene = *scenePtr;
 			AICommandBus& bus = *busPtr;
+			ProjectSettingsBus& projectSettings = *settingsPtr;
 
 			pushIncoming(state, {"user", userPrompt, "", false});
 
@@ -1107,7 +1277,9 @@ namespace gameforger::editor
 						}
 						else
 						{
-							result = dispatchSceneTool(scene, bus, internalName, *parsedArgs);
+							result = internalName.rfind("project.", 0) == 0
+								? dispatchProjectTool(projectSettings, internalName, *parsedArgs)
+								: dispatchSceneTool(scene, bus, internalName, *parsedArgs);
 						}
 					}
 					else
@@ -1153,6 +1325,7 @@ namespace gameforger::editor
 		BlenderClient& blenderClient,
 		EditorScene& scene,
 		AICommandBus& commandBus,
+		ProjectSettingsBus& projectSettingsBus,
 		std::string userPrompt)
 	{
 		if (state.loopRunning.load()) return;
@@ -1173,6 +1346,7 @@ namespace gameforger::editor
 			&blenderClient,
 			&scene,
 			&commandBus,
+			&projectSettingsBus,
 			std::move(userPrompt));
 	}
 }

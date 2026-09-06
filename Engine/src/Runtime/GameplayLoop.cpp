@@ -169,6 +169,7 @@ namespace gameforger::editor
 		{
 			return;
 		}
+		gameplay.projectilesHitThisTick = 0;
 		const float dt = clampDeltaTime(deltaTime);
 		constexpr float kHitRadius = 0.6F;
 		std::vector<GameplayState::Projectile> stillActive;
@@ -255,7 +256,137 @@ namespace gameforger::editor
 			{
 				stillActive.push_back(projectile);
 			}
+			else
+			{
+				++gameplay.projectilesHitThisTick;
+			}
 		}
 		gameplay.projectiles = std::move(stillActive);
+	}
+
+	// ------------------------------------------------------------------------
+	// Boot sequence (ProjectSettings::bootSequence)
+	// ------------------------------------------------------------------------
+	namespace
+	{
+		// How long a play_animation step waits: the target entity's own last
+		// keyframe time. An entity with no animation finishes immediately
+		// rather than stalling the whole sequence forever.
+		float animationDurationSeconds(const EditorScene& scene, const std::string& entityName)
+		{
+			const SceneEntity* entity = scene.findEntity(entityName);
+			if (entity == nullptr || entity->animation.keyframes.empty())
+			{
+				return 0.0F;
+			}
+			return entity->animation.keyframes.back().time;
+		}
+	}
+
+	void resetBootSequence(GameplayState& gameplay, const std::vector<BootStep>& steps)
+	{
+		gameplay.bootSequence = GameplayState::BootSequenceState{};
+		if (steps.empty())
+		{
+			// No sequence authored: behave exactly as before this feature
+			// existed - the player has control from the first frame.
+			return;
+		}
+		gameplay.bootSequence.running = true;
+		gameplay.bootSequence.playerInputLocked = true;
+	}
+
+	bool bootSequenceBlocksInput(const GameplayState& gameplay) noexcept
+	{
+		return gameplay.bootSequence.running && gameplay.bootSequence.playerInputLocked;
+	}
+
+	void tickBootSequence(
+		const std::vector<BootStep>& steps,
+		const EditorScene& scene,
+		GameplayState& gameplay,
+		const bool isPlaying,
+		const float deltaTime)
+	{
+		GameplayState::BootSequenceState& boot = gameplay.bootSequence;
+		if (!isPlaying || !boot.running)
+		{
+			return;
+		}
+		// The sequence can outlive the settings it was armed from (the user
+		// deleting steps mid-Play), so re-check the bound every tick rather
+		// than trusting stepIndex.
+		if (boot.stepIndex >= steps.size())
+		{
+			boot.running = false;
+			boot.playerInputLocked = false;
+			return;
+		}
+
+		const BootStep& step = steps[boot.stepIndex];
+		boot.stepElapsedSeconds += deltaTime;
+
+		bool stepComplete = false;
+		switch (step.kind)
+		{
+			case BootStep::Kind::WaitSeconds:
+				stepComplete = boot.stepElapsedSeconds >= step.seconds;
+				break;
+
+			case BootStep::Kind::PlayAnimation:
+				// The animation itself is driven by tickPlayModeAnimations,
+				// which runs regardless of the input lock - this step only
+				// holds the sequence for as long as the clip lasts.
+				stepComplete = boot.stepElapsedSeconds >= animationDurationSeconds(scene, step.targetEntity);
+				break;
+
+			case BootStep::Kind::PlayCutscene:
+				// Hand the request to the host on the first tick of this step
+				// and wait for it to report back, so a shot of any length
+				// gates correctly instead of guessing a duration.
+				if (boot.requestedCutsceneShot.empty() && !boot.hostStepFinished)
+				{
+					boot.requestedCutsceneShot = step.shotName;
+				}
+				stepComplete = boot.hostStepFinished;
+				break;
+
+			case BootStep::Kind::PlayAudio:
+				if (boot.requestedAudioClip.empty() && !boot.hostStepFinished)
+				{
+					boot.requestedAudioClip = step.clipPath;
+				}
+				stepComplete = boot.hostStepFinished;
+				break;
+
+			case BootStep::Kind::LockPlayerInput:
+				boot.playerInputLocked = true;
+				stepComplete = true;
+				break;
+
+			case BootStep::Kind::UnlockPlayerInput:
+				// Hands control back early - the rest of the sequence keeps
+				// running (a logo can finish while the player already walks).
+				boot.playerInputLocked = false;
+				stepComplete = true;
+				break;
+		}
+
+		if (!stepComplete)
+		{
+			return;
+		}
+
+		boot.stepElapsedSeconds = 0.0F;
+		boot.requestedCutsceneShot.clear();
+		boot.requestedAudioClip.clear();
+		boot.hostStepFinished = false;
+		++boot.stepIndex;
+
+		if (boot.stepIndex >= steps.size())
+		{
+			boot.running = false;
+			boot.playerInputLocked = false;
+		}
 	}
 }

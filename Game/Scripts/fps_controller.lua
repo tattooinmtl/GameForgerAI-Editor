@@ -41,6 +41,19 @@ function FpsController:on_start()
     -- third-person view (and back).
     self.camera_mode = "fps"
     self.camera:setMode(self.camera_mode)
+    -- Claim the cursor while this controller is driving the player. This used
+    -- to be a per-entity "Lock Cursor" checkbox in the Inspector; it belongs
+    -- to whatever is actually controlling the camera.
+    self.gameManager:setCursorLock(true)
+    self.managers:register("fps_controller")
+end
+
+-- Runs when Play stops or this script is detached. Releasing the registration
+-- is what lets the engine know nothing is driving the player any more, so the
+-- cursor is not left captured.
+function FpsController:on_end()
+    self.managers:unregister("fps_controller")
+    self.gameManager:setCursorLock(false)
 end
 
 -- 0..1, ready to feed a HUD sprint bar once one exists.

@@ -2137,6 +2137,9 @@ namespace
         PlayModeState& playMode,
         ScriptRuntime& scriptRuntime,
         ImGuiInputSource& imguiInputSource,
+        // Needed so a Play session's self.audio calls reach the real engine -
+        // the Play button lives in this menu.
+        gameforger::core::AudioEngine& audioEngine,
         const std::filesystem::path& projectRoot,
         ConsoleState& console,
         SettingsState& settings,
@@ -2498,14 +2501,13 @@ namespace
                 playMode.isPlaying = true;
                 clearSelection(selection);
 
-                scriptRuntime.initialize(
-                    scene,
-                    commandBus,
-                    imguiInputSource,
+                ScriptRuntime::Config scriptConfig;
+                scriptConfig.logCallback =
                     [&console](const bool isError, const std::string& message)
                     {
                         logMessage(console, isError ? LogLevel::Error : LogLevel::Info, message);
-                    },
+                    };
+                scriptConfig.projectileSpawnCallback =
                     [&playMode](
                         const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
                     {
@@ -2515,10 +2517,14 @@ namespace
                             distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
                         playMode.gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
                         ++playMode.gameplay.projectilesFiredThisTick;
-                    },
-                    [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); },
-                    [&playMode]() { return playMode.gameplay.playerOperatingCatapult; },
-                    [&playMode](const bool value) { playMode.gameplay.playerOperatingCatapult = value; },
+                    };
+                scriptConfig.heldItemQueryCallback =
+                    [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); };
+                scriptConfig.aimingCatapultQueryCallback =
+                    [&playMode]() { return playMode.gameplay.playerOperatingCatapult; };
+                scriptConfig.operatingCatapultSetCallback =
+                    [&playMode](const bool value) { playMode.gameplay.playerOperatingCatapult = value; };
+                scriptConfig.gravityProjectileSpawnCallback =
                     [&playMode](
                         const glm::vec3& from, const glm::vec3& direction, const float speed,
                         const std::string& hitTag)
@@ -2529,7 +2535,28 @@ namespace
                         playMode.gameplay.projectiles.push_back(
                             GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
                         ++playMode.gameplay.projectilesFiredThisTick;
-                    });
+                    };
+                // Cursor lock now comes from whichever script calls
+                // self.gameManager:setCursorLock(), not a per-entity checkbox.
+                scriptConfig.cursorLockSetCallback =
+                    [&playMode](const bool locked) { playMode.gameplay.cursorLockDesired = locked; };
+                scriptConfig.audioCommandCallback =
+                    [&audioEngine, &projectRoot](
+                        const std::string& clipPath, const float volume, const bool loop)
+                    {
+                        if (clipPath.empty())
+                        {
+                            audioEngine.stopAll();
+                            return;
+                        }
+                        if (clipPath == "@master")
+                        {
+                            audioEngine.setMasterVolume(volume);
+                            return;
+                        }
+                        (void)audioEngine.play(projectRoot, clipPath, volume, 1.0F, loop);
+                    };
+                scriptRuntime.initialize(scene, commandBus, imguiInputSource, std::move(scriptConfig));
                 for (const SceneEntity& entity : scene.entities())
                 {
                     for (const std::string& scriptPath : entity.scripts)
@@ -3448,9 +3475,12 @@ namespace
             // icons - and re-applies automatically the moment it closes,
             // since this is recomputed fresh every frame rather than a
             // one-shot toggle.
+            // A script asked for it AND something is actually registered as
+            // driving the player - so a stale request from a torn-down scene
+            // cannot leave the cursor captured with nothing controlling it.
             const bool wantsCursorLock = playMode.isPlaying && followedEntity != nullptr &&
-                followedEntity->cameraRig.lockCursor && !playMode.cursorLockSuppressed &&
-                !playMode.inventoryWindowOpen;
+                playMode.gameplay.cursorLockDesired && !scriptRuntime.listManagers().empty() &&
+                !playMode.cursorLockSuppressed && !playMode.inventoryWindowOpen;
             if (wantsCursorLock && !playMode.gameplay.cursorCurrentlyLocked)
             {
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -6212,11 +6242,10 @@ namespace
                 SetPropertyCommand{entity.name, "Camera", "thirdPersonYawOffsetDegrees", thirdPersonYawOffset});
         }
 
-        bool lockCursor = entity.cameraRig.lockCursor;
-        if (ImGui::Checkbox("Lock Cursor", &lockCursor))
-        {
-            executeLogged(commandBus,SetPropertyCommand{entity.name, "Camera", "lockCursor", lockCursor});
-        }
+        // The "Lock Cursor" checkbox used to be here, on every entity. It is
+        // now owned by the Game Manager script - add the Game Manager preset
+        // to one entity, or let a controller call setCursorLock itself.
+        ImGui::TextDisabled("Cursor lock: driven by game_manager.lua / the controller scripts.");
         ImGui::TextDisabled(
             "While Play is running and this object has claimed the Game view camera (either FPS or "
             "Third-Person): hides and captures the cursor for continuous mouse-look instead of needing "
@@ -6313,7 +6342,7 @@ namespace
                 const char* description;
                 PresetKind kind;
             };
-            constexpr std::array<ScriptPreset, 8> presets{{
+            constexpr std::array<ScriptPreset, 10> presets{{
                     {"FPS Controller",
                      "Game/Scripts/fps_controller.lua",
                      "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
@@ -6369,9 +6398,23 @@ namespace
                      "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
                      "speeds/power-charge-time are editable in the script itself.",
                      PresetKind::Utility},
+                    {"Game Manager",
+                     "Game/Scripts/game_manager.lua",
+                     "Session-wide state that isn't any one object's business. Owns cursor lock - which "
+                     "used to be a checkbox on every entity's Inspector - and registers itself in the "
+                     "manager list. Attach to ONE entity per scene (an empty cube is fine). Doesn't touch "
+                     "the transform, so it combines with anything.",
+                     PresetKind::Utility},
+                    {"Audio Manager",
+                     "Game/Scripts/audio_manager.lua",
+                     "Plays background music on a loop and exposes self.audio to every other script "
+                     "(play/stop/setMasterVolume/isPlaying). Set music_clip to something in Game/Audio - "
+                     "use the Audio panel's Import Sound from PC to put one there. Doesn't touch the "
+                     "transform.",
+                     PresetKind::Utility},
                 }};
 
-            static std::array<bool, 8> presetSelected{};
+            static std::array<bool, 10> presetSelected{};
 
             std::string presetsPreview;
             for (std::size_t index = 0; index < presets.size(); ++index)
@@ -8437,7 +8480,7 @@ int main()
 
         gameforger::editor::pumpCockpit(aiCockpit);
         drawMainMenu(
-            scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
+            scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
             settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
             blenderLauncher, blenderClient, blenderPanel, aiCockpit);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);

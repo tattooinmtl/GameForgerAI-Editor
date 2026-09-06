@@ -448,14 +448,13 @@ int main()
 	// instance needs shutting down and restarting against the new ids).
 	const auto startAllScripts = [&]()
 	{
-		scriptRuntime.initialize(
-			scene,
-			commandBus,
-			inputSource,
+		ScriptRuntime::Config scriptConfig;
+		scriptConfig.logCallback =
 			[](const bool isError, const std::string& message)
 			{
 				std::fprintf(stderr, "%s%s\n", isError ? "[script error] " : "[script] ", message.c_str());
-			},
+			};
+		scriptConfig.projectileSpawnCallback =
 			[&gameplay](
 				const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
 			{
@@ -464,21 +463,23 @@ int main()
 				const glm::vec3 velocity =
 					distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
 				gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
-			},
-			// Runtime doesn't build the Editor's F-hold/E-aim-catapult
-			// interactions (Editor-Play-only, see drawGameViewPanel in
-			// Editor/src/main.cpp) - self.world:isHoldingItem()/
-			// isAimingCatapult() simply always report false here, and
-			// the catapult set callback / gravity projectile spawn
-			// callback are no-ops (Runtime has no catapult UI of its
-			// own, so nothing ever calls them).
-			[]() { return false; },
-			[]() { return false; },
-			[](const bool) { /* no-op: Runtime has no catapult UI */ },
+			};
+		scriptConfig.heldItemQueryCallback = []() { return false; };
+		scriptConfig.aimingCatapultQueryCallback = []() { return false; };
+		scriptConfig.operatingCatapultSetCallback = [](const bool) { /* no-op: Runtime has no catapult UI */ };
+		scriptConfig.gravityProjectileSpawnCallback =
 			[](const glm::vec3&, const glm::vec3&, const float, const std::string&)
 			{
 				/* no-op: Runtime does not spawn gravity projectiles */
-			});
+			};
+		// Same manager-driven cursor lock as the Editor, so a scene behaves
+		// identically standalone.
+		scriptConfig.cursorLockSetCallback =
+			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
+		// Runtime has no AudioEngine instance yet - wired in D2, where
+		// Runtime audio parity belongs. Silent until then, never null.
+		scriptConfig.audioCommandCallback = [](const std::string&, float, bool) {};
+		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
 		for (const SceneEntity& entity : scene.entities())
 		{
 			for (const std::string& scriptPath : entity.scripts)
@@ -562,7 +563,8 @@ int main()
 		{
 			menuOpen = !menuOpen;
 		}
-		const bool wantsCursorLock = followedEntity != nullptr && followedEntity->cameraRig.lockCursor && !menuOpen;
+		const bool wantsCursorLock = followedEntity != nullptr &&
+			gameplay.cursorLockDesired && !scriptRuntime.listManagers().empty() && !menuOpen;
 		if (wantsCursorLock && !gameplay.cursorCurrentlyLocked)
 		{
 			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);

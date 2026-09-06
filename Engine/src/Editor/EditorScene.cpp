@@ -694,14 +694,11 @@ namespace gameforger::editor
 								return {true, false, "Camera rig updated."};
 							}
 						}
-						if (value.property == "lockCursor")
-						{
-							if (const auto* enabled = std::get_if<bool>(&value.value))
-							{
-								entity->cameraRig.lockCursor = *enabled;
-								return {true, false, "Camera rig updated."};
-							}
-						}
+						// "lockCursor" was handled here. Cursor ownership moved to
+						// GameplayState::cursorLockDesired, set by
+						// self.gameManager:setCursorLock() - see game_manager.lua.
+						// An old scene still carrying the key just falls through
+						// to the unknown-property result below rather than failing.
 					}
 					else if (value.component == "TextMesh")
 					{

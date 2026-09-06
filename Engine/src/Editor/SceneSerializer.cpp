@@ -268,7 +268,6 @@ namespace gameforger::editor
 					readFloat(*cameraRig, "thirdPersonAimHeight", entity.cameraRig.thirdPersonAimHeight);
 				entity.cameraRig.thirdPersonYawOffsetDegrees = readFloat(
 					*cameraRig, "thirdPersonYawOffsetDegrees", entity.cameraRig.thirdPersonYawOffsetDegrees);
-				entity.cameraRig.lockCursor = readBool(*cameraRig, "lockCursor", entity.cameraRig.lockCursor);
 			}
 
 			if (const json::Value* scripts = obj.find("scripts"))
@@ -544,9 +543,9 @@ namespace gameforger::editor
 			json += indent + "    \"thirdPersonDistance\": " + thirdPersonDistanceBuffer.data() + ",\n";
 			json += indent + "    \"thirdPersonHeight\": " + thirdPersonHeightBuffer.data() + ",\n";
 			json += indent + "    \"thirdPersonAimHeight\": " + thirdPersonAimHeightBuffer.data() + ",\n";
-			json += indent + "    \"thirdPersonYawOffsetDegrees\": " + thirdPersonYawOffsetBuffer.data() + ",\n";
-			json += indent + "    \"lockCursor\": " + std::string(entity.cameraRig.lockCursor ? "true" : "false") +
-				"\n";
+			// Last field in cameraRig now that lockCursor is gone - no trailing
+			// comma, which this project's own parser rejects outright.
+			json += indent + "    \"thirdPersonYawOffsetDegrees\": " + thirdPersonYawOffsetBuffer.data() + "\n";
 			json += indent + "  },\n";
 
 			json += indent + "  \"scripts\": [";

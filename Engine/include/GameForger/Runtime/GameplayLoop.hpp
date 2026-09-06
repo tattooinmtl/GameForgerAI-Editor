@@ -32,6 +32,13 @@ namespace gameforger::editor
 
 		bool cursorCurrentlyLocked = false;
 
+		// What the Game Manager script last asked for via
+		// self.gameManager:setCursorLock(). Replaces the per-entity
+		// EntityCameraRig::lockCursor checkbox: cursor ownership belongs to
+		// whichever script is driving the player, not to every entity in the
+		// scene. Shared so Runtime and Editor Play agree.
+		bool cursorLockDesired = false;
+
 		// One entry per distinct item name, with a count rather than one
 		// entry per pickup - see the Editor's original PlayModeState
 		// comment (now here) for why.

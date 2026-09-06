@@ -26,14 +26,10 @@ namespace gameforger::editor
 		// Rotates the third-person camera around the entity, away from
 		// directly-behind - e.g. for an over-the-shoulder angle.
 		float thirdPersonYawOffsetDegrees = 0.0F;
-		// While Play is running and this entity has claimed the Game view
-		// camera (either mode), hide+capture the OS cursor for continuous
-		// mouse-look instead of requiring Right Mouse held - see
-		// drawGameViewPanel (main.cpp). Per-entity/authored (Inspector's
-		// Camera Rig section) and saved with the scene, unlike a Play-
-		// session-only UI preference, so a controller keeps its own
-		// intended behavior across sessions.
-		bool lockCursor = false;
+		// lockCursor used to live here as a per-entity authored flag. Cursor
+		// ownership is session state, not a property of a crate, so it moved
+		// to GameplayState::cursorLockDesired, driven by whichever script
+		// calls self.gameManager:setCursorLock(). See game_manager.lua.
 	};
 
 	// One paintable ground material - mirrors Unity's TerrainLayer asset:

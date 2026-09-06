@@ -80,6 +80,34 @@ namespace gameforger::editor
 		using GravityProjectileSpawnCallback =
 			std::function<void(const glm::vec3&, const glm::vec3&, float, const std::string&)>;
 
+		// Asks the host to lock or release the mouse cursor. Cursor ownership
+		// moved off the per-entity Inspector checkbox and onto whichever
+		// script declares itself the Game Manager - see game_manager.lua.
+		using CursorLockSetCallback = std::function<void(bool)>;
+
+		// (clipPath, volume, loop) for play; an empty clipPath means "stop
+		// everything". Routed through the host for the same reason
+		// ProjectileSpawnCallback is: ScriptRuntime never links AudioEngine.
+		using AudioCommandCallback =
+			std::function<void(const std::string&, float, bool)>;
+
+		// Grouping what used to be nine positional parameters on initialize().
+		// Adding a capability meant touching every call site and risking a
+		// silent mis-ordering between two same-typed callbacks (there are
+		// already two BoolQueryCallbacks next to each other); a struct with
+		// named fields cannot be mis-ordered.
+		struct Config
+		{
+			LogCallback logCallback;
+			ProjectileSpawnCallback projectileSpawnCallback;
+			BoolQueryCallback heldItemQueryCallback;
+			BoolQueryCallback aimingCatapultQueryCallback;
+			BoolSetCallback operatingCatapultSetCallback;
+			GravityProjectileSpawnCallback gravityProjectileSpawnCallback;
+			CursorLockSetCallback cursorLockSetCallback;
+			AudioCommandCallback audioCommandCallback;
+		};
+
 		ScriptRuntime() = default;
 		~ScriptRuntime();
 
@@ -90,12 +118,7 @@ namespace gameforger::editor
 			EditorScene& scene,
 			AICommandBus& commandBus,
 			InputSource& inputSource,
-			LogCallback logCallback,
-			ProjectileSpawnCallback projectileSpawnCallback,
-			BoolQueryCallback heldItemQueryCallback,
-			BoolQueryCallback aimingCatapultQueryCallback,
-			BoolSetCallback operatingCatapultSetCallback,
-			GravityProjectileSpawnCallback gravityProjectileSpawnCallback);
+			Config config);
 		void shutdown() noexcept;
 		[[nodiscard]] bool isRunning() const noexcept;
 
@@ -124,6 +147,22 @@ namespace gameforger::editor
 			bool defaultBool = false;
 			glm::vec3 defaultVec3{0.0F};
 		};
+
+		// Cursor lock, driven by self.gameManager:setCursorLock(). Forwards to
+		// the host through Config::cursorLockSetCallback.
+		void setCursorLock(bool locked);
+
+		// self.audio. A clipPath of "@master" sets master volume instead of
+		// playing; an empty path in stopAudio means "stop everything".
+		void playAudio(const std::string& clipPath, float volume, bool loop);
+		void stopAudio();
+
+		// Manager registry, driven by the self.managers proxy. registerManager
+		// is idempotent; unregisterManager on an unknown name is a no-op.
+		void registerManager(const std::string& name);
+		void unregisterManager(const std::string& name);
+		[[nodiscard]] bool hasManager(const std::string& name) const;
+		[[nodiscard]] const std::vector<std::string>& listManagers() const noexcept { return registeredManagers_; }
 
 		[[nodiscard]] static std::vector<ExposedScriptProperty> parseScriptProperties(
 			const std::filesystem::path& fullScriptPath);
@@ -183,12 +222,12 @@ namespace gameforger::editor
 		EditorScene* scene_ = nullptr;
 		AICommandBus* commandBus_ = nullptr;
 		InputSource* inputSource_ = nullptr;
-		LogCallback logCallback_;
-		ProjectileSpawnCallback projectileSpawnCallback_;
-		BoolQueryCallback heldItemQueryCallback_;
-		BoolQueryCallback aimingCatapultQueryCallback_;
-		BoolSetCallback operatingCatapultSetCallback_;
-		GravityProjectileSpawnCallback gravityProjectileSpawnCallback_;
+		Config config_;
+		// Names registered via self.managers:register(). A controller
+		// registers itself on start and is auto-unregistered on on_end, so
+		// "is anything driving the player?" is answerable without the host
+		// tracking script lifetimes itself.
+		std::vector<std::string> registeredManagers_;
 		std::unordered_map<int, std::vector<ScriptInstance>> instancesByEntity_;
 		int activeCameraEntityId_ = -1;
 		std::string activeCameraMode_ = "fps";
@@ -199,6 +238,12 @@ namespace gameforger::editor
 		std::atomic<std::int64_t> instructionsRemaining_{0};
 		std::atomic<std::size_t> luaBytesUsed_{0};
 		static constexpr std::size_t kLuaMemoryBudgetBytes = 8 * 1024 * 1024;
+
+		// on_end() dispatch - one instance, or every live instance during
+		// shutdown. Private: lifecycle is the runtime's business, not a
+		// caller's.
+		void dispatchOnEnd(const ScriptInstance& instance);
+		void dispatchOnEndForAll();
 
 		static void instructionHook(lua_State* L, lua_Debug* ar);
 		void installBudgetHook(lua_State* L);

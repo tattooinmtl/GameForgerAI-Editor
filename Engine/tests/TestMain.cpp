@@ -368,12 +368,11 @@ void testScriptRuntimeSandboxing()
 	ScriptRuntime runtime;
 
 	std::vector<std::string> logs;
-	runtime.initialize(
-		scene, bus, input,
-		[&logs](bool isError, const std::string& msg) {
-			if (isError) logs.push_back(msg);
-		},
-		nullptr, nullptr, nullptr, nullptr, nullptr);
+	ScriptRuntime::Config runtimeConfig;
+	runtimeConfig.logCallback = [&logs](bool isError, const std::string& msg) {
+		if (isError) logs.push_back(msg);
+	};
+	runtime.initialize(scene, bus, input, runtimeConfig);
 
 	TEST_ASSERT(runtime.isRunning(), "ScriptRuntime must be running");
 
@@ -419,7 +418,7 @@ void testGetRightMatchesFpsCamera()
 	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
 	MockInputSource input;
 	ScriptRuntime runtime;
-	runtime.initialize(scene, bus, input, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+	runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
 
 	TEST_ASSERT(runtime.startScript(1, "Game/Scripts/test_get_right.lua", "."),
 		"getRight probe script must start");
@@ -616,7 +615,7 @@ return Controller
 	MockInputSource input;
 	gameforger::editor::ScriptRuntime runtime;
 
-	runtime.initialize(scene, bus, input, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+	runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
 	const bool started = runtime.startScript(1, "Game/Scripts/test_reflected_props.lua", ".");
 	TEST_ASSERT(started, "Starting script must succeed");
 
@@ -1344,6 +1343,79 @@ static void testAudioCueOrdering()
 	}
 }
 
+// ----------------------------------------------------------------------------
+// Manager registry + on_end. This is what replaced the per-entity "Lock Cursor"
+// checkbox: the host asks "is anything registered?" instead of reading a flag
+// off an entity. A leaked registration would leave the cursor captured with
+// nothing driving it, so registration/unregistration is pinned here.
+// ----------------------------------------------------------------------------
+static void testManagerRegistryAndOnEnd()
+{
+	const std::filesystem::path scriptsDir = "Game/Scripts";
+	std::filesystem::create_directories(scriptsDir);
+	const std::filesystem::path scriptFile = scriptsDir / "test_manager_lifecycle.lua";
+	{
+		std::ofstream out(scriptFile);
+		out << "local M = {}\n"
+			<< "function M:on_start()\n"
+			<< "  self.managers:register('test_manager')\n"
+			<< "  self.gameManager:setCursorLock(true)\n"
+			<< "end\n"
+			<< "function M:on_end()\n"
+			<< "  self.managers:unregister('test_manager')\n"
+			<< "  self.gameManager:setCursorLock(false)\n"
+			<< "end\n"
+			<< "return M\n";
+	}
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	(void)scene.execute(CreateEntityCommand{"Player", PrimitiveType::Capsule, glm::vec3(0.0F)});
+	const SceneEntity* player = scene.findEntity("Player");
+	TEST_ASSERT(player != nullptr, "Test entity must exist");
+
+	MockInputSource input;
+
+	bool cursorLocked = false;
+	ScriptRuntime::Config config;
+	config.cursorLockSetCallback = [&cursorLocked](const bool locked) { cursorLocked = locked; };
+
+	ScriptRuntime runtime;
+	runtime.initialize(scene, bus, input, config);
+	TEST_ASSERT(runtime.listManagers().empty(), "Registry must start empty");
+
+	TEST_ASSERT(runtime.startScript(player->id, "Game/Scripts/test_manager_lifecycle.lua", "."),
+		"Manager lifecycle script must start");
+	TEST_ASSERT(runtime.hasManager("test_manager"), "on_start must register the manager");
+	TEST_ASSERT(runtime.listManagers().size() == 1, "Exactly one manager registered");
+	TEST_ASSERT(cursorLocked, "setCursorLock(true) must reach the host callback");
+
+	// Registering the same name twice must not duplicate - otherwise one
+	// unregister would leave a phantom entry and the cursor would stay locked.
+	runtime.registerManager("test_manager");
+	TEST_ASSERT(runtime.listManagers().size() == 1, "register must be idempotent");
+
+	// Detaching the script fires on_end, which unregisters and releases.
+	runtime.stopScript(player->id, "Game/Scripts/test_manager_lifecycle.lua");
+	TEST_ASSERT(!runtime.hasManager("test_manager"), "on_end must unregister on stopScript");
+	TEST_ASSERT(!cursorLocked, "on_end must release the cursor on stopScript");
+
+	// And shutdown must fire on_end for anything still running.
+	runtime.initialize(scene, bus, input, config);
+	TEST_ASSERT(runtime.startScript(player->id, "Game/Scripts/test_manager_lifecycle.lua", "."),
+		"Script must restart for the shutdown case");
+	TEST_ASSERT(cursorLocked, "Cursor locked again after restart");
+	runtime.shutdown();
+	TEST_ASSERT(!cursorLocked, "shutdown must fire on_end before closing the VM");
+	TEST_ASSERT(runtime.listManagers().empty(), "shutdown must clear the registry");
+
+	// Unregistering something unknown is a no-op, not a crash.
+	runtime.unregisterManager("never_registered");
+
+	std::filesystem::remove(scriptFile);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1374,6 +1446,7 @@ int main()
 	RUN_TEST(testAudioSourceAndHooks);
 	RUN_TEST(testStoryboardSerialization);
 	RUN_TEST(testAudioCueOrdering);
+	RUN_TEST(testManagerRegistryAndOnEnd);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

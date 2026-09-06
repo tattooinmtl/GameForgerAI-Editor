@@ -492,6 +492,123 @@ namespace gameforger::editor
 			return 0;
 		}
 
+		// --- self.gameManager ------------------------------------------------
+		int luaGameManagerSetCursorLock(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->setCursorLock(lua_toboolean(L, 2) != 0);
+			return 0;
+		}
+
+		void pushGameManagerProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaGameManagerSetCursorLock);
+			lua_setfield(L, -2, "setCursorLock");
+		}
+
+		// --- self.managers ---------------------------------------------------
+		// The registry answers "is anything actually driving the player right
+		// now?" without the host having to track script lifetimes itself -
+		// which is what replaces the per-entity lockCursor checkbox.
+		int luaManagersRegister(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->registerManager(luaL_checkstring(L, 2));
+			return 0;
+		}
+
+		int luaManagersUnregister(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->unregisterManager(luaL_checkstring(L, 2));
+			return 0;
+		}
+
+		int luaManagersHas(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushboolean(L, runtime->hasManager(luaL_checkstring(L, 2)) ? 1 : 0);
+			return 1;
+		}
+
+		int luaManagersList(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::vector<std::string>& names = runtime->listManagers();
+			lua_newtable(L);
+			for (std::size_t i = 0; i < names.size(); ++i)
+			{
+				lua_pushstring(L, names[i].c_str());
+				lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1)); // Lua is 1-based
+			}
+			return 1;
+		}
+
+		// --- self.audio ------------------------------------------------------
+		// Attached to every script, not just audio_manager.lua, so any script
+		// can fire a sound without routing through a manager.
+		int luaAudioPlay(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string clip = luaL_checkstring(L, 2);
+			const float volume = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+			const bool loop = lua_isnoneornil(L, 4) ? false : (lua_toboolean(L, 4) != 0);
+			runtime->playAudio(clip, volume, loop);
+			return 0;
+		}
+
+		int luaAudioStop(lua_State* L)
+		{
+			runtimeFrom(L)->stopAudio();
+			return 0;
+		}
+
+		int luaAudioSetMasterVolume(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			// Master volume is a host concern; reuse the same command channel
+			// with the reserved "@master" path rather than adding a callback.
+			runtime->playAudio("@master", static_cast<float>(luaL_checknumber(L, 2)), false);
+			return 0;
+		}
+
+		int luaAudioIsPlaying(lua_State* L)
+		{
+			// The host owns playback state and there is no query channel yet;
+			// report false rather than inventing an answer a script might
+			// branch on. Revisit if a real use appears.
+			(void)runtimeFrom(L);
+			lua_pushboolean(L, 0);
+			return 1;
+		}
+
+		void pushAudioProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaAudioPlay);
+			lua_setfield(L, -2, "play");
+			lua_pushcfunction(L, luaAudioStop);
+			lua_setfield(L, -2, "stop");
+			lua_pushcfunction(L, luaAudioSetMasterVolume);
+			lua_setfield(L, -2, "setMasterVolume");
+			lua_pushcfunction(L, luaAudioIsPlaying);
+			lua_setfield(L, -2, "isPlaying");
+		}
+
+		void pushManagersProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaManagersRegister);
+			lua_setfield(L, -2, "register");
+			lua_pushcfunction(L, luaManagersUnregister);
+			lua_setfield(L, -2, "unregister");
+			lua_pushcfunction(L, luaManagersHas);
+			lua_setfield(L, -2, "has");
+			lua_pushcfunction(L, luaManagersList);
+			lua_setfield(L, -2, "list");
+		}
+
 		void pushWorldProxy(lua_State* L, const int entityId)
 		{
 			lua_newtable(L);
@@ -585,10 +702,7 @@ namespace gameforger::editor
 	}
 
 	void ScriptRuntime::initialize(
-		EditorScene& scene, AICommandBus& commandBus, InputSource& inputSource, LogCallback logCallback,
-		ProjectileSpawnCallback projectileSpawnCallback, BoolQueryCallback heldItemQueryCallback,
-		BoolQueryCallback aimingCatapultQueryCallback, BoolSetCallback operatingCatapultSetCallback,
-		GravityProjectileSpawnCallback gravityProjectileSpawnCallback)
+		EditorScene& scene, AICommandBus& commandBus, InputSource& inputSource, Config config)
 	{
 		shutdown();
 
@@ -601,12 +715,8 @@ namespace gameforger::editor
 		scene_ = &scene;
 		commandBus_ = &commandBus;
 		inputSource_ = &inputSource;
-		logCallback_ = std::move(logCallback);
-		projectileSpawnCallback_ = std::move(projectileSpawnCallback);
-		heldItemQueryCallback_ = std::move(heldItemQueryCallback);
-		aimingCatapultQueryCallback_ = std::move(aimingCatapultQueryCallback);
-		operatingCatapultSetCallback_ = std::move(operatingCatapultSetCallback);
-		gravityProjectileSpawnCallback_ = std::move(gravityProjectileSpawnCallback);
+		config_ = std::move(config);
+		registeredManagers_.clear();
 		*static_cast<ScriptRuntime**>(lua_getextraspace(state_)) = this;
 
 		luaL_requiref(state_, LUA_GNAME, luaopen_base, 1);
@@ -655,22 +765,24 @@ namespace gameforger::editor
 	{
 		if (state_ != nullptr)
 		{
+			// on_end() before the VM dies, so a script can release whatever it
+			// took (cursor lock, manager registration, a music track). After
+			// lua_close there is nothing left to call it on.
+			dispatchOnEndForAll();
 			lua_close(state_);
 			state_ = nullptr;
 		}
 		luaBytesUsed_.store(0);
 		instancesByEntity_.clear();
+		registeredManagers_.clear();
 		activeCameraEntityId_ = -1;
 		activeCameraMode_ = "fps";
 		scene_ = nullptr;
 		commandBus_ = nullptr;
 		inputSource_ = nullptr;
-		logCallback_ = nullptr;
-		projectileSpawnCallback_ = nullptr;
-		heldItemQueryCallback_ = nullptr;
-		aimingCatapultQueryCallback_ = nullptr;
-		operatingCatapultSetCallback_ = nullptr;
-		gravityProjectileSpawnCallback_ = nullptr;
+		// One assignment instead of nulling each callback by hand - the old
+		// form silently kept any field someone forgot to add to the list.
+		config_ = Config{};
 	}
 
 	bool ScriptRuntime::isRunning() const noexcept
@@ -741,6 +853,15 @@ namespace gameforger::editor
 		lua_setfield(state_, -2, "physics");
 		pushWorldProxy(state_, entityId);
 		lua_setfield(state_, -2, "world");
+
+		pushGameManagerProxy(state_);
+		lua_setfield(state_, -2, "gameManager");
+
+		pushManagersProxy(state_);
+		lua_setfield(state_, -2, "managers");
+
+		pushAudioProxy(state_);
+		lua_setfield(state_, -2, "audio");
 
 		lua_getfield(state_, -1, "on_start");
 		if (lua_isfunction(state_, -1))
@@ -828,6 +949,97 @@ namespace gameforger::editor
 		instances = std::move(stillRunning);
 	}
 
+	void ScriptRuntime::playAudio(const std::string& clipPath, const float volume, const bool loop)
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(clipPath, volume, loop);
+		}
+	}
+
+	void ScriptRuntime::stopAudio()
+	{
+		// An empty clip path is the agreed "stop everything" signal - see
+		// AudioCommandCallback's doc comment.
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(std::string{}, 0.0F, false);
+		}
+	}
+
+	void ScriptRuntime::setCursorLock(const bool locked)
+	{
+		if (config_.cursorLockSetCallback)
+		{
+			config_.cursorLockSetCallback(locked);
+		}
+	}
+
+	void ScriptRuntime::registerManager(const std::string& name)
+	{
+		if (name.empty())
+		{
+			return;
+		}
+		// Idempotent: a controller that re-registers after a scene reload must
+		// not appear twice, or unregistering once would leave a phantom entry
+		// and wantsCursorLock would stay true forever.
+		if (std::find(registeredManagers_.begin(), registeredManagers_.end(), name) == registeredManagers_.end())
+		{
+			registeredManagers_.push_back(name);
+		}
+	}
+
+	void ScriptRuntime::unregisterManager(const std::string& name)
+	{
+		registeredManagers_.erase(
+			std::remove(registeredManagers_.begin(), registeredManagers_.end(), name),
+			registeredManagers_.end());
+	}
+
+	bool ScriptRuntime::hasManager(const std::string& name) const
+	{
+		return std::find(registeredManagers_.begin(), registeredManagers_.end(), name) != registeredManagers_.end();
+	}
+
+	// Calls on_end() on one instance if it defines one. Errors are logged and
+	// swallowed: this runs during teardown, where there is nothing useful left
+	// to abort, and a throwing script must not prevent the VM from closing.
+	void ScriptRuntime::dispatchOnEnd(const ScriptInstance& instance)
+	{
+		if (state_ == nullptr)
+		{
+			return;
+		}
+		lua_rawgeti(state_, LUA_REGISTRYINDEX, instance.ref);
+		lua_getfield(state_, -1, "on_end");
+		if (!lua_isfunction(state_, -1))
+		{
+			lua_pop(state_, 2);
+			return;
+		}
+		lua_pushvalue(state_, -2);
+		resetBudget();
+		if (lua_pcall(state_, 1, 0, 0) != LUA_OK)
+		{
+			log(true, "Error in on_end() of " + instance.scriptPath + ": " + std::string(lua_tostring(state_, -1)));
+			lua_pop(state_, 1);
+		}
+		lua_pop(state_, 1);
+	}
+
+	void ScriptRuntime::dispatchOnEndForAll()
+	{
+		for (const auto& [entityId, instances] : instancesByEntity_)
+		{
+			(void)entityId;
+			for (const ScriptInstance& instance : instances)
+			{
+				dispatchOnEnd(instance);
+			}
+		}
+	}
+
 	void ScriptRuntime::stopScript(const int entityId, const std::string& scriptPath)
 	{
 		if (state_ == nullptr)
@@ -847,6 +1059,10 @@ namespace gameforger::editor
 		{
 			if (instance.scriptPath == scriptPath)
 			{
+				// on_end() first, while the instance table is still alive - it
+				// is where a controller unregisters itself and releases the
+				// cursor. Unreffing first would leave nothing to call.
+				dispatchOnEnd(instance);
 				luaL_unref(state_, LUA_REGISTRYINDEX, instance.ref);
 				log(false, "Stopped " + scriptPath + " on entity " + std::to_string(entityId) + ".");
 			}
@@ -1072,45 +1288,45 @@ namespace gameforger::editor
 
 	void ScriptRuntime::log(const bool isError, const std::string& message) const
 	{
-		if (logCallback_)
+		if (config_.logCallback)
 		{
-			logCallback_(isError, message);
+			config_.logCallback(isError, message);
 		}
 	}
 
 	void ScriptRuntime::spawnProjectile(
 		const glm::vec3& fromPosition, const glm::vec3& toPosition, const float speed, const std::string& hitTag) const
 	{
-		if (projectileSpawnCallback_)
+		if (config_.projectileSpawnCallback)
 		{
-			projectileSpawnCallback_(fromPosition, toPosition, speed, hitTag);
+			config_.projectileSpawnCallback(fromPosition, toPosition, speed, hitTag);
 		}
 	}
 
 	void ScriptRuntime::spawnGravityProjectile(
 		const glm::vec3& fromPosition, const glm::vec3& direction, const float speed, const std::string& hitTag) const
 	{
-		if (gravityProjectileSpawnCallback_)
+		if (config_.gravityProjectileSpawnCallback)
 		{
-			gravityProjectileSpawnCallback_(fromPosition, direction, speed, hitTag);
+			config_.gravityProjectileSpawnCallback(fromPosition, direction, speed, hitTag);
 		}
 	}
 
 	bool ScriptRuntime::isHoldingItem() const
 	{
-		return heldItemQueryCallback_ ? heldItemQueryCallback_() : false;
+		return config_.heldItemQueryCallback ? config_.heldItemQueryCallback() : false;
 	}
 
 	bool ScriptRuntime::isAimingCatapult() const
 	{
-		return aimingCatapultQueryCallback_ ? aimingCatapultQueryCallback_() : false;
+		return config_.aimingCatapultQueryCallback ? config_.aimingCatapultQueryCallback() : false;
 	}
 
 	void ScriptRuntime::setOperatingCatapult(const bool value) const
 	{
-		if (operatingCatapultSetCallback_)
+		if (config_.operatingCatapultSetCallback)
 		{
-			operatingCatapultSetCallback_(value);
+			config_.operatingCatapultSetCallback(value);
 		}
 	}
 }

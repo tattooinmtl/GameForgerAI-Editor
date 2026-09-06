@@ -192,7 +192,7 @@ After implementing:
 
 1. **Configure and build:**
    ```powershell
-   cmake --preset editor-debug
+   cmake --preset windows-x64
    cmake --build --preset editor-debug
    ```
 
@@ -551,7 +551,7 @@ Use this checklist for subsystem features (Transform, Physics, Rendering, Audio,
 
 ```powershell
 # Configure debug build
-cmake --preset editor-debug
+cmake --preset windows-x64
 
 # Build
 cmake --build --preset editor-debug

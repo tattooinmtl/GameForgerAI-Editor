@@ -1,4 +1,4 @@
-﻿{
+{
   "version": 8,
   "cmakeMinimumRequired": {
     "major": 3,
@@ -56,6 +56,28 @@
       "displayName": "All - Release",
       "configurePreset": "windows-x64",
       "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "editor-debug",
+      "displayName": "Tests - Debug",
+      "description": "Runs the CTest suite against the Debug build. Matches the build preset of the same name so the documented `cmake --build --preset editor-debug && ctest --preset editor-debug` pair actually works.",
+      "configurePreset": "windows-x64",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "all-release",
+      "displayName": "Tests - Release",
+      "description": "Runs the CTest suite against the Release build.",
+      "configurePreset": "windows-x64",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

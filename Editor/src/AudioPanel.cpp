@@ -86,7 +86,8 @@ namespace gameforger::editor
 		core::AudioEngine& audio,
 		const std::filesystem::path& projectRoot,
 		AudioPanelState& state,
-		const AudioPanelLogFn& log)
+		const AudioPanelLogFn& log,
+		const AudioImportFn& importSound)
 	{
 		ImGui::Begin("Audio");
 
@@ -104,9 +105,28 @@ namespace gameforger::editor
 		const std::vector<std::string> clips = listAudioClips(projectRoot);
 		ImGui::Separator();
 		ImGui::TextUnformatted("Clips (Game/Audio)");
+		if (ImGui::Button("Import Sound from PC...", ImVec2(-1.0F, 0.0F)) && importSound)
+		{
+			if (const std::optional<std::string> imported = importSound())
+			{
+				// listAudioClips() re-scans every frame, so the new file is
+				// already in `clips` next frame - just select it by name.
+				const std::vector<std::string> refreshed = listAudioClips(projectRoot);
+				for (int i = 0; i < static_cast<int>(refreshed.size()); ++i)
+				{
+					if (refreshed[static_cast<std::size_t>(i)] == *imported)
+					{
+						state.selectedClip = i;
+						break;
+					}
+				}
+				if (log) log(true, "Imported " + *imported);
+			}
+		}
 		if (clips.empty())
 		{
-			ImGui::TextDisabled("Drop .wav / .mp3 / .flac files into Game/Audio.");
+			ImGui::TextDisabled("No sounds yet - use Import Sound from PC above,");
+			ImGui::TextDisabled("or copy .wav / .mp3 / .flac files into Game/Audio.");
 		}
 		else
 		{

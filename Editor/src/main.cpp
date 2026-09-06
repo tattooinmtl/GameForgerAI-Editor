@@ -1187,6 +1187,30 @@ namespace
         return std::filesystem::path(fileBuffer.data());
     }
 
+    // Native picker for a sound file, mirroring showOpenImageDialog. Formats
+    // are the three miniaudio decodes without extra dependencies (Ogg Vorbis
+    // would need stb_vorbis, so it is deliberately not offered).
+    std::optional<std::filesystem::path> showOpenAudioDialog(
+        const HWND owner, const std::filesystem::path& initialDirectory)
+    {
+        std::array<wchar_t, MAX_PATH> fileBuffer{};
+        const std::wstring initialDirectoryWide = initialDirectory.wstring();
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = owner;
+        dialog.lpstrFilter =
+            L"Audio (*.wav;*.mp3;*.flac)\0*.wav;*.mp3;*.flac\0All Files (*.*)\0*.*\0";
+        dialog.lpstrFile = fileBuffer.data();
+        dialog.nMaxFile = static_cast<DWORD>(fileBuffer.size());
+        dialog.lpstrInitialDir = initialDirectoryWide.c_str();
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameW(&dialog) == FALSE)
+        {
+            return std::nullopt;
+        }
+        return std::filesystem::path(fileBuffer.data());
+    }
+
     // Loads a grayscale heightmap image and resamples it (nearest-neighbor)
     // into a resolution x resolution heights array, each value 0..1. Returns
     // an empty vector on failure.
@@ -1483,6 +1507,55 @@ namespace
                 return std::nullopt;
             }
         }
+        std::error_code relativeError;
+        const std::filesystem::path relative = std::filesystem::relative(destination, projectRoot, relativeError);
+        if (relativeError)
+        {
+            return std::nullopt;
+        }
+        return relative.generic_string();
+    }
+
+    // Copies a chosen sound into Game/Audio and returns its project-relative
+    // path. Mirrors importIconIntoProject, except a name clash gets a " (n)"
+    // suffix rather than silently reusing the existing file: two different
+    // sounds can easily share a name like "hit.wav", and quietly keeping the
+    // old one would look like the import simply did nothing.
+    std::optional<std::string> importAudioIntoProject(
+        const std::filesystem::path& sourceAudioPath, const std::filesystem::path& projectRoot)
+    {
+        const std::filesystem::path audioDirectory = projectRoot / "Game" / "Audio";
+        std::error_code directoryError;
+        std::filesystem::create_directories(audioDirectory, directoryError);
+        if (directoryError)
+        {
+            return std::nullopt;
+        }
+
+        std::filesystem::path destination = audioDirectory / sourceAudioPath.filename();
+        if (std::filesystem::exists(destination))
+        {
+            const std::string stem = sourceAudioPath.stem().string();
+            const std::string extension = sourceAudioPath.extension().string();
+            for (int suffix = 1; suffix < 1000; ++suffix)
+            {
+                const std::filesystem::path candidate =
+                    audioDirectory / (stem + " (" + std::to_string(suffix) + ")" + extension);
+                if (!std::filesystem::exists(candidate))
+                {
+                    destination = candidate;
+                    break;
+                }
+            }
+        }
+
+        std::error_code copyError;
+        std::filesystem::copy_file(sourceAudioPath, destination, copyError);
+        if (copyError)
+        {
+            return std::nullopt;
+        }
+
         std::error_code relativeError;
         const std::filesystem::path relative = std::filesystem::relative(destination, projectRoot, relativeError);
         if (relativeError)
@@ -8447,6 +8520,17 @@ int main()
             [&console](const bool success, const std::string& message)
             {
                 logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            },
+            // The Win32 picker and the copy helper live in this TU's
+            // anonymous namespace, so the panel reaches them through here.
+            [&projectRoot, nativeWindowHandle]() -> std::optional<std::string>
+            {
+                if (const std::optional<std::filesystem::path> picked =
+                        showOpenAudioDialog(nativeWindowHandle, projectRoot / "Game" / "Audio"))
+                {
+                    return importAudioIntoProject(*picked, projectRoot);
+                }
+                return std::nullopt;
             });
         // Edits shots in place; persistence is the scene's job (saveScene
         // carries storyboard.shots), so nothing here writes to disk.

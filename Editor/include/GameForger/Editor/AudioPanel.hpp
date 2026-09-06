@@ -8,6 +8,7 @@
 
 #include "GameForger/Core/AudioEngine.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
+#include "GameForger/Editor/AudioSourceEffects.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ProjectSettingsBus.hpp"

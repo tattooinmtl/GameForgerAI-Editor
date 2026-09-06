@@ -103,6 +103,20 @@ namespace gameforger::core
 			bool loop,
 			const EffectSettings& effects);
 
+		// Spatialised, with the same per-voice chain. Separate from
+		// playWithEffects because that one disables spatialisation - a 3D
+		// source routed through it would play flat, ignoring its position.
+		bool play3DWithEffects(
+			const std::filesystem::path& projectRoot,
+			const std::string& clipRelativePath,
+			const glm::vec3& worldPosition,
+			float volume,
+			float pitch,
+			bool loop,
+			float minDistance,
+			float maxDistance,
+			const EffectSettings& effects);
+
 		// Preview with effects, on the dedicated preview voice, so tuning a
 		// setting in the panel cannot interfere with in-game sound.
 		bool playPreviewWithEffects(
@@ -164,6 +178,12 @@ namespace gameforger::editor
 	// Plays every hook bound to `event`. Lives in Engine, not the Editor's
 	// audio panel: GameForgerRuntime fires the same hooks, and a scene has to
 	// sound the same standalone as it does in Play mode.
+	// Every playable clip under Game/Audio, as project-relative paths, sorted.
+	// In Engine because three separate places needed it - the Audio panel, the
+	// Timeline's cue picker and the Inspector's clip picker - and each had
+	// grown its own copy with slightly different extension handling.
+	[[nodiscard]] std::vector<std::string> listAudioClips(const std::filesystem::path& projectRoot);
+
 	void fireAudioHooks(
 		core::AudioEngine& audio,
 		const std::filesystem::path& projectRoot,

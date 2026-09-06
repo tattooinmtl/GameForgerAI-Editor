@@ -22,39 +22,6 @@ namespace gameforger::editor
 			AudioHook::Event::OnBootStep,
 		};
 
-		std::vector<std::string> listAudioClips(const std::filesystem::path& projectRoot)
-		{
-			std::vector<std::string> clips;
-			const std::filesystem::path audioRoot = projectRoot / "Game" / "Audio";
-			std::error_code ec;
-			if (!std::filesystem::exists(audioRoot, ec))
-			{
-				return clips;
-			}
-			for (const std::filesystem::directory_entry& entry :
-				std::filesystem::directory_iterator(audioRoot, ec))
-			{
-				if (!entry.is_regular_file(ec))
-				{
-					continue;
-				}
-				std::error_code relativeError;
-				const std::filesystem::path relative =
-					std::filesystem::relative(entry.path(), projectRoot, relativeError);
-				if (relativeError)
-				{
-					continue;
-				}
-				const std::string generic = relative.generic_string();
-				if (core::resolveProjectFile(projectRoot, generic, "Game/Audio", core::audioClipExtensions()))
-				{
-					clips.push_back(generic);
-				}
-			}
-			std::sort(clips.begin(), clips.end());
-			return clips;
-		}
-
 		void submit(
 			ProjectSettingsBus& bus, const ProjectSettingsCommand& command, const AudioPanelLogFn& log)
 		{
@@ -67,36 +34,6 @@ namespace gameforger::editor
 
 		// Editor scene types -> the engine's own copy. Core deliberately does
 		// not know about editor::AudioSourceData, so the conversion lives here.
-		core::EffectSettings toEngineEffects(const AudioSourceData& source)
-		{
-			core::EffectSettings settings;
-			const AudioEffects& fx = source.effects;
-			settings.reverb = fx.reverb;
-			settings.reverbRoomSize = fx.reverbRoomSize;
-			settings.reverbDamping = fx.reverbDamping;
-			settings.reverbWet = fx.reverbWet;
-			settings.reverbDry = fx.reverbDry;
-			settings.delay = fx.delay;
-			settings.delaySeconds = fx.delaySeconds;
-			settings.delayDecay = fx.delayDecay;
-			switch (fx.filter)
-			{
-				case AudioEffects::Filter::LowPass:
-					settings.filter = core::EffectSettings::Filter::LowPass;
-					break;
-				case AudioEffects::Filter::HighPass:
-					settings.filter = core::EffectSettings::Filter::HighPass;
-					break;
-				case AudioEffects::Filter::None:
-					settings.filter = core::EffectSettings::Filter::None;
-					break;
-			}
-			settings.cutoffHz = fx.cutoffHz;
-			settings.fadeInSeconds = source.fadeInSeconds;
-			settings.fadeOutSeconds = source.fadeOutSeconds;
-			return settings;
-		}
-
 		// One property edit, routed through the command bus so it is validated,
 		// clamped and undoable exactly like an Inspector edit.
 		void submitEntity(
@@ -371,7 +308,7 @@ namespace gameforger::editor
 					// Preview WITH the object's own effects and fades, so what
 					// is heard here is what Play will produce - the whole point
 					// of tuning from this panel.
-					core::EffectSettings settings = toEngineEffects(entity.audioSource);
+					core::EffectSettings settings = toEngineEffectSettings(entity.audioSource);
 					if (!audio.playPreviewWithEffects(
 							projectRoot, entity.audioSource.clipAssetPath, entity.audioSource.volume, settings) &&
 						log)

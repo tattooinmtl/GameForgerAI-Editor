@@ -33,6 +33,7 @@ add_library(GameForgerEngine STATIC
     src/Editor/ProjectSettings.cpp
     src/Editor/ProjectSettingsBus.cpp
     src/Editor/EditorScene.cpp
+    src/Editor/AudioSourceEffects.cpp
     src/Editor/SceneSerializer.cpp
     # CineShot + AudioCue, lifted out of main.cpp so shots can be serialised
     # into the scene file instead of being lost when the editor closes.

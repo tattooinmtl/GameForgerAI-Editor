@@ -5736,6 +5736,43 @@ namespace
                 executeLogged(commandBus,
                     SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", std::string(clipBuffer.data())});
             }
+            // Same Upload/Link pair the Audio panel has. Typing the path by
+            // hand was the only option here, which is how a clip ends up
+            // pointing at a file that does not exist.
+            if (ImGui::SmallButton("Upload..."))
+            {
+                if (const std::optional<std::filesystem::path> picked =
+                        showOpenAudioDialog(nativeWindowHandle, projectRoot / "Game" / "Audio"))
+                {
+                    if (const std::optional<std::string> imported = importAudioIntoProject(*picked, projectRoot))
+                    {
+                        executeLogged(commandBus,
+                            SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", *imported});
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Link..."))
+            {
+                ImGui::OpenPopup("InspectorLinkClip");
+            }
+            if (ImGui::BeginPopup("InspectorLinkClip"))
+            {
+                const std::vector<std::string> clips = gameforger::editor::listAudioClips(projectRoot);
+                if (clips.empty())
+                {
+                    ImGui::TextDisabled("No clips in Game/Audio yet - use Upload.");
+                }
+                for (const std::string& clip : clips)
+                {
+                    if (ImGui::Selectable(clip.c_str(), clip == entity.audioSource.clipAssetPath))
+                    {
+                        executeLogged(commandBus,
+                            SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", clip});
+                    }
+                }
+                ImGui::EndPopup();
+            }
             float volume = entity.audioSource.volume;
             if (ImGui::SliderFloat("Volume", &volume, 0.0F, 1.0F, "%.2f"))
             {
@@ -8623,35 +8660,10 @@ int main()
         {
             fireAudioHooks(
                 audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnPlayStart);
-            for (const SceneEntity& entity : scene.entities())
-            {
-                if (!entity.hasAudioSource || !entity.audioSource.playOnAwake ||
-                    entity.audioSource.clipAssetPath.empty())
-                {
-                    continue;
-                }
-                if (entity.audioSource.is3D)
-                {
-                    audioEngine.play3D(
-                        projectRoot,
-                        entity.audioSource.clipAssetPath,
-                        entity.position,
-                        entity.audioSource.volume,
-                        entity.audioSource.pitch,
-                        entity.audioSource.loop,
-                        entity.audioSource.minDistance,
-                        entity.audioSource.maxDistance);
-                }
-                else
-                {
-                    audioEngine.play(
-                        projectRoot,
-                        entity.audioSource.clipAssetPath,
-                        entity.audioSource.volume,
-                        entity.audioSource.pitch,
-                        entity.audioSource.loop);
-                }
-            }
+            // Every playOnAwake source, with its effects and fades. Shared
+            // with the standalone Runtime so pressing Play here and launching
+            // the shipped game start the scene sounding the same.
+            playSourcesOnAwake(audioEngine, projectRoot, scene);
         }
         if (!playMode.isPlaying && wasPlayingAudio)
         {

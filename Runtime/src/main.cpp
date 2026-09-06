@@ -22,6 +22,7 @@
 #include <glm/vec3.hpp>
 
 #include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Editor/AudioSourceEffects.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
@@ -532,6 +533,11 @@ int main()
 	// rather than on a Play button. This is what makes a looping background
 	// music hook actually play in the shipped game.
 	fireAudioHooks(audioEngine, projectRoot, projectSettings.audioHooks, AudioHook::Event::OnPlayStart);
+
+	// ...and the same for per-object sources. Standalone used to fire only the
+	// project-wide hooks, so an object given a looping ambience in the Audio
+	// Manager played in the editor and was silent in the shipped game.
+	playSourcesOnAwake(audioEngine, projectRoot, scene);
 
 	// Mouse-look state for the scripted Game camera - same fields/meaning as
 	// the Editor's PlayModeState (main.cpp), just local here since Runtime

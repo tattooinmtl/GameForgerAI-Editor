@@ -432,6 +432,67 @@ namespace gameforger::core
 		return true;
 	}
 
+	bool AudioEngine::play3DWithEffects(
+		const std::filesystem::path& projectRoot,
+		const std::string& clipRelativePath,
+		const glm::vec3& worldPosition,
+		const float volume,
+		const float pitch,
+		const bool loop,
+		const float minDistance,
+		const float maxDistance,
+		const EffectSettings& effects)
+	{
+		if (!effects.anyEnabled() && !effects.anyFade())
+		{
+			return play3D(projectRoot, clipRelativePath, worldPosition, volume, pitch, loop, minDistance, maxDistance);
+		}
+
+		const std::optional<std::filesystem::path> resolved = resolveClip(projectRoot, clipRelativePath);
+		if (!resolved.has_value())
+		{
+			return false;
+		}
+		if (!isAvailable())
+		{
+			return true;
+		}
+		impl_->pruneFinished();
+
+		Impl::Voice voice;
+		voice.clipPath = clipRelativePath;
+		voice.sound = std::unique_ptr<ma_sound, void (*)(ma_sound*)>(new ma_sound{}, uninitSound);
+
+		const ma_uint32 flags = loop ? MA_SOUND_FLAG_LOOPING : 0;
+		if (ma_sound_init_from_file(
+				&impl_->engine, resolved->string().c_str(), flags, nullptr, nullptr, voice.sound.get()) != MA_SUCCESS)
+		{
+			return false;
+		}
+		ma_sound_set_volume(voice.sound.get(), clampVolume(volume));
+		ma_sound_set_pitch(voice.sound.get(), clampPitch(pitch));
+		ma_sound_set_spatialization_enabled(voice.sound.get(), MA_TRUE);
+		ma_sound_set_position(voice.sound.get(), worldPosition.x, worldPosition.y, worldPosition.z);
+		ma_sound_set_min_distance(voice.sound.get(), std::max(0.01F, minDistance));
+		ma_sound_set_max_distance(voice.sound.get(), std::max(minDistance, maxDistance));
+
+		(void)buildEffectChain(impl_->engine, *voice.sound, effects, voice.effects);
+
+		if (effects.fadeInSeconds > 0.0F)
+		{
+			ma_sound_set_fade_in_milliseconds(
+				voice.sound.get(), 0.0F, clampVolume(volume),
+				static_cast<ma_uint64>(effects.fadeInSeconds * 1000.0F));
+		}
+
+		if (ma_sound_start(voice.sound.get()) != MA_SUCCESS)
+		{
+			return false;
+		}
+		impl_->voices.push_back(std::move(voice));
+		return true;
+	}
+
 	bool AudioEngine::playPreviewWithEffects(
 		const std::filesystem::path& projectRoot,
 		const std::string& clipRelativePath,
@@ -658,6 +719,39 @@ namespace gameforger::core
 
 namespace gameforger::editor
 {
+	std::vector<std::string> listAudioClips(const std::filesystem::path& projectRoot)
+	{
+		std::vector<std::string> clips;
+		const std::filesystem::path audioRoot = projectRoot / "Game" / "Audio";
+		std::error_code ec;
+		if (!std::filesystem::exists(audioRoot, ec))
+		{
+			return clips;
+		}
+		for (const std::filesystem::directory_entry& entry :
+			std::filesystem::directory_iterator(audioRoot, ec))
+		{
+			if (!entry.is_regular_file(ec))
+			{
+				continue;
+			}
+			std::error_code relativeError;
+			const std::filesystem::path relative =
+				std::filesystem::relative(entry.path(), projectRoot, relativeError);
+			if (relativeError)
+			{
+				continue;
+			}
+			const std::string generic = relative.generic_string();
+			if (core::resolveProjectFile(projectRoot, generic, "Game/Audio", core::audioClipExtensions()))
+			{
+				clips.push_back(generic);
+			}
+		}
+		std::sort(clips.begin(), clips.end());
+		return clips;
+	}
+
 	void fireAudioHooks(
 		core::AudioEngine& audio,
 		const std::filesystem::path& projectRoot,

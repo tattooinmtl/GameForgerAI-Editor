@@ -17,6 +17,7 @@
 #include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Editor/AudioSourceEffects.hpp"
 #include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
@@ -1696,6 +1697,71 @@ static void testAudioQueryAndScopedStop()
 // so the clamping matters as much as the round-trip. A delay feedback of 1.0
 // never decays; a delay of 0 seconds is a division trap.
 // ----------------------------------------------------------------------------
+static void testAudioSourceEffectsConversion()
+{
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+
+	TEST_ASSERT(bus.execute(CreateEntityCommand{"Speaker"}).success, "Creating the entity must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "enabled", true}).success,
+		"Enabling the audio source must succeed");
+
+	// Held across the whole test: no entity is created after this point, so
+	// the scene's storage cannot reallocate and invalidate it.
+	const SceneEntity* speaker = scene.findEntity("Speaker");
+	TEST_ASSERT(speaker != nullptr, "The entity must exist");
+
+	// A dry source must convert to dry settings, or every object would build a
+	// node graph it does not need.
+	{
+		const gameforger::core::EffectSettings settings = toEngineEffectSettings(speaker->audioSource);
+		TEST_ASSERT(!settings.anyEnabled(), "A default source must convert to no effects");
+		TEST_ASSERT(settings.filter == gameforger::core::EffectSettings::Filter::None, "Default filter must be None");
+	}
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverb", true}).success, "reverb");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbWet", 0.25F}).success, "wet");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelay", true}).success, "delay");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelaySeconds", 0.5F}).success, "time");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxCutoffHz", 800.0F}).success, "cutoff");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", 2.0F}).success, "fade in");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeOutSeconds", 3.0F}).success, "fade out");
+
+	{
+		const gameforger::core::EffectSettings settings = toEngineEffectSettings(speaker->audioSource);
+		TEST_ASSERT(settings.reverb, "Reverb must carry across");
+		TEST_ASSERT(std::fabs(settings.reverbWet - 0.25F) < 0.001F, "Reverb wet must carry across");
+		TEST_ASSERT(settings.delay, "Delay must carry across");
+		TEST_ASSERT(std::fabs(settings.delaySeconds - 0.5F) < 0.001F, "Delay time must carry across");
+		TEST_ASSERT(std::fabs(settings.cutoffHz - 800.0F) < 0.001F, "Cutoff must carry across");
+		// Fades live on the source rather than inside AudioEffects, which makes
+		// them the fields a converter is most likely to forget.
+		TEST_ASSERT(std::fabs(settings.fadeInSeconds - 2.0F) < 0.001F, "Fade in must carry across");
+		TEST_ASSERT(std::fabs(settings.fadeOutSeconds - 3.0F) < 0.001F, "Fade out must carry across");
+	}
+
+	// The filter is the one field converted by hand, case by case. Transposing
+	// two cases would swap muffled for thin with nothing to catch it.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("low_pass")}).success,
+		"Selecting the low pass filter must succeed");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::LowPass,
+		"low_pass must convert to LowPass, not HighPass");
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("high_pass")}).success,
+		"Selecting the high pass filter must succeed");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::HighPass,
+		"high_pass must convert to HighPass, not LowPass");
+
+	// The names are the serialized spelling, not the C++ enumerator spelling.
+	// Writing this test with "LowPass" is what proved the validator rejects a
+	// name it does not know rather than silently leaving the filter untouched.
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("LowPass")}).success,
+		"An unknown filter name must be rejected");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::HighPass,
+		"A rejected filter edit must leave the previous filter in place");
+}
+
 static void testAudioEffectsRoundTripAndClamping()
 {
 	const std::filesystem::path sceneFile = "test_audio_effects.scene";
@@ -1831,6 +1897,7 @@ int main()
 	RUN_TEST(testFrameProfilerReport);
 	RUN_TEST(testAudioQueryAndScopedStop);
 	RUN_TEST(testAudioEffectsRoundTripAndClamping);
+	RUN_TEST(testAudioSourceEffectsConversion);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

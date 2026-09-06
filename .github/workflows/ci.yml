@@ -55,9 +55,16 @@ jobs:
           python -m pip install --disable-pip-version-check --upgrade jinja2
           python -c "import jinja2; print('jinja2', jinja2.__version__)"
 
+      # Pin CMake to the SAME interpreter the step above installed jinja2
+      # into. The runner ships several Pythons; `python` on PATH was 3.12
+      # while find_package(Python) independently picked 3.14, so glad's
+      # generator ran under an interpreter that had never seen jinja2.
       - name: Configure CMake
+        shell: pwsh
         run: |
-          cmake --preset windows-x64
+          $py = (Get-Command python).Source
+          Write-Host "Pinning CMake to $py"
+          cmake --preset windows-x64 "-DPython_EXECUTABLE=$py" "-DPython3_EXECUTABLE=$py"
 
       - name: Build All Targets
         run: |

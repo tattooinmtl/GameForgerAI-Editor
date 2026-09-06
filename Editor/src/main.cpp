@@ -55,6 +55,7 @@
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
+#include "GameForger/Editor/ProjectSettingsPanel.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/ScriptGenerator.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
@@ -97,6 +98,9 @@ namespace
     using gameforger::editor::describeCommand;
     using gameforger::editor::EditorScene;
     using gameforger::editor::EntityAnimation;
+    using gameforger::editor::ProjectSettingsBus;
+    using gameforger::editor::ProjectSettingsPanelState;
+    using gameforger::editor::drawProjectSettingsPanel;
     using gameforger::editor::GameCameraState;
     using gameforger::editor::GameplayState;
     using gameforger::editor::generateAnimation;
@@ -2953,7 +2957,10 @@ namespace
     // Real Game/ file listing (Unity calls this the "Project" window), rather
     // than the previous hardcoded bullet list.
     void drawProjectBrowser(
-        ProjectBrowserState& browser, const std::filesystem::path& projectRoot, ScriptEditorState& scriptEditor)
+        ProjectBrowserState& browser,
+        const std::filesystem::path& projectRoot,
+        ScriptEditorState& scriptEditor,
+        ProjectSettingsPanelState& projectSettingsPanel)
     {
         const std::filesystem::path gameRoot = projectRoot / "Game";
         if (browser.currentDirectory.empty())
@@ -3036,6 +3043,15 @@ namespace
                     scriptEditor.scriptPath = toProjectRootError ? name : relativeToRoot.generic_string();
                     scriptEditor.status.clear();
                     scriptEditor.requestOpen = true;
+                }
+                else if (name == "Project.json" || name == "Settings.json")
+                {
+                    // These two have a typed inspector; raw-text editing them
+                    // is how a project gets a startupScene that doesn't exist.
+                    // Anything else with a .json extension (skeleton profiles,
+                    // provider config) still has no viewer - deliberately, for
+                    // now, rather than shipping a half-generic tree editor.
+                    projectSettingsPanel.focusRequested = true;
                 }
             }
         }
@@ -7260,6 +7276,9 @@ namespace
         AIAnimationState& aiAnimation,
         ConsoleState& console,
         ProjectBrowserState& projectBrowser,
+        // Only so clicking Project.json/Settings.json in the browser can pull
+        // the inspector to the front; the panel itself is drawn from main().
+        ProjectSettingsPanelState& projectSettingsPanel,
         EditHistoryState& history,
         const std::filesystem::path& currentScenePath,
         ImGuizmo::OPERATION& gizmoOperation,
@@ -7411,7 +7430,7 @@ namespace
             terrainSculpt,
             nativeWindowHandle);
 
-        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor);
+        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel);
 
         ImGui::Begin("AI Forge");
         static std::array<char, 1024> prompt{};
@@ -7902,6 +7921,7 @@ namespace
             console,
             deltaTime);
     }
+
 }
 
 int main()
@@ -8077,6 +8097,11 @@ int main()
     ProjectBrowserState projectBrowser;
     TextMeshToolState textMeshTool;
     StoryboardState storyboard;
+    // Owns the in-memory Game/Project.json + Game/Settings.json and is the
+    // only writer to them. Loads on construction; a malformed file falls back
+    // to defaults rather than refusing to open the editor.
+    ProjectSettingsBus projectSettingsBus(projectRoot);
+    ProjectSettingsPanelState projectSettingsPanel;
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
@@ -8147,6 +8172,7 @@ int main()
             aiAnimation,
             console,
             projectBrowser,
+            projectSettingsPanel,
             history,
             currentScenePath,
             gizmoOperation,
@@ -8168,6 +8194,16 @@ int main()
         drawCineCameraPreviewPanel(
             cineCameraRenderer, scene, commandBus, selection, storyboard, projectRoot, deltaTime);
         drawStoryboardPanel(scene, selection, storyboard);
+        drawProjectSettingsPanel(
+            projectSettingsBus, projectRoot, projectSettingsPanel,
+            // The panel lives in its own TU and cannot see ConsoleState, so
+            // it reports through this instead - successes as Info, rejected
+            // commands (bad scene path, out-of-range fps) as Warnings, which
+            // is where the bus's validation message actually reaches the user.
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
 
         ImGui::Render();
 

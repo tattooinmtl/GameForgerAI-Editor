@@ -18,6 +18,16 @@
     # gates destructive ops on user approval, and pushes an undo entry per
     # successful mutation into a bounded ring.
     src/AICockpit.cpp
+    # Typed inspector over Game/Project.json + Game/Settings.json, including
+    # the startup-sequence editor. Every edit goes through
+    # ProjectSettingsBus (Engine) so the panel and the AI share one
+    # validated write path. Its own TU rather than main.cpp, which is
+    # already ~8k lines.
+    src/ProjectSettingsPanel.cpp
+    # Default dock arrangement (first run / Reset Editor Layout). Separate TU
+    # because it needs imgui_internal.h for DockBuilder, whose ImGuiInputSource
+    # enum collides with this project's class of the same name in main.cpp.
+    src/EditorLayout.cpp
     # Editor-only InputSource implementation (ImGui-backed) - see
     # GameForger/Editor/InputSource.hpp (Engine, shared interface) and
     # Engine/src/Editor/GlfwInputSource.cpp (Runtime's equivalent).

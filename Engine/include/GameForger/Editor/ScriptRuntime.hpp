@@ -85,11 +85,25 @@ namespace gameforger::editor
 		// script declares itself the Game Manager - see game_manager.lua.
 		using CursorLockSetCallback = std::function<void(bool)>;
 
-		// (clipPath, volume, loop) for play; an empty clipPath means "stop
-		// everything". Routed through the host for the same reason
-		// ProjectileSpawnCallback is: ScriptRuntime never links AudioEngine.
+		// What a script asked the host to do with audio. An explicit verb
+		// rather than the previous overloaded clipPath, which used "" to mean
+		// stop-everything and the reserved path "@master" to mean set-volume -
+		// a clip legitimately named that would have silently changed volume.
+		enum class AudioCommand
+		{
+			Play,            // clipPath, volume, loop
+			Stop,            // clipPath - that clip only
+			StopAll,         // everything this engine is playing
+			SetMasterVolume  // value in 0..1
+		};
+
+		// Routed through the host for the same reason ProjectileSpawnCallback
+		// is: ScriptRuntime never links AudioEngine.
 		using AudioCommandCallback =
-			std::function<void(const std::string&, float, bool)>;
+			std::function<void(AudioCommand, const std::string& clipPath, float value, bool loop)>;
+
+		// Answers self.audio:isPlaying([clip]). An empty clip means "anything".
+		using AudioQueryCallback = std::function<bool(const std::string& clipPath)>;
 
 		// Grouping what used to be nine positional parameters on initialize().
 		// Adding a capability meant touching every call site and risking a
@@ -106,6 +120,7 @@ namespace gameforger::editor
 			GravityProjectileSpawnCallback gravityProjectileSpawnCallback;
 			CursorLockSetCallback cursorLockSetCallback;
 			AudioCommandCallback audioCommandCallback;
+			AudioQueryCallback audioQueryCallback;
 		};
 
 		ScriptRuntime() = default;
@@ -152,10 +167,12 @@ namespace gameforger::editor
 		// the host through Config::cursorLockSetCallback.
 		void setCursorLock(bool locked);
 
-		// self.audio. A clipPath of "@master" sets master volume instead of
-		// playing; an empty path in stopAudio means "stop everything".
+		// self.audio, forwarded to the host through Config's audio callbacks.
 		void playAudio(const std::string& clipPath, float volume, bool loop);
-		void stopAudio();
+		void stopAudioClip(const std::string& clipPath);
+		void stopAllAudio();
+		void setAudioMasterVolume(float volume);
+		[[nodiscard]] bool isAudioPlaying(const std::string& clipPath) const;
 
 		// Manager registry, driven by the self.managers proxy. registerManager
 		// is idempotent; unregisterManager on an unknown name is a no-op.

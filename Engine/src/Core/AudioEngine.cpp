@@ -67,7 +67,14 @@ namespace gameforger::core
 		ma_engine engine{};
 		bool engineReady = false;
 		float masterVolume = 1.0F;
-		std::vector<std::unique_ptr<ma_sound, void (*)(ma_sound*)>> voices;
+		// The clip each voice came from, so a script can stop or query its own
+		// sound instead of every sound at once.
+		struct Voice
+		{
+			std::unique_ptr<ma_sound, void (*)(ma_sound*)> sound{nullptr, uninitSound};
+			std::string clipPath;
+		};
+		std::vector<Voice> voices;
 		std::unique_ptr<ma_sound, void (*)(ma_sound*)> preview{nullptr, uninitSound};
 
 		void pruneFinished()
@@ -76,9 +83,9 @@ namespace gameforger::core
 				std::remove_if(
 					voices.begin(),
 					voices.end(),
-					[](const std::unique_ptr<ma_sound, void (*)(ma_sound*)>& sound)
+					[](const Voice& voice)
 					{
-						return sound == nullptr || !ma_sound_is_playing(sound.get());
+						return voice.sound == nullptr || !ma_sound_is_playing(voice.sound.get());
 					}),
 				voices.end());
 		}
@@ -182,7 +189,7 @@ namespace gameforger::core
 		{
 			return false;
 		}
-		impl_->voices.push_back(std::move(sound));
+		impl_->voices.push_back(Impl::Voice{std::move(sound), clipRelativePath});
 		return true;
 	}
 
@@ -223,7 +230,7 @@ namespace gameforger::core
 		{
 			return false;
 		}
-		impl_->voices.push_back(std::move(sound));
+		impl_->voices.push_back(Impl::Voice{std::move(sound), clipRelativePath});
 		return true;
 	}
 
@@ -253,6 +260,49 @@ namespace gameforger::core
 			return;
 		}
 		impl_->voices.clear();
+	}
+
+	void AudioEngine::stop(const std::string& clipRelativePath)
+	{
+		if (!impl_)
+		{
+			return;
+		}
+		// Erasing the unique_ptr uninits the sound, which is the stop.
+		impl_->voices.erase(
+			std::remove_if(
+				impl_->voices.begin(),
+				impl_->voices.end(),
+				[&clipRelativePath](const Impl::Voice& voice)
+				{
+					return voice.clipPath == clipRelativePath;
+				}),
+			impl_->voices.end());
+	}
+
+	bool AudioEngine::isAnyPlaying() const
+	{
+		if (!impl_)
+		{
+			return false;
+		}
+		impl_->pruneFinished();
+		return !impl_->voices.empty();
+	}
+
+	bool AudioEngine::isPlaying(const std::string& clipRelativePath) const
+	{
+		if (!impl_)
+		{
+			return false;
+		}
+		impl_->pruneFinished();
+		return std::any_of(
+			impl_->voices.begin(), impl_->voices.end(),
+			[&clipRelativePath](const Impl::Voice& voice)
+			{
+				return voice.clipPath == clipRelativePath;
+			});
 	}
 
 	void AudioEngine::stopPreview()

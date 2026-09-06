@@ -5,9 +5,11 @@
 --
 -- self.audio is available in EVERY script, not just this one:
 --   self.audio:play(clipPath, volume, loop)   -- clipPath relative to the project, e.g. "Game/Audio/hit.wav"
---   self.audio:stop()                          -- stops everything
+--   self.audio:stop()                          -- stops EVERYTHING
+--   self.audio:stop(clipPath)                  -- stops just that clip
 --   self.audio:setMasterVolume(0.0 .. 1.0)
---   self.audio:isPlaying()
+--   self.audio:isPlaying()                     -- is anything playing
+--   self.audio:isPlaying(clipPath)             -- is that clip playing
 --
 -- Put sound files in Game/Audio - the Audio panel's "Import Sound from PC..."
 -- copies them there for you.
@@ -41,7 +43,9 @@ end
 -- after the session ended, since the engine outlives a single Play run.
 function AudioManager:on_end()
     self.managers:unregister("audio_manager")
-    self.audio:stop()
+    -- Stop only OUR track. self.audio:stop() with no argument would silence
+    -- every other script's sound too.
+    self.audio:stop(self.music_clip)
 end
 
 return AudioManager

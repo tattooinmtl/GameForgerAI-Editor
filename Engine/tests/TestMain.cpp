@@ -1644,6 +1644,52 @@ static void testFrameProfilerReport()
 		"Clearing dips must reset both the list and the counter");
 }
 
+// ----------------------------------------------------------------------------
+// self.audio:isPlaying() and clip-scoped stop. isPlaying was hardcoded to
+// false, so any script branching on it silently took the wrong path, and
+// stop() had no scope at all - a music manager stopping its own track
+// silenced every other sound in the game.
+// ----------------------------------------------------------------------------
+static void testAudioQueryAndScopedStop()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_audio_scope_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Audio");
+
+	gameforger::core::AudioEngine audio;
+	const bool haveDevice = audio.initialize();
+
+	// Nothing has been played, so nothing can be playing - true with or
+	// without a device.
+	TEST_ASSERT(!audio.isAnyPlaying(), "A fresh engine must report nothing playing");
+	TEST_ASSERT(!audio.isPlaying("Game/Audio/anything.wav"),
+		"An unplayed clip must not report as playing");
+
+	// Stopping a clip that was never started, and stopping everything on an
+	// empty engine, must both be harmless rather than crashing.
+	audio.stop("Game/Audio/never-started.wav");
+	audio.stopAll();
+	TEST_ASSERT(!audio.isAnyPlaying(), "Stopping on an empty engine must stay empty");
+
+	// A path outside Game/Audio must be refused by the confinement check
+	// regardless of whether a device exists.
+	TEST_ASSERT(!audio.play(root, "Game/Scripts/notaudio.lua"),
+		"A clip outside Game/Audio must be refused");
+
+	if (!haveDevice)
+	{
+		// CI has no audio device. The queries above are the parts that must
+		// hold everywhere; actual playback cannot be asserted here.
+		std::cout << "      (no audio device - playback assertions skipped)\n";
+	}
+
+	audio.shutdown();
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1678,6 +1724,7 @@ int main()
 	RUN_TEST(testAudioHookLoopRoundTrip);
 	RUN_TEST(testAllShippedScriptsLoad);
 	RUN_TEST(testFrameProfilerReport);
+	RUN_TEST(testAudioQueryAndScopedStop);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

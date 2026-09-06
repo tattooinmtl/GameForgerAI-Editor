@@ -558,28 +558,38 @@ namespace gameforger::editor
 			return 0;
 		}
 
+		// stop() with no argument stops everything, stop(clip) stops just that
+		// clip. The no-argument form used to be the ONLY form, so a music
+		// manager stopping its track silenced every other sound in the game.
 		int luaAudioStop(lua_State* L)
 		{
-			runtimeFrom(L)->stopAudio();
+			ScriptRuntime* runtime = runtimeFrom(L);
+			if (lua_isnoneornil(L, 2))
+			{
+				runtime->stopAllAudio();
+			}
+			else
+			{
+				runtime->stopAudioClip(luaL_checkstring(L, 2));
+			}
 			return 0;
 		}
 
 		int luaAudioSetMasterVolume(lua_State* L)
 		{
 			ScriptRuntime* runtime = runtimeFrom(L);
-			// Master volume is a host concern; reuse the same command channel
-			// with the reserved "@master" path rather than adding a callback.
-			runtime->playAudio("@master", static_cast<float>(luaL_checknumber(L, 2)), false);
+			runtime->setAudioMasterVolume(static_cast<float>(luaL_checknumber(L, 2)));
 			return 0;
 		}
 
+		// isPlaying() -> is ANY sound playing; isPlaying(clip) -> is that clip
+		// playing. Previously hardcoded to false, so any script branching on it
+		// silently took the wrong path.
 		int luaAudioIsPlaying(lua_State* L)
 		{
-			// The host owns playback state and there is no query channel yet;
-			// report false rather than inventing an answer a script might
-			// branch on. Revisit if a real use appears.
-			(void)runtimeFrom(L);
-			lua_pushboolean(L, 0);
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string clip = lua_isnoneornil(L, 2) ? std::string{} : luaL_checkstring(L, 2);
+			lua_pushboolean(L, runtime->isAudioPlaying(clip) ? 1 : 0);
 			return 1;
 		}
 
@@ -953,18 +963,39 @@ namespace gameforger::editor
 	{
 		if (config_.audioCommandCallback)
 		{
-			config_.audioCommandCallback(clipPath, volume, loop);
+			config_.audioCommandCallback(AudioCommand::Play, clipPath, volume, loop);
 		}
 	}
 
-	void ScriptRuntime::stopAudio()
+	void ScriptRuntime::stopAudioClip(const std::string& clipPath)
 	{
-		// An empty clip path is the agreed "stop everything" signal - see
-		// AudioCommandCallback's doc comment.
 		if (config_.audioCommandCallback)
 		{
-			config_.audioCommandCallback(std::string{}, 0.0F, false);
+			config_.audioCommandCallback(AudioCommand::Stop, clipPath, 0.0F, false);
 		}
+	}
+
+	void ScriptRuntime::stopAllAudio()
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::StopAll, std::string{}, 0.0F, false);
+		}
+	}
+
+	void ScriptRuntime::setAudioMasterVolume(const float volume)
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::SetMasterVolume, std::string{}, volume, false);
+		}
+	}
+
+	bool ScriptRuntime::isAudioPlaying(const std::string& clipPath) const
+	{
+		// No host query wired means "cannot know" - report false rather than
+		// guessing, but the host normally supplies one.
+		return config_.audioQueryCallback ? config_.audioQueryCallback(clipPath) : false;
 	}
 
 	void ScriptRuntime::setCursorLock(const bool locked)

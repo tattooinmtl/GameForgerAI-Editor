@@ -490,19 +490,32 @@ int main()
 		scriptConfig.cursorLockSetCallback =
 			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
 		scriptConfig.audioCommandCallback =
-			[&audioEngine, &projectRoot](const std::string& clipPath, const float volume, const bool loop)
+			[&audioEngine, &projectRoot](
+				const ScriptRuntime::AudioCommand command,
+				const std::string& clipPath,
+				const float value,
+				const bool loop)
 			{
-				if (clipPath.empty())
+				switch (command)
 				{
-					audioEngine.stopAll();
-					return;
+					case ScriptRuntime::AudioCommand::Play:
+						(void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
+						break;
+					case ScriptRuntime::AudioCommand::Stop:
+						audioEngine.stop(clipPath);
+						break;
+					case ScriptRuntime::AudioCommand::StopAll:
+						audioEngine.stopAll();
+						break;
+					case ScriptRuntime::AudioCommand::SetMasterVolume:
+						audioEngine.setMasterVolume(value);
+						break;
 				}
-				if (clipPath == "@master")
-				{
-					audioEngine.setMasterVolume(volume);
-					return;
-				}
-				(void)audioEngine.play(projectRoot, clipPath, volume, 1.0F, loop);
+			};
+		scriptConfig.audioQueryCallback =
+			[&audioEngine](const std::string& clipPath)
+			{
+				return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
 			};
 		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
 		for (const SceneEntity& entity : scene.entities())

@@ -70,6 +70,18 @@ namespace gameforger::core
 		void stopAll();
 		void stopPreview();
 
+		// Stops only the voices started from `clipRelativePath`. Needed because
+		// stopAll() from one script also killed every other script's sound -
+		// a music manager stopping its track silenced the whole game.
+		void stop(const std::string& clipRelativePath);
+
+		// True while any voice is still running. Finished voices are pruned
+		// first, so this reflects reality rather than what was once started.
+		[[nodiscard]] bool isAnyPlaying() const;
+
+		// True while a voice started from this clip is still running.
+		[[nodiscard]] bool isPlaying(const std::string& clipRelativePath) const;
+
 		// Preview is a single dedicated voice so the Audio panel's Play/Stop
 		// cannot kill in-game sounds, and vice versa.
 		bool playPreview(

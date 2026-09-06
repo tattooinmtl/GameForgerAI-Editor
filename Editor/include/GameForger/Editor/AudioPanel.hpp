@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Editor/AICommandBus.hpp"
+#include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ProjectSettingsBus.hpp"
 
@@ -33,11 +35,23 @@ namespace gameforger::editor
 		// Tick this for background music: an on_play_start hook that loops.
 		bool newHookLoop = false;
 		bool dockPlacementDone = false;
+
+		// Which entity's Effects section is expanded, by name. Keyed by name
+		// rather than index because the scene list reorders as entities are
+		// added and removed, and an index would silently point at a different
+		// object after that.
+		std::string expandedObject;
 	};
 
 	void drawAudioPanel(
 		ProjectSettingsBus& bus,
 		core::AudioEngine& audio,
+		// The scene supplies the object list: an entity appears below because
+		// its Inspector "Has Audio Source" box is ticked, with no second
+		// registration step to forget. Mutations go through the command bus,
+		// so the panel and the Inspector share one validated, undoable path.
+		EditorScene& scene,
+		AICommandBus& commandBus,
 		const std::filesystem::path& projectRoot,
 		AudioPanelState& state,
 		const AudioPanelLogFn& log,

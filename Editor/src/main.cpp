@@ -8587,6 +8587,8 @@ int main()
         drawAudioPanel(
             projectSettingsBus,
             audioEngine,
+            scene,
+            commandBus,
             projectRoot,
             audioPanel,
             [&console](const bool success, const std::string& message)

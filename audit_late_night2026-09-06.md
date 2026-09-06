@@ -21,9 +21,16 @@ Test suite grew **14 → 24**. Zero warnings at `/W4 /permissive-` throughout.
 
 Three bodies of work: closing the 2026-09-05 audit findings, building the
 Project/Audio/Timeline panels, and starting Phase D (Game Manager). Along the way CI
-ran for the first time in this project's life and exposed four pre-existing breakages.
+ran for the first time in this project's life, exposed four pre-existing breakages, and —
+once those were fixed — **went green**.
 
-**Branch is pushed; the last 4 commits are not.** See §6.
+**Everything is pushed.** `phase-a-d-source` is level with `origin/phase-a-d-source`,
+0 unpushed. **CI passes on PR #1** (§4).
+
+> **Revised 2026-09-06 after review.** The first version of this file was written before the
+> final push and before CI finished, and stated the opposite of both. Those sections are
+> corrected below. A review also surfaced seven gaps this audit missed — they are recorded in
+> §7 rather than quietly folded in, because an audit that hides its own misses is worthless.
 
 ---
 
@@ -106,9 +113,25 @@ broken in four independent ways, none related to the C++:
 | 3 | build | glad's generator needs Python `jinja2` | `b935c51` |
 | 4 | build | jinja2 installed into Python 3.12; CMake picked 3.14 | `e1898a0` |
 
-**The C++ has still never been compiled by CI.** Every failure so far has been toolchain
-plumbing before the compiler ran. Whether this code builds on a clean machine remains
-unproven — that is the single most valuable thing the next run will tell us.
+### Then it went green
+
+After those four fixes, CI **passed**:
+
+| Run | Result | Duration |
+|---|---|---|
+| `34012258322` | **success** | ~11m 15s |
+| `34017184934` | **success** | ~11m 15s |
+
+Both **MSVC x64 Debug and Release** configured from scratch on a GitHub runner — cold
+FetchContent clone of glfw, glm, glad, imgui, ImGuizmo, Lua, assimp and miniaudio — built
+every target, and ran **all 24 unit tests green**.
+
+This answers the question the 2026-09-05 audit opened with. A fresh clone on a clean machine
+**does** build this project, and the tests pass there. That had never been demonstrated
+before: the branch had never been pushed, so nothing outside this one Windows box had ever
+compiled it. It also proves the two things I could only reason about locally — that
+miniaudio degrades gracefully on a runner with **no audio device**, and that the ImGuizmo
+cold-clone fix actually works.
 
 ---
 
@@ -132,11 +155,11 @@ rather than by rewriting history.
 ## 6. Open items
 
 **Immediate:**
-- **4 commits unpushed** (`f3b36c2`, `2e41385`, `e28fb79`, `aedc7c8`). `git push` on
-  `phase-a-d-source`. PR #1 is open and `MERGEABLE`; it will re-run CI.
+- **PR #1 is open, `MERGEABLE`, and CI is green.** Nothing blocks merging it but review.
 - **Version still 0.79** in `CMakeLists.txt` and `README.md`, across everything above.
 
-**Remaining plan phases** (`~/.claude/plans/woolly-tinkering-puppy.md`):
+**Remaining plan phases.** These belong in `integration_plan_allinone.md` (the project's
+declared source of truth, currently untracked — see §7.1), not in a path on one machine:
 - **D3 — key bindings.** Action layer over `InputSource`; defaults specified
   (WASD / Space / Shift / C crouch / V cycle-view / E / I / M). Note this **changes existing
   behaviour**: the controllers currently use **C** to swap camera, which becomes **V**.
@@ -163,7 +186,85 @@ rather than by rewriting history.
 
 ---
 
-## 7. Process notes for whoever picks this up
+## 7. Gaps this audit missed (found by review, all verified)
+
+Recorded as its own section rather than folded into §6, because the pattern matters: every
+one of these is something the first pass looked past. Each was verified individually before
+being written down.
+
+### 7.1 `integration_plan_allinone.md` is untracked and stale — **highest impact**
+`AGENTS.md` names it the strict single source of truth for all in-flight work. It is
+**untracked in git** — it exists on exactly one disk, in no commit, no push, no CI. Its
+Progress Tracking table was never updated with any of last night's work. Worse, §6 of this
+audit pointed the reader at `~/.claude/plans/woolly-tinkering-puppy.md`, a path on my machine
+that nobody else can open, instead of the project's own plan. That is precisely the A-01
+failure from the previous audit — work living only on one disk — repeated on the document
+that governs the work.
+
+### 7.2 The documented test command does not exist
+`CMakePresets.json` defines configure and build presets and **zero `testPresets`**. Six
+references across `AGENTS.md` (×4), `docs/AGENTS.md` and `integration_plan_allinone.md` tell
+the reader to run the preset form, which fails with *"No such test preset"*. The form that
+works, and the one `ci.yml:75` actually uses, is the explicit `--test-dir out/build/windows-x64 -C Debug --output-on-failure`.
+
+*Correction to the review on this point: this audit never contained the preset command. The
+finding is real and belongs here, but the bad instruction lives in `AGENTS.md`, not in this
+file.*
+
+### 7.3 ~36 MB of untracked binaries sit one `git add .` away from the packfile
+§6 warned about *future* cutscene bloat and missed what is already on disk:
+
+| File | Size |
+|---|---|
+| `Game/Branding/gameforgerai-neon-system.mp4` | 15.5 MB |
+| `Game/Models/CastleHighTides.glb` | 13.5 MB |
+| `Game/Audio/Digital+Prison+Remix (2).mp3` | 6.1 MB |
+| `Game/Models/rp_claudia_rigged_002_u3d.fbx` | 1.0 MB |
+| `bugapp.png` | 20 KB |
+
+Into a `.git` already at 331 MB with no LFS. My own first measurement reported only 29 MB
+because the scan mis-parsed git's quoted path for the filename containing spaces and
+parentheses — the review's ~36 MB figure is the correct one.
+
+### 7.4 `ScriptGenerator.cpp` still advertises only three proxies
+Plan step D.5 called for expanding the AI script-generation prompt. Lines 98–112 list only
+`self.entity`, `self.input`, `self.camera`. Missing: `self.gameManager`, `self.managers`,
+`self.audio`, `self.physics`, `self.world`, and `on_end`. **Every script the AI generates
+in-editor is unaware of the APIs built last night** — including the manager registration that
+cursor lock now depends on. D.5 was not done; §6 should have said so and did not.
+
+### 7.5 `self.audio:isPlaying()` is hardcoded `false`
+`play`, `stop` and `setMasterVolume` are wired to the real engine; `isPlaying` returns
+`lua_pushboolean(L, 0)` unconditionally. It is commented as deliberate — `AudioEngine` has no
+query channel yet — but any Lua branching on it silently takes the false path. Either give
+`AudioEngine` a real query or remove the method; a predicate that is always false is worse
+than no predicate.
+
+### 7.6 `self.audio:stop()` is all-or-nothing
+It calls `AudioEngine::stopAll()`. A script stopping its own music also kills every other
+voice, including sounds another manager started. Needs a per-clip or per-voice handle.
+
+### 7.7 Legacy controllers do not register as managers, so cursor lock silently fails
+Only `fps_controller.lua` and `third_person_controller.lua` were migrated. These were not:
+`FPSController.lua`, `PlayerFPS.lua`, `player_fps.lua`, `player_controller.lua`,
+`controller.lua`.
+
+`wantsCursorLock` now requires at least one registered manager, so **an entity using any of
+those five scripts gets no cursor lock at all**. A working setup silently stops working, with
+nothing in the UI explaining why — because the Inspector checkbox that used to control it was
+removed in the same change. This is the most user-visible regression risk in D1, and the
+audit missed it entirely. Either migrate all five, or have the Console say why the cursor is
+not locking.
+
+### 7.8 Superseded docs still loose in the root
+`GameManagerAddon.md`, `GameManagerAddon.md.bak`, `A-D-investigation.md`,
+`DailyAudit2026-09-05.md`, `Grok_todos.md`, `audit2026-09-01.md`, `auditKimi20260902.md`,
+`final_audit-2026-09-01.md` — all untracked, none archived. `AGENTS.md` declares them
+superseded, which only helps a reader who starts at `AGENTS.md`.
+
+---
+
+## 8. Process notes for whoever picks this up
 
 - **Build both configurations.** A Release-only build left a stale Debug exe that silently
   ran hours-old code during a live UI check.

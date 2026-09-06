@@ -11,6 +11,27 @@
 
 namespace gameforger::editor
 {
+	// Serialised as names, not enum ordinals - reordering the enum must never
+	// silently reinterpret a saved scene. Same rule as BootStep and AudioHook.
+	const char* audioFilterName(const AudioEffects::Filter filter) noexcept
+	{
+		switch (filter)
+		{
+			case AudioEffects::Filter::LowPass:  return "low_pass";
+			case AudioEffects::Filter::HighPass: return "high_pass";
+			case AudioEffects::Filter::None:     break;
+		}
+		return "none";
+	}
+
+	bool audioFilterFromName(const std::string& name, AudioEffects::Filter& outFilter) noexcept
+	{
+		if (name == "none")      { outFilter = AudioEffects::Filter::None;     return true; }
+		if (name == "low_pass")  { outFilter = AudioEffects::Filter::LowPass;  return true; }
+		if (name == "high_pass") { outFilter = AudioEffects::Filter::HighPass; return true; }
+		return false;
+	}
+
 	EditorScene::EditorScene(std::filesystem::path projectRoot)
 		: projectRoot_(std::filesystem::weakly_canonical(std::move(projectRoot)))
 	{
@@ -583,6 +604,82 @@ namespace gameforger::editor
 							{
 								entity->audioSource.is3D = *enabled;
 								return {true, false, "Audio 3D flag updated."};
+							}
+						}
+						// --- effects -------------------------------------------
+						// Ranges are clamped here rather than trusted from the
+						// caller: the panel, the AI and a hand-edited scene file
+						// all reach this same handler, and a delay of 0 seconds
+						// or a feedback of 1.0 would hang or run away.
+						if (value.property == "fxReverb")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.effects.reverb = *enabled;
+								return {true, false, "Reverb toggled."};
+							}
+						}
+						if (value.property == "fxDelay")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.effects.delay = *enabled;
+								return {true, false, "Delay toggled."};
+							}
+						}
+						if (value.property == "fxFilter")
+						{
+							if (const auto* text = std::get_if<std::string>(&value.value))
+							{
+								AudioEffects::Filter parsed = AudioEffects::Filter::None;
+								if (!audioFilterFromName(*text, parsed))
+								{
+									return {false, false,
+										"Unknown audio filter '" + *text + "'. Use none, low_pass or high_pass."};
+								}
+								entity->audioSource.effects.filter = parsed;
+								return {true, false, "Audio filter updated."};
+							}
+						}
+						{
+							struct NumericEffect
+							{
+								const char* property;
+								float AudioEffects::*field;
+								float low;
+								float high;
+							};
+							static constexpr NumericEffect kNumericEffects[] = {
+								{"fxReverbRoomSize", &AudioEffects::reverbRoomSize, 0.0F, 1.0F},
+								{"fxReverbDamping",  &AudioEffects::reverbDamping,  0.0F, 1.0F},
+								{"fxReverbWet",      &AudioEffects::reverbWet,      0.0F, 1.0F},
+								{"fxReverbDry",      &AudioEffects::reverbDry,      0.0F, 1.0F},
+								{"fxDelaySeconds",   &AudioEffects::delaySeconds,   0.01F, 2.0F},
+								// Feedback must stay below 1.0 or the delay line
+								// never decays and the sound grows without bound.
+								{"fxDelayDecay",     &AudioEffects::delayDecay,     0.0F, 0.99F},
+								{"fxDelayWet",       &AudioEffects::delayWet,       0.0F, 1.0F},
+								{"fxDelayDry",       &AudioEffects::delayDry,       0.0F, 1.0F},
+								{"fxCutoffHz",       &AudioEffects::cutoffHz,       20.0F, 20000.0F},
+							};
+							for (const NumericEffect& effect : kNumericEffects)
+							{
+								if (value.property != effect.property)
+								{
+									continue;
+								}
+								if (const auto* number = std::get_if<float>(&value.value))
+								{
+									if (!std::isfinite(*number))
+									{
+										return {false, false,
+											std::string(effect.property) + " must be a finite number."};
+									}
+									entity->audioSource.effects.*effect.field =
+										std::clamp(*number, effect.low, effect.high);
+									return {true, false, std::string(effect.property) + " updated."};
+								}
+								return {false, false, std::string(effect.property) + " expects a number."};
 							}
 						}
 					}

@@ -1690,6 +1690,90 @@ static void testAudioQueryAndScopedStop()
 	fs::remove_all(root, cleanup);
 }
 
+// ----------------------------------------------------------------------------
+// Per-source audio effects. These are edited by the panel, by the AI and by
+// hand-editing a scene file, all through the same SetPropertyCommand handler,
+// so the clamping matters as much as the round-trip. A delay feedback of 1.0
+// never decays; a delay of 0 seconds is a division trap.
+// ----------------------------------------------------------------------------
+static void testAudioEffectsRoundTripAndClamping()
+{
+	const std::filesystem::path sceneFile = "test_audio_effects.scene";
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+
+	TEST_ASSERT(bus.execute(CreateEntityCommand{"Speaker"}).success, "Creating the entity must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "enabled", true}).success,
+		"Enabling the audio source must succeed");
+
+	// Defaults: a brand-new source is dry.
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr && !e->audioSource.effects.anyEnabled(),
+			"A new audio source must start with no effects enabled");
+	}
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverb", true}).success,
+		"Enabling reverb must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelay", true}).success,
+		"Enabling delay must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("low_pass")}).success,
+		"Setting a known filter must succeed");
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("bandpass")}).success,
+		"An unknown filter name must be rejected, not silently ignored");
+
+	// Clamping. Runaway feedback is the dangerous one.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelayDecay", 5.0F}).success,
+		"An out-of-range decay is clamped, not rejected");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelaySeconds", 0.0F}).success,
+		"An out-of-range delay time is clamped");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxCutoffHz", 999999.0F}).success,
+		"An out-of-range cutoff is clamped");
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr, "Entity must still exist");
+		TEST_ASSERT(e->audioSource.effects.delayDecay <= 0.99F,
+			"Delay feedback must be clamped below 1.0 or the echo never decays");
+		TEST_ASSERT(e->audioSource.effects.delaySeconds >= 0.01F, "Delay time must be clamped above zero");
+		TEST_ASSERT(e->audioSource.effects.cutoffHz <= 20000.0F, "Cutoff must be clamped to audible range");
+	}
+
+	// A non-finite value must be refused outright rather than clamped to a
+	// bound, because NaN compares false against every bound.
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbWet", std::nanf("")}).success,
+		"A non-finite effect value must be rejected");
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbRoomSize", 0.8F}).success,
+		"Setting room size must succeed");
+
+	TEST_ASSERT(saveScene(sceneFile, scene.entities()).success, "Saving must succeed");
+	const SceneLoadResult loaded = loadScene(sceneFile);
+	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "Loading must succeed");
+	const AudioEffects& fx = loaded.entities[0].audioSource.effects;
+	TEST_ASSERT(fx.reverb, "reverb flag must round-trip");
+	TEST_ASSERT(fx.delay, "delay flag must round-trip");
+	TEST_ASSERT(fx.filter == AudioEffects::Filter::LowPass, "filter must round-trip by NAME");
+	TEST_ASSERT(std::abs(fx.reverbRoomSize - 0.8F) < 0.001F, "reverb room size must round-trip");
+	TEST_ASSERT(fx.delayDecay <= 0.99F, "clamped decay must persist clamped");
+
+	// A scene written before effects existed has no "effects" key at all and
+	// must load dry rather than failing.
+	{
+		std::ofstream out(sceneFile);
+		out << R"({"format":"GameForgerScene","version":8,"entities":[)"
+			<< R"({"name":"Old","hasAudioSource":true,"audioSource":{"clipAssetPath":"Game/Audio/a.wav"}}]})";
+	}
+	const SceneLoadResult legacy = loadScene(sceneFile);
+	TEST_ASSERT(legacy.success && legacy.entities.size() == 1, "A pre-effects scene must still load");
+	TEST_ASSERT(!legacy.entities[0].audioSource.effects.anyEnabled(),
+		"A pre-effects scene must load with effects off");
+
+	std::filesystem::remove(sceneFile);
+	std::filesystem::remove(sceneFile.string() + ".bak");
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -1725,6 +1809,7 @@ int main()
 	RUN_TEST(testAllShippedScriptsLoad);
 	RUN_TEST(testFrameProfilerReport);
 	RUN_TEST(testAudioQueryAndScopedStop);
+	RUN_TEST(testAudioEffectsRoundTripAndClamping);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

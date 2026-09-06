@@ -131,6 +131,41 @@ namespace gameforger::editor
 	// Additive audio source, same shape as the unused AudioSourceComponent
 	// stub. Playback goes through core::AudioEngine; this is the authored
 	// data that round-trips through the scene file.
+	// Per-source DSP. "Echo" is not a separate effect - it is delay with
+	// feedback, so one delay node covers both and the panel labels it that way
+	// rather than shipping two controls that do the same thing.
+	struct AudioEffects
+	{
+		bool reverb = false;
+		float reverbRoomSize = 0.5F;   // 0..1
+		float reverbDamping = 0.5F;    // 0..1
+		float reverbWet = 0.3F;        // 0..1
+		float reverbDry = 0.7F;        // 0..1
+
+		bool delay = false;
+		float delaySeconds = 0.25F;    // 0.01..2
+		float delayDecay = 0.4F;       // 0..0.99 - feedback; this is what makes it an echo
+		float delayWet = 0.35F;        // 0..1
+		float delayDry = 1.0F;         // 0..1
+
+		enum class Filter
+		{
+			None,
+			LowPass,   // muffled / behind a wall
+			HighPass   // thin / telephone
+		};
+		Filter filter = Filter::None;
+		float cutoffHz = 1000.0F;      // 20..20000
+
+		[[nodiscard]] bool anyEnabled() const noexcept
+		{
+			return reverb || delay || filter != Filter::None;
+		}
+	};
+
+	[[nodiscard]] const char* audioFilterName(AudioEffects::Filter filter) noexcept;
+	[[nodiscard]] bool audioFilterFromName(const std::string& name, AudioEffects::Filter& outFilter) noexcept;
+
 	struct AudioSourceData
 	{
 		std::string clipAssetPath;
@@ -141,6 +176,7 @@ namespace gameforger::editor
 		bool is3D = true;
 		float minDistance = 1.0F;
 		float maxDistance = 50.0F;
+		AudioEffects effects;
 	};
 
 	// Data for an entity with isCastle=true (see below) - additive, like

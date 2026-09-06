@@ -233,6 +233,26 @@ namespace gameforger::editor
 				entity.audioSource.is3D = readBool(*audioSource, "is3D", entity.audioSource.is3D);
 				entity.audioSource.minDistance = readFloat(*audioSource, "minDistance", entity.audioSource.minDistance);
 				entity.audioSource.maxDistance = readFloat(*audioSource, "maxDistance", entity.audioSource.maxDistance);
+				// Absent in scenes written before effects existed, so every field
+				// falls back to its default and an old scene loads dry.
+				if (const json::Value* fx = audioSource->find("effects"))
+				{
+					AudioEffects& effects = entity.audioSource.effects;
+					effects.reverb = readBool(*fx, "reverb", effects.reverb);
+					effects.reverbRoomSize = readFloat(*fx, "reverbRoomSize", effects.reverbRoomSize);
+					effects.reverbDamping = readFloat(*fx, "reverbDamping", effects.reverbDamping);
+					effects.reverbWet = readFloat(*fx, "reverbWet", effects.reverbWet);
+					effects.reverbDry = readFloat(*fx, "reverbDry", effects.reverbDry);
+					effects.delay = readBool(*fx, "delay", effects.delay);
+					effects.delaySeconds = readFloat(*fx, "delaySeconds", effects.delaySeconds);
+					effects.delayDecay = readFloat(*fx, "delayDecay", effects.delayDecay);
+					effects.delayWet = readFloat(*fx, "delayWet", effects.delayWet);
+					effects.delayDry = readFloat(*fx, "delayDry", effects.delayDry);
+					// An unrecognised filter name means a newer editor wrote this;
+					// keep the default rather than guessing at it.
+					(void)audioFilterFromName(readString(*fx, "filter", "none"), effects.filter);
+					effects.cutoffHz = readFloat(*fx, "cutoffHz", effects.cutoffHz);
+				}
 			}
 
 			entity.isCastle = readBool(obj, "isCastle", false);
@@ -430,7 +450,29 @@ namespace gameforger::editor
 				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.minDistance);
 				json += indent + "    \"minDistance\": " + audioScalar.data() + ",\n";
 				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.maxDistance);
-				json += indent + "    \"maxDistance\": " + audioScalar.data() + "\n";
+				json += indent + "    \"maxDistance\": " + audioScalar.data() + ",\n";
+				{
+					const AudioEffects& fx = entity.audioSource.effects;
+					const auto scalar = [&audioScalar](const float value)
+					{
+						std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", static_cast<double>(value));
+						return std::string(audioScalar.data());
+					};
+					json += indent + "    \"effects\": {\n";
+					json += indent + "      \"reverb\": " + std::string(fx.reverb ? "true" : "false") + ",\n";
+					json += indent + "      \"reverbRoomSize\": " + scalar(fx.reverbRoomSize) + ",\n";
+					json += indent + "      \"reverbDamping\": " + scalar(fx.reverbDamping) + ",\n";
+					json += indent + "      \"reverbWet\": " + scalar(fx.reverbWet) + ",\n";
+					json += indent + "      \"reverbDry\": " + scalar(fx.reverbDry) + ",\n";
+					json += indent + "      \"delay\": " + std::string(fx.delay ? "true" : "false") + ",\n";
+					json += indent + "      \"delaySeconds\": " + scalar(fx.delaySeconds) + ",\n";
+					json += indent + "      \"delayDecay\": " + scalar(fx.delayDecay) + ",\n";
+					json += indent + "      \"delayWet\": " + scalar(fx.delayWet) + ",\n";
+					json += indent + "      \"delayDry\": " + scalar(fx.delayDry) + ",\n";
+					json += indent + "      \"filter\": \"" + std::string(audioFilterName(fx.filter)) + "\",\n";
+					json += indent + "      \"cutoffHz\": " + scalar(fx.cutoffHz) + "\n";
+					json += indent + "    }\n";
+				}
 				json += indent + "  },\n";
 			}
 			json += indent + "  \"isCastle\": " + std::string(entity.isCastle ? "true" : "false") + ",\n";

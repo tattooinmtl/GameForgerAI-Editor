@@ -1,5 +1,11 @@
 #include "GameForger/Core/AudioEngine.hpp"
 
+// Reverb lives in miniaudio's extras/, not the single header - see the
+// Engine CMakeLists comment on ma_reverb_node.c.
+#include <vector>
+
+#include "ma_reverb_node.h"
+
 #include "GameForger/Core/ProjectPaths.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
@@ -62,17 +68,70 @@ namespace gameforger::core
 		}
 	}
 
+	// One voice's DSP chain. The nodes must outlive the ma_sound that feeds
+	// them and be uninitialised AFTER it, or the sound's mixing callback
+	// writes into freed memory. Relying on member declaration order for
+	// that is too subtle to be safe, so teardown is explicit and the
+	// destructor just calls it.
+	struct EffectChain
+	{
+		std::unique_ptr<ma_reverb_node> reverb;
+		std::unique_ptr<ma_delay_node> delay;
+		std::unique_ptr<ma_lpf_node> lowPass;
+		std::unique_ptr<ma_hpf_node> highPass;
+
+		[[nodiscard]] bool empty() const noexcept
+		{
+			return !reverb && !delay && !lowPass && !highPass;
+		}
+
+		// Reverse signal order: whatever is nearest the endpoint goes last.
+		void uninitAll()
+		{
+			if (reverb)   { ma_reverb_node_uninit(reverb.get(), nullptr);   reverb.reset(); }
+			if (delay)    { ma_delay_node_uninit(delay.get(), nullptr);     delay.reset(); }
+			if (lowPass)  { ma_lpf_node_uninit(lowPass.get(), nullptr);     lowPass.reset(); }
+			if (highPass) { ma_hpf_node_uninit(highPass.get(), nullptr);    highPass.reset(); }
+		}
+
+		~EffectChain() { uninitAll(); }
+
+		EffectChain() = default;
+		EffectChain(EffectChain&&) noexcept = default;
+		EffectChain& operator=(EffectChain&&) noexcept = default;
+		EffectChain(const EffectChain&) = delete;
+		EffectChain& operator=(const EffectChain&) = delete;
+	};
+
 	struct AudioEngine::Impl
 	{
 		ma_engine engine{};
 		bool engineReady = false;
 		float masterVolume = 1.0F;
+
 		// The clip each voice came from, so a script can stop or query its own
 		// sound instead of every sound at once.
 		struct Voice
 		{
 			std::unique_ptr<ma_sound, void (*)(ma_sound*)> sound{nullptr, uninitSound};
 			std::string clipPath;
+			EffectChain effects;
+
+			// Sound first, then the nodes it fed. Doing this by hand rather
+			// than leaving it to member order, which would tear down in
+			// reverse-declaration order and free the nodes underneath a
+			// still-running sound.
+			~Voice()
+			{
+				sound.reset();
+				effects.uninitAll();
+			}
+
+			Voice() = default;
+			Voice(Voice&&) noexcept = default;
+			Voice& operator=(Voice&&) noexcept = default;
+			Voice(const Voice&) = delete;
+			Voice& operator=(const Voice&) = delete;
 		};
 		std::vector<Voice> voices;
 		std::unique_ptr<ma_sound, void (*)(ma_sound*)> preview{nullptr, uninitSound};
@@ -90,6 +149,118 @@ namespace gameforger::core
 				voices.end());
 		}
 	};
+
+	namespace
+	{
+		// Builds the chain and wires sound -> [reverb] -> [delay] -> [filter] ->
+		// endpoint, attaching only the enabled nodes. Returns false and leaves
+		// the chain empty if any node fails to initialise, so the caller can
+		// fall back to playing dry rather than playing nothing.
+		bool buildEffectChain(
+			ma_engine& engine,
+			ma_sound& sound,
+			const EffectSettings& settings,
+			EffectChain& chain)
+		{
+			ma_node_graph* graph = ma_engine_get_node_graph(&engine);
+			ma_node* endpoint = ma_node_graph_get_endpoint(graph);
+			const ma_uint32 channels = ma_engine_get_channels(&engine);
+			const ma_uint32 sampleRate = ma_engine_get_sample_rate(&engine);
+
+			// Collected in signal order, then linked in one pass below.
+			std::vector<ma_node*> nodes;
+
+			if (settings.reverb)
+			{
+				// The reverb node only supports mono and stereo.
+				if (channels != 1 && channels != 2)
+				{
+					return false;
+				}
+				auto node = std::make_unique<ma_reverb_node>();
+				ma_reverb_node_config config = ma_reverb_node_config_init(channels, sampleRate);
+				config.roomSize = settings.reverbRoomSize;
+				config.damping = settings.reverbDamping;
+				config.wetVolume = settings.reverbWet;
+				config.dryVolume = settings.reverbDry;
+				if (ma_reverb_node_init(graph, &config, nullptr, node.get()) != MA_SUCCESS)
+				{
+					return false;
+				}
+				nodes.push_back(reinterpret_cast<ma_node*>(node.get()));
+				chain.reverb = std::move(node);
+			}
+
+			if (settings.delay)
+			{
+				auto node = std::make_unique<ma_delay_node>();
+				const auto delayFrames =
+					static_cast<ma_uint32>(static_cast<float>(sampleRate) * settings.delaySeconds);
+				ma_delay_node_config config =
+					ma_delay_node_config_init(channels, sampleRate, delayFrames, settings.delayDecay);
+				if (ma_delay_node_init(graph, &config, nullptr, node.get()) != MA_SUCCESS)
+				{
+					chain.uninitAll();
+					return false;
+				}
+				nodes.push_back(reinterpret_cast<ma_node*>(node.get()));
+				chain.delay = std::move(node);
+			}
+
+			if (settings.filter == EffectSettings::Filter::LowPass)
+			{
+				auto node = std::make_unique<ma_lpf_node>();
+				ma_lpf_node_config config =
+					ma_lpf_node_config_init(channels, sampleRate, settings.cutoffHz, 2);
+				if (ma_lpf_node_init(graph, &config, nullptr, node.get()) != MA_SUCCESS)
+				{
+					chain.uninitAll();
+					return false;
+				}
+				nodes.push_back(reinterpret_cast<ma_node*>(node.get()));
+				chain.lowPass = std::move(node);
+			}
+			else if (settings.filter == EffectSettings::Filter::HighPass)
+			{
+				auto node = std::make_unique<ma_hpf_node>();
+				ma_hpf_node_config config =
+					ma_hpf_node_config_init(channels, sampleRate, settings.cutoffHz, 2);
+				if (ma_hpf_node_init(graph, &config, nullptr, node.get()) != MA_SUCCESS)
+				{
+					chain.uninitAll();
+					return false;
+				}
+				nodes.push_back(reinterpret_cast<ma_node*>(node.get()));
+				chain.highPass = std::move(node);
+			}
+
+			if (nodes.empty())
+			{
+				return true; // nothing enabled - the sound stays on the endpoint
+			}
+
+			// sound -> first node, each node -> the next, last -> endpoint.
+			if (ma_node_attach_output_bus(&sound, 0, nodes.front(), 0) != MA_SUCCESS)
+			{
+				chain.uninitAll();
+				return false;
+			}
+			for (std::size_t i = 0; i + 1 < nodes.size(); ++i)
+			{
+				if (ma_node_attach_output_bus(nodes[i], 0, nodes[i + 1], 0) != MA_SUCCESS)
+				{
+					chain.uninitAll();
+					return false;
+				}
+			}
+			if (ma_node_attach_output_bus(nodes.back(), 0, endpoint, 0) != MA_SUCCESS)
+			{
+				chain.uninitAll();
+				return false;
+			}
+			return true;
+		}
+	}
 
 	AudioEngine::AudioEngine() = default;
 	AudioEngine::~AudioEngine()
@@ -189,8 +360,81 @@ namespace gameforger::core
 		{
 			return false;
 		}
-		impl_->voices.push_back(Impl::Voice{std::move(sound), clipRelativePath});
+		// Voice is no longer an aggregate (it has an explicit destructor for
+		// teardown ordering), so build it field by field.
+		Impl::Voice voice;
+		voice.sound = std::move(sound);
+		voice.clipPath = clipRelativePath;
+		impl_->voices.push_back(std::move(voice));
 		return true;
+	}
+
+	bool AudioEngine::playWithEffects(
+		const std::filesystem::path& projectRoot,
+		const std::string& clipRelativePath,
+		const float volume,
+		const float pitch,
+		const bool loop,
+		const EffectSettings& effects)
+	{
+		// No effects enabled is by far the common case, and it must not pay for
+		// a node graph it does not use.
+		if (!effects.anyEnabled())
+		{
+			return play(projectRoot, clipRelativePath, volume, pitch, loop);
+		}
+
+		const std::optional<std::filesystem::path> resolved = resolveClip(projectRoot, clipRelativePath);
+		if (!resolved.has_value())
+		{
+			return false;
+		}
+		if (!isAvailable())
+		{
+			return true;
+		}
+		impl_->pruneFinished();
+
+		Impl::Voice voice;
+		voice.clipPath = clipRelativePath;
+		voice.sound = std::unique_ptr<ma_sound, void (*)(ma_sound*)>(new ma_sound{}, uninitSound);
+
+		const ma_uint32 flags = loop ? MA_SOUND_FLAG_LOOPING : 0;
+		if (ma_sound_init_from_file(
+				&impl_->engine, resolved->string().c_str(), flags, nullptr, nullptr, voice.sound.get()) != MA_SUCCESS)
+		{
+			return false;
+		}
+		ma_sound_set_volume(voice.sound.get(), clampVolume(volume));
+		ma_sound_set_pitch(voice.sound.get(), clampPitch(pitch));
+		ma_sound_set_spatialization_enabled(voice.sound.get(), MA_FALSE);
+
+		// A chain that fails to build is not fatal: play the sound dry rather
+		// than silently dropping it, since a missing reverb is far less
+		// surprising than a missing sound.
+		(void)buildEffectChain(impl_->engine, *voice.sound, effects, voice.effects);
+
+		if (ma_sound_start(voice.sound.get()) != MA_SUCCESS)
+		{
+			return false;
+		}
+		impl_->voices.push_back(std::move(voice));
+		return true;
+	}
+
+	bool AudioEngine::playPreviewWithEffects(
+		const std::filesystem::path& projectRoot,
+		const std::string& clipRelativePath,
+		const float volume,
+		const EffectSettings& effects)
+	{
+		// The preview voice is deliberately a normal voice here rather than the
+		// dedicated preview slot: the preview slot has no effect chain attached
+		// to it, and giving it one would mean duplicating the teardown ordering
+		// that Voice already gets right. stopPreview() still stops the slot;
+		// this is stopped by clip path.
+		stop(clipRelativePath);
+		return playWithEffects(projectRoot, clipRelativePath, volume, 1.0F, false, effects);
 	}
 
 	bool AudioEngine::play3D(
@@ -230,7 +474,12 @@ namespace gameforger::core
 		{
 			return false;
 		}
-		impl_->voices.push_back(Impl::Voice{std::move(sound), clipRelativePath});
+		// Voice is no longer an aggregate (it has an explicit destructor for
+		// teardown ordering), so build it field by field.
+		Impl::Voice voice;
+		voice.sound = std::move(sound);
+		voice.clipPath = clipRelativePath;
+		impl_->voices.push_back(std::move(voice));
 		return true;
 	}
 

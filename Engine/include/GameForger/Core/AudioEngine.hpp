@@ -26,6 +26,31 @@ namespace gameforger::core
 	// remote desktop, missing drivers) instead of crashing. play() in silent
 	// mode still validates the path and reports success so a missing speaker
 	// cannot deadlock a boot sequence waiting on a clip.
+	// Core's own copy of the effect parameters. Deliberately not
+	// editor::AudioEffects: Core must not depend on the editor's scene types,
+	// so the caller converts. Same fields, same meaning.
+	struct EffectSettings
+	{
+		bool reverb = false;
+		float reverbRoomSize = 0.5F;
+		float reverbDamping = 0.5F;
+		float reverbWet = 0.3F;
+		float reverbDry = 0.7F;
+
+		bool delay = false;
+		float delaySeconds = 0.25F;
+		float delayDecay = 0.4F;
+
+		enum class Filter { None, LowPass, HighPass };
+		Filter filter = Filter::None;
+		float cutoffHz = 1000.0F;
+
+		[[nodiscard]] bool anyEnabled() const noexcept
+		{
+			return reverb || delay || filter != Filter::None;
+		}
+	};
+
 	class AudioEngine
 	{
 	public:
@@ -54,6 +79,24 @@ namespace gameforger::core
 			float volume = 1.0F,
 			float pitch = 1.0F,
 			bool loop = false);
+
+		// Same, with a per-voice DSP chain. Split from the plain overload so
+		// the common effect-free path keeps building no nodes at all.
+		bool playWithEffects(
+			const std::filesystem::path& projectRoot,
+			const std::string& clipRelativePath,
+			float volume,
+			float pitch,
+			bool loop,
+			const EffectSettings& effects);
+
+		// Preview with effects, on the dedicated preview voice, so tuning a
+		// setting in the panel cannot interfere with in-game sound.
+		bool playPreviewWithEffects(
+			const std::filesystem::path& projectRoot,
+			const std::string& clipRelativePath,
+			float volume,
+			const EffectSettings& effects);
 
 		bool play3D(
 			const std::filesystem::path& projectRoot,

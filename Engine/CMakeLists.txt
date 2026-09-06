@@ -4,6 +4,12 @@ add_library(GameForgerEngine STATIC
     src/Core/AssetDatabase.cpp
     src/Core/Material.cpp
     src/Core/AudioEngine.cpp
+    # Reverb is NOT in miniaudio.h - it ships in the repo's extras/nodes, with
+    # verblib.h bundled beside it. Compiled straight from the pinned
+    # dependency rather than vendored, so it can never drift from the
+    # miniaudio version. If a future bump moves or drops this node, THIS line
+    # is what fails to configure.
+    ${miniaudio_SOURCE_DIR}/extras/nodes/ma_reverb_node/ma_reverb_node.c
     # Per-frame CPU timing split into named zones, with the worst frames kept
     # so a dip can be inspected after the fact. In Engine so Runtime can use
     # the same instrumentation later.
@@ -76,6 +82,8 @@ add_library(GameForgerEngine STATIC
 add_library(GameForger::Engine ALIAS GameForgerEngine)
 
 target_include_directories(GameForgerEngine
+    PRIVATE
+        ${miniaudio_SOURCE_DIR}/extras/nodes/ma_reverb_node
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party

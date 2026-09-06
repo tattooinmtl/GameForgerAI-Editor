@@ -44,6 +44,17 @@ jobs:
           }
           ninja --version
 
+      # glad2 does not ship a pre-generated loader - it runs its Python
+      # generator during the BUILD step, and that generator imports jinja2.
+      # GitHub's Windows image has Python but not jinja2, so the build died
+      # with ModuleNotFoundError while producing glad/gl.h. Local machines
+      # tend to have it already, which is why this only shows up in CI.
+      - name: Install glad's Python dependency
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade jinja2
+          python -c "import jinja2; print('jinja2', jinja2.__version__)"
+
       - name: Configure CMake
         run: |
           cmake --preset windows-x64

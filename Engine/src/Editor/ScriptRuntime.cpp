@@ -473,6 +473,47 @@ namespace gameforger::editor
 			return 0;
 		}
 
+		// Show/hide another entity. Needed by anything that swaps between a
+		// set of pre-placed objects rather than spawning them: a weapon rack
+		// parented to the camera, a door's open/closed variants, a HUD element
+		// that appears conditionally. Scripts could previously read other
+		// entities (findNearestWithTag) and rotate them
+		// (setEntityRotation) but had no way to make one appear or disappear.
+		//
+		// Writes `active` directly rather than through the command bus - it is
+		// the same per-frame gameplay bookkeeping the transform writes above
+		// deliberately are not, but `active` has no SetPropertyCommand of its
+		// own, and adding one purely for a per-frame toggle would put a
+		// 60-per-second stream into the undo stack.
+		int luaWorldSetEntityActive(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string entityName = luaL_checkstring(L, 2);
+			luaL_checkany(L, 3);
+			const bool active = lua_toboolean(L, 3) != 0;
+			const SceneEntity* entity = runtime->scene().findEntity(entityName);
+			if (entity == nullptr)
+			{
+				runtime->log(false, "world:setEntityActive ignored: entity \"" + entityName + "\" not found.");
+				return 0;
+			}
+			if (SceneEntity* mutableEntity = runtime->scene().findEntityMutable(entity->id))
+			{
+				mutableEntity->active = active;
+			}
+			return 0;
+		}
+
+		// True when the named entity exists and is active - lets a script ask
+		// about state it just set, or that another script owns.
+		int luaWorldIsEntityActive(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(luaL_checkstring(L, 2));
+			lua_pushboolean(L, entity != nullptr && entity->active);
+			return 1;
+		}
+
 		// Spawns a gravity-affected projectile (see GameplayState::
 		// Projectile::useGravity, tickProjectiles() in GameplayLoop.cpp) -
 		// `direction` need not be normalized, only its direction is used.
@@ -636,6 +677,8 @@ namespace gameforger::editor
 			addMethod("isAimingCatapult", luaWorldIsAimingCatapult);
 			addMethod("setOperatingCatapult", luaWorldSetOperatingCatapult);
 			addMethod("setEntityRotation", luaWorldSetEntityRotation);
+			addMethod("setEntityActive", luaWorldSetEntityActive);
+			addMethod("isEntityActive", luaWorldIsEntityActive);
 			addMethod("fireGravityProjectile", luaWorldFireGravityProjectile);
 		}
 
@@ -681,6 +724,25 @@ namespace gameforger::editor
 		{
 			ScriptRuntime* runtime = runtimeFrom(L);
 			lua_pushnumber(L, static_cast<lua_Number>(runtime->inputSource().getMouseDeltaY()));
+			return 1;
+		}
+
+		// Both of these read InputSource methods that already existed on the
+		// interface (and are implemented by BOTH the ImGui and GLFW backends)
+		// but were never exposed to Lua - so a script could not read the
+		// scroll wheel or a mouse button at all. Weapon switching and firing
+		// need exactly those two.
+		int luaInputGetScrollDelta(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushnumber(L, static_cast<lua_Number>(runtime->inputSource().getScrollDelta()));
+			return 1;
+		}
+
+		int luaInputIsMouseButtonDown(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushboolean(L, runtime->inputSource().isMouseButtonDown(luaL_checkstring(L, 2)));
 			return 1;
 		}
 
@@ -768,6 +830,10 @@ namespace gameforger::editor
 		lua_setfield(state_, -2, "getMouseDeltaX");
 		lua_pushcfunction(state_, luaInputGetMouseDeltaY);
 		lua_setfield(state_, -2, "getMouseDeltaY");
+		lua_pushcfunction(state_, luaInputGetScrollDelta);
+		lua_setfield(state_, -2, "getScrollDelta");
+		lua_pushcfunction(state_, luaInputIsMouseButtonDown);
+		lua_setfield(state_, -2, "isMouseButtonDown");
 		lua_setglobal(state_, "input");
 	}
 

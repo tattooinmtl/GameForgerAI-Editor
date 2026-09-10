@@ -52,6 +52,11 @@ Game/Branding/gameforgerai-neon-system.mp4
 # 376 MB and 46 MB respectively - and they cannot be diffed or merged. Demo
 # content is published as a download from the website instead.
 Game/Models/
+# ...except the shared demo kit: 37 low-poly GLBs totalling 1.6 MB, which the
+# FPS demo scene references by path. Without these tracked, a fresh clone opens
+# that scene with every prop missing.
+!Game/Models/kit/
+!Game/Models/kit/*.glb
 Game/Textures/
 Game/Cutscenes/
 Game/Saves/

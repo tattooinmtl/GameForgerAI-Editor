@@ -1,5 +1,7 @@
 #include "GameForger/Runtime/GameCamera.hpp"
 
+#include "GameForger/Editor/ScriptRuntime.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -59,5 +61,68 @@ namespace gameforger::editor
 		const glm::vec3 eye = entity.position + glm::vec3(0.0F, rig.fpsEyeHeight, 0.0F);
 		const glm::vec3 aimPoint = eye + forward * 10.0F;
 		return cameraLookingAt(eye, aimPoint);
+	}
+
+	glm::vec3 gameCameraEye(const GameCameraState& camera)
+	{
+		// Mirrors ViewportRenderer::cameraPosition() exactly. Radians, not
+		// degrees - see the header note.
+		const glm::vec3 direction(
+			std::cos(camera.pitch) * std::sin(camera.yaw),
+			std::sin(camera.pitch),
+			std::cos(camera.pitch) * std::cos(camera.yaw));
+		return camera.target + direction * camera.distance;
+	}
+
+	void applyCameraPoseToEntity(SceneEntity& entity, const GameCameraState& camera)
+	{
+		entity.position = gameCameraEye(camera);
+		// The view looks from the eye BACK toward the target, so the view
+		// direction is the negation of the orbit direction - which is why the
+		// yaw is turned around by 180 degrees rather than used as-is.
+		entity.rotationEuler = glm::vec3(
+			glm::degrees(camera.pitch), glm::degrees(camera.yaw) + 180.0F, 0.0F);
+	}
+
+	void syncMainCameraToPlayView(
+		EditorScene& scene,
+		const ScriptRuntime& scriptRuntime,
+		const float lookYawDegrees,
+		const float lookPitchDegrees)
+	{
+		if (!scriptRuntime.hasActiveCamera())
+		{
+			return;
+		}
+		const SceneEntity* followed = scene.findEntity(scriptRuntime.activeCameraEntityId());
+		if (followed == nullptr)
+		{
+			return;
+		}
+		int mainCameraId = -1;
+		for (const SceneEntity& candidate : scene.entities())
+		{
+			if (candidate.isCamera && candidate.camera.isMainCamera && candidate.active)
+			{
+				mainCameraId = candidate.id;
+				break;
+			}
+		}
+		if (mainCameraId < 0)
+		{
+			return;
+		}
+		const GameCameraState pose = scriptedPlayCamera(
+			*followed, scriptRuntime.activeCameraMode(), lookYawDegrees, lookPitchDegrees);
+
+		// Written directly rather than through the command bus, on purpose:
+		// this is per-frame Play bookkeeping, not a user edit - the same
+		// reasoning terrain sculpting and keyframe recording already use.
+		// Routing 60 camera poses a second through a validated, undoable
+		// command would bury the undo stack in steps nobody can act on.
+		if (SceneEntity* mainCamera = scene.findEntityMutable(mainCameraId))
+		{
+			applyCameraPoseToEntity(*mainCamera, pose);
+		}
 	}
 }

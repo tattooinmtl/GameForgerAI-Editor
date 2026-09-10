@@ -586,6 +586,14 @@ int main()
 		applyParentConstraints(scene, commandBus);
 		tickPlayModeAnimations(scene, commandBus, gameplay, !menuOpen, deltaTime);
 		tickScripts(scene, scriptRuntime, !menuOpen, deltaTime);
+		// Same second pass as the Editor's tick: scripts moved the player, so
+		// re-sync the Main Camera and re-solve the hierarchy before anything
+		// reads a transform. Without it a weapon parented to the camera lags
+		// the view by a frame. Kept in lockstep with drawEditorPanels
+		// (Editor/src/main.cpp) - the two tick orders diverging is how this
+		// project's Editor/Runtime seam defects happen.
+		syncMainCameraToPlayView(scene, scriptRuntime, gameCameraLookYawDegrees, gameCameraLookPitchDegrees);
+		applyParentConstraints(scene, commandBus);
 		tickProjectiles(scene, commandBus, gameplay, !menuOpen, deltaTime);
 
 		const SceneEntity* followedEntity =

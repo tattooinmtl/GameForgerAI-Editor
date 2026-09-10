@@ -1,0 +1,3917 @@
+{
+  "format": "GameForgerScene",
+  "version": 8,
+  "entities": [
+    {
+      "name": "Sun",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        14,
+        0
+      ],
+      "rotation": [
+        48,
+        -38,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isLight": true,
+      "light": {
+        "type": "directional",
+        "color": [
+          1.0,
+          0.96,
+          0.88
+        ],
+        "intensity": 1.05,
+        "castShadows": true,
+        "shadowBias": 0.0018
+      }
+    },
+    {
+      "name": "RoomLamp",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        4.2,
+        6
+      ],
+      "rotation": [
+        90,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isLight": true,
+      "light": {
+        "type": "spot",
+        "color": [
+          1.0,
+          0.88,
+          0.65
+        ],
+        "intensity": 2.6,
+        "range": 14.0,
+        "innerCone": 26,
+        "outerCone": 40,
+        "castShadows": true,
+        "shadowBias": 0.0016
+      }
+    },
+    {
+      "name": "VaultGlow",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        2.2,
+        20
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isLight": true,
+      "light": {
+        "type": "point",
+        "color": [
+          0.45,
+          0.85,
+          1.0
+        ],
+        "intensity": 2.4,
+        "range": 8.0,
+        "castShadows": false
+      }
+    },
+    {
+      "name": "Floor",
+      "active": true,
+      "tags": [
+        "Ground"
+      ],
+      "primitive": "plane",
+      "position": [
+        0,
+        0,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        16,
+        1,
+        16
+      ],
+      "color": [
+        0.42,
+        0.44,
+        0.47
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Wall_West",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -15,
+        2,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.4,
+        2,
+        16
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Wall_East",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        15,
+        2,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.4,
+        2,
+        16
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Wall_South",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        2,
+        -8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        15,
+        2,
+        0.4
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Wall_North",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        2,
+        24
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        15,
+        2,
+        0.4
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Divider_A",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -10.5,
+        2,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        4.5,
+        2,
+        0.4
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Divider_B",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        2,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3.0,
+        2,
+        0.4
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Divider_C",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        10.5,
+        2,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        4.5,
+        2,
+        0.4
+      ],
+      "color": [
+        0.55,
+        0.53,
+        0.5
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true
+    },
+    {
+      "name": "Player",
+      "active": true,
+      "tags": [
+        "Player"
+      ],
+      "primitive": "capsule",
+      "position": [
+        0,
+        1.0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.3,
+        0.55,
+        0.85
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/fps_controller.lua",
+        "Game/Scripts/inventory_system.lua",
+        "Game/Scripts/weapons_system.lua"
+      ],
+      "hasCollider": true
+    },
+    {
+      "name": "GameManager",
+      "active": true,
+      "tags": [],
+      "primitive": "empty",
+      "position": [
+        0,
+        0,
+        -6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/game_manager.lua"
+      ],
+      "hasCollider": false
+    },
+    {
+      "name": "MainCamera",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        1.75,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isCamera": true,
+      "camera": {
+        "fieldOfView": 68.0,
+        "nearClip": 0.05,
+        "farClip": 400.0,
+        "clearColor": [
+          0.05,
+          0.06,
+          0.09
+        ],
+        "isMainCamera": true
+      }
+    },
+    {
+      "name": "Hand",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.85,
+        0.68,
+        0.55
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        -0.2,
+        -0.2,
+        0.46
+      ],
+      "localRotationEuler": [
+        8,
+        -96,
+        0
+      ],
+      "localScale": [
+        0.3,
+        0.3,
+        0.3
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/righthand-item-6c7ff0.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Gun",
+      "active": true,
+      "tags": [],
+      "primitive": "empty",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        -0.26,
+        -0.25,
+        0.55
+      ],
+      "localRotationEuler": [
+        0,
+        -3,
+        0
+      ],
+      "localScale": [
+        0.88,
+        0.88,
+        0.88
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Gun_Receiver",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.16,
+        0.17,
+        0.19
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        0,
+        0.06
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        0.035,
+        0.038,
+        0.14
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Gun_Barrel",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.16,
+        0.17,
+        0.19
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        0.012,
+        0.3
+      ],
+      "localRotationEuler": [
+        90,
+        0,
+        0
+      ],
+      "localScale": [
+        0.014,
+        0.16,
+        0.014
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Gun_Magazine",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.11,
+        0.12,
+        0.13
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        -0.075,
+        0.03
+      ],
+      "localRotationEuler": [
+        12,
+        0,
+        0
+      ],
+      "localScale": [
+        0.022,
+        0.055,
+        0.03
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Gun_Stock",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.11,
+        0.12,
+        0.13
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        -0.012,
+        -0.12
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        0.026,
+        0.03,
+        0.09
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Gun_Sight",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.16,
+        0.17,
+        0.19
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        0.052,
+        0.1
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        0.008,
+        0.018,
+        0.01
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Sword",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        -0.26,
+        -0.3,
+        0.46
+      ],
+      "localRotationEuler": [
+        -68,
+        -10,
+        -12
+      ],
+      "localScale": [
+        0.42,
+        0.42,
+        0.42
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/sword-11907e.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Axe",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        -0.26,
+        -0.28,
+        0.44
+      ],
+      "localRotationEuler": [
+        -66,
+        -8,
+        -10
+      ],
+      "localScale": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/hand-axe-cee9e7.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Hammer",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        -0.25,
+        -0.26,
+        0.42
+      ],
+      "localRotationEuler": [
+        -64,
+        -6,
+        -10
+      ],
+      "localScale": [
+        0.62,
+        0.62,
+        0.62
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/hammer-fa3e51.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "gun_muzzle",
+      "active": true,
+      "tags": [
+        "gun_muzzle"
+      ],
+      "primitive": "empty",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "Gun",
+      "localPosition": [
+        0,
+        0.012,
+        0.46
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        0.1,
+        0.1,
+        0.1
+      ],
+      "scripts": [],
+      "hasCollider": false
+    },
+    {
+      "name": "Crosshair",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isUIElement": true,
+      "ui": {
+        "kind": "crosshair",
+        "anchor": "center",
+        "offset": [
+          0,
+          0
+        ],
+        "size": [
+          9,
+          9
+        ],
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "opacity": 0.85,
+        "thickness": 2.0,
+        "gap": 5.0
+      }
+    },
+    {
+      "name": "HudTitle",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isUIElement": true,
+      "ui": {
+        "kind": "text",
+        "anchor": "top_left",
+        "offset": [
+          190,
+          30
+        ],
+        "size": [
+          10,
+          10
+        ],
+        "color": [
+          1.0,
+          0.82,
+          0.3
+        ],
+        "opacity": 1.0,
+        "text": "WASD move  -  Mouse look  -  LMB attack  -  Wheel or 1-4 switch  -  E interact  -  I inventory",
+        "fontSize": 18.0
+      }
+    },
+    {
+      "name": "HudHint",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "MainCamera",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isUIElement": true,
+      "ui": {
+        "kind": "text",
+        "anchor": "bottom_center",
+        "offset": [
+          0,
+          -30
+        ],
+        "size": [
+          10,
+          10
+        ],
+        "color": [
+          0.8,
+          0.88,
+          1.0
+        ],
+        "opacity": 0.9,
+        "text": "Brown door needs the Brass Key.  Grey door needs code 1234 on the green keypad.",
+        "fontSize": 16.0
+      }
+    },
+    {
+      "name": "Door_Key",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.2,
+        1.6,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.6,
+        0.12
+      ],
+      "color": [
+        0.45,
+        0.3,
+        0.18
+      ],
+      "pivot": [
+        -1,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/door_interaction.lua"
+      ],
+      "hasCollider": true
+    },
+    {
+      "name": "Door_Code",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        6.2,
+        1.6,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.6,
+        0.12
+      ],
+      "color": [
+        0.3,
+        0.34,
+        0.42
+      ],
+      "pivot": [
+        1,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/door_interaction.lua"
+      ],
+      "hasCollider": true
+    },
+    {
+      "name": "Door_Open",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        1.6,
+        12
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.06,
+        1.6,
+        0.12
+      ],
+      "color": [
+        0.35,
+        0.35,
+        0.35
+      ],
+      "pivot": [
+        -1,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/door_interaction.lua"
+      ],
+      "hasCollider": false
+    },
+    {
+      "name": "Keypad",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        7.9,
+        1.5,
+        11.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.22,
+        0.32,
+        0.08
+      ],
+      "color": [
+        0.15,
+        0.65,
+        0.35
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/keypad_panel.lua"
+      ],
+      "hasCollider": true
+    },
+    {
+      "name": "BrassKey",
+      "active": true,
+      "tags": [
+        "Key"
+      ],
+      "primitive": "cube",
+      "position": [
+        -9.0,
+        0.35,
+        4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2.2,
+        2.2,
+        2.2
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [
+        "Game/Scripts/key_item.lua"
+      ],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/compass-d16dde.glb"
+      },
+      "colliderType": "box",
+      "isPickupItem": true,
+      "pickupItem": {
+        "itemName": "Brass Key",
+        "iconPath": ""
+      }
+    },
+    {
+      "name": "Potion",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        3.0,
+        0.25,
+        3.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/potion-bottle-b28245.glb"
+      },
+      "colliderType": "box",
+      "isPickupItem": true,
+      "pickupItem": {
+        "itemName": "Potion",
+        "iconPath": ""
+      }
+    },
+    {
+      "name": "Bread",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        3.9,
+        0.2,
+        3.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/bread-loaf-0e0ab5.glb"
+      },
+      "colliderType": "box",
+      "isPickupItem": true,
+      "pickupItem": {
+        "itemName": "Bread",
+        "iconPath": ""
+      }
+    },
+    {
+      "name": "Compass",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -2.6,
+        0.25,
+        5.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.6,
+        1.6,
+        1.6
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/compass-d16dde.glb"
+      },
+      "colliderType": "box",
+      "isPickupItem": true,
+      "pickupItem": {
+        "itemName": "Compass",
+        "iconPath": ""
+      }
+    },
+    {
+      "name": "LootSword",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -4.5,
+        0.3,
+        18.0
+      ],
+      "rotation": [
+        0,
+        0,
+        90
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/arming-sword-401972.glb"
+      },
+      "colliderType": "box",
+      "isPickupItem": true,
+      "pickupItem": {
+        "itemName": "Arming Sword",
+        "iconPath": ""
+      }
+    },
+    {
+      "name": "Barrel_A",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -12,
+        0.46,
+        3
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/barrel-aadc94.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Barrel_B",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -12,
+        0.46,
+        4.2
+      ],
+      "rotation": [
+        0,
+        25,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/barrel-aadc94.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Quench",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        12,
+        0.35,
+        4
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/quench-barrel-0c78fd.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Chest",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.2,
+        20
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/treasure-chest-c2ac4f.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Lamp_A",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6,
+        0,
+        6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/lamp-post-c9e409.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Lamp_B",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        6,
+        0,
+        6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/lamp-post-c9e409.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Firewood",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        10,
+        0.1,
+        18
+      ],
+      "rotation": [
+        0,
+        40,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/firewood-stack-810f49.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "HayBale",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -10,
+        0.26,
+        18
+      ],
+      "rotation": [
+        0,
+        15,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/hay-bale-079e8c.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "FirePit",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.05,
+        6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/stone-fire-pit-4136b0.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Crystal",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -3,
+        0.1,
+        20
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/crystal-cluster-624138.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Rock_A",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        13,
+        0.1,
+        16
+      ],
+      "rotation": [
+        0,
+        30,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/field-rock-5e37c6.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Rock_B",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -13,
+        0.1,
+        10
+      ],
+      "rotation": [
+        0,
+        70,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/medium-rock-e08405.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Boulder",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        12,
+        0.1,
+        21
+      ],
+      "rotation": [
+        0,
+        10,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/large-boulder-a29b99.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Grave",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        8,
+        0.1,
+        20
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/carved-grave-stele-a1359c.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Pine",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -13,
+        0,
+        22
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.4,
+        1.4,
+        1.4
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/pine-tree-3ea075.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Oak",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        14,
+        0,
+        -5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/broadleaf-oak-997c22.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Sailboat",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        5,
+        0.9,
+        20
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/sailboat-3ee283.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "TripodGun",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        11,
+        0.05,
+        8
+      ],
+      "rotation": [
+        0,
+        -40,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": true,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/tripod-machine-gun-80f906.glb"
+      },
+      "colliderType": "mesh"
+    },
+    {
+      "name": "Path_0",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        1.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_1",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        2.5
+      ],
+      "rotation": [
+        0,
+        23,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_2",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        4.0
+      ],
+      "rotation": [
+        0,
+        46,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_3",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        5.5
+      ],
+      "rotation": [
+        0,
+        69,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_4",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        7.0
+      ],
+      "rotation": [
+        0,
+        92,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_5",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        8.5
+      ],
+      "rotation": [
+        0,
+        115,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Path_6",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        0,
+        0.03,
+        10.0
+      ],
+      "rotation": [
+        0,
+        138,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/path-stone-a-aead48.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Plank_0",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.2,
+        0.03,
+        13.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/plank-walkway-tile-667ff1.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Plank_1",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.2,
+        0.03,
+        14.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/plank-walkway-tile-667ff1.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Plank_2",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.2,
+        0.03,
+        15.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/plank-walkway-tile-667ff1.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Plank_3",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.2,
+        0.03,
+        16.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/plank-walkway-tile-667ff1.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_0",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -11.0,
+        0.02,
+        16.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_1",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -6.8,
+        0.02,
+        17.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_2",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        -2.5999999999999996,
+        0.02,
+        18.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_3",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        1.6000000000000014,
+        0.02,
+        16.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_4",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        5.800000000000001,
+        0.02,
+        17.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    },
+    {
+      "name": "Tuft_5",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [
+        10.0,
+        0.02,
+        18.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "parentName": "",
+      "localPosition": [
+        0,
+        0,
+        0
+      ],
+      "localRotationEuler": [
+        0,
+        0,
+        0
+      ],
+      "localScale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "hasCollider": false,
+      "isImportedMesh": true,
+      "importedMesh": {
+        "sourcePath": "Game/Models/kit/grass-tuft-62e90c.glb"
+      },
+      "colliderType": "box"
+    }
+  ]
+}

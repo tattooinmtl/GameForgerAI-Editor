@@ -22,6 +22,7 @@
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/Transform.hpp"
+#include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
@@ -888,6 +889,38 @@ void testEntityForwardMatchesForwardConvention()
 	zeroScaled.scale = glm::vec3(0.0F);
 	const glm::vec3 zeroForward = entityForward(zeroScaled);
 	TEST_ASSERT(glm::length(zeroForward) > 0.5F, "Zero scale must still yield a usable direction");
+}
+
+// applyCameraPoseToEntity is what makes a weapon parented to the camera into a
+// viewmodel: the entity must end up AT the eye, FACING the way the player
+// looks. Get the yaw flip wrong and the gun points behind the player; get the
+// pitch sign wrong and it swings the wrong way when they look up.
+void testCameraPoseDrivesEntityForward()
+{
+	const auto check = [](const glm::vec3& eye, const glm::vec3& aim, const char* what)
+	{
+		const GameCameraState pose = cameraLookingAt(eye, aim);
+
+		const glm::vec3 resolvedEye = gameCameraEye(pose);
+		TEST_ASSERT(glm::length(resolvedEye - eye) < 0.01F, "gameCameraEye must round-trip the eye");
+
+		SceneEntity cameraEntity;
+		applyCameraPoseToEntity(cameraEntity, pose);
+		TEST_ASSERT(glm::length(cameraEntity.position - eye) < 0.01F, "Camera entity must sit at the eye");
+
+		const glm::vec3 wantForward = glm::normalize(aim - eye);
+		const glm::vec3 gotForward = entityForward(cameraEntity);
+		TEST_ASSERT(glm::length(gotForward - wantForward) < 0.01F, what);
+	};
+
+	check(glm::vec3(0.0F, 2.0F, 0.0F), glm::vec3(0.0F, 2.0F, 10.0F), "Looking along +Z");
+	check(glm::vec3(0.0F, 2.0F, 0.0F), glm::vec3(10.0F, 2.0F, 0.0F), "Looking along +X");
+	check(glm::vec3(0.0F, 2.0F, 0.0F), glm::vec3(0.0F, 2.0F, -10.0F), "Looking along -Z");
+	check(glm::vec3(0.0F, 2.0F, 0.0F), glm::vec3(-10.0F, 2.0F, 0.0F), "Looking along -X");
+	// Looking up and down is where a wrong pitch sign shows itself.
+	check(glm::vec3(0.0F, 2.0F, 0.0F), glm::vec3(0.0F, 9.0F, 5.0F), "Looking up and forward");
+	check(glm::vec3(0.0F, 5.0F, 0.0F), glm::vec3(3.0F, 0.0F, 3.0F), "Looking down and diagonally");
+	check(glm::vec3(-4.0F, 1.5F, 7.0F), glm::vec3(2.0F, 3.0F, -1.0F), "Arbitrary off-origin pose");
 }
 
 // isGizmoOnlyEntity gates the mesh pass, and the mesh pass indexes a
@@ -2082,6 +2115,7 @@ int main()
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testLightCameraUiRoundTrip);
 	RUN_TEST(testEntityForwardMatchesForwardConvention);
+	RUN_TEST(testCameraPoseDrivesEntityForward);
 	RUN_TEST(testGizmoOnlyEntityClassification);
 	RUN_TEST(testColliderBoxMeshConvexTypes);
 	RUN_TEST(testChatResponseBothProtocols);

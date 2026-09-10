@@ -174,6 +174,9 @@ namespace
     using gameforger::editor::tickScripts;
     using gameforger::editor::TransformKeyframe;
     using gameforger::editor::scriptedPlayCamera;
+    using gameforger::editor::applyCameraPoseToEntity;
+    using gameforger::editor::syncMainCameraToPlayView;
+    using gameforger::editor::gameCameraEye;
     using gameforger::editor::yawPitchForward;
     using gameforger::editor::composeEntityPivotFrame;
     using gameforger::editor::composeEntityTransform;
@@ -2468,32 +2471,28 @@ namespace
                 spawnPrimitive(scene, commandBus, selection, PrimitiveType::Capsule, "Capsule");
             }
             ImGui::Separator();
-            // Create Empty sits at the top of Unity's own GameObject menu; it
-            // is here under the primitives because this menu is ordered
-            // "shapes first", and an Empty is not a shape.
-            if (ImGui::MenuItem("Create Empty"))
+            // Lights and Camera sit at this level, beside the primitives, not
+            // behind a submenu - they are objects you place as often as a cube,
+            // and a submenu made them feel like a separate category of thing.
+            if (ImGui::MenuItem("Directional Light (Sun)"))
             {
-                spawnPrimitive(scene, commandBus, selection, PrimitiveType::Empty, "Empty");
+                spawnLight(scene, commandBus, selection, console, LightType::Directional);
             }
-            if (ImGui::BeginMenu("Light"))
+            if (ImGui::MenuItem("Point Light"))
             {
-                if (ImGui::MenuItem("Directional Light (Sun)"))
-                {
-                    spawnLight(scene, commandBus, selection, console, LightType::Directional);
-                }
-                if (ImGui::MenuItem("Point Light"))
-                {
-                    spawnLight(scene, commandBus, selection, console, LightType::Point);
-                }
-                if (ImGui::MenuItem("Spot Light"))
-                {
-                    spawnLight(scene, commandBus, selection, console, LightType::Spot);
-                }
-                ImGui::EndMenu();
+                spawnLight(scene, commandBus, selection, console, LightType::Point);
+            }
+            if (ImGui::MenuItem("Spot Light"))
+            {
+                spawnLight(scene, commandBus, selection, console, LightType::Spot);
             }
             if (ImGui::MenuItem("Camera"))
             {
                 spawnCamera(scene, commandBus, selection, console);
+            }
+            if (ImGui::MenuItem("Empty Object"))
+            {
+                spawnPrimitive(scene, commandBus, selection, PrimitiveType::Empty, "Empty");
             }
             if (ImGui::BeginMenu("UI"))
             {
@@ -7154,7 +7153,7 @@ namespace
                 const char* description;
                 PresetKind kind;
             };
-            constexpr std::array<ScriptPreset, 10> presets{{
+            constexpr std::array<ScriptPreset, 14> presets{{
                     {"FPS Controller",
                      "Game/Scripts/fps_controller.lua",
                      "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
@@ -7224,9 +7223,36 @@ namespace
                      "use the Audio panel's Import Sound from PC to put one there. Doesn't touch the "
                      "transform.",
                      PresetKind::Utility},
+                    {"Weapons System",
+                     "Game/Scripts/weapons_system.lua",
+                     "Viewmodel, weapon switching, firing and melee in one pack. Attach to the player "
+                     "alongside FPS Controller. Parent each weapon model as a child of the scene's Main "
+                     "Camera - the engine drives that camera from the live view, so anything under it "
+                     "rides the player's eyes and becomes a viewmodel. Mouse wheel or number keys switch, "
+                     "left mouse attacks. Slots/cooldowns/reach are editable in the script itself.",
+                     PresetKind::Utility},
+                    {"Door",
+                     "Game/Scripts/door_interaction.lua",
+                     "E opens and closes this object, swinging it around its own Pivot - set Pivot to the "
+                     "hinge edge first, or it spins around its middle. Optionally locked behind a key item "
+                     "or a keypad code (lock_mode in the script). Doesn't drive its own position, so it "
+                     "combines with anything.",
+                     PresetKind::Utility},
+                    {"Keypad Panel",
+                     "Game/Scripts/keypad_panel.lua",
+                     "Walk up, E to activate, type a code, Enter to submit. A correct code unlocks every "
+                     "Door in the scene set to that same code - no link between the two objects needed. "
+                     "Entry progress prints to the Console.",
+                     PresetKind::Utility},
+                    {"Key Item",
+                     "Game/Scripts/key_item.lua",
+                     "Marks this object as the key to a locked Door. Also tick \"Is Pickup Item\" and set "
+                     "its Item Name to match the Door's key_item_name. Walking close enough to pick it up "
+                     "unlocks every Door waiting on that key.",
+                     PresetKind::Utility},
                 }};
 
-            static std::array<bool, 10> presetSelected{};
+            static std::array<bool, 14> presetSelected{};
 
             std::string presetsPreview;
             for (std::size_t index = 0; index < presets.size(); ++index)
@@ -8443,6 +8469,8 @@ namespace
         playMode.audioPickupThisFrame = false;
 
         applyParentConstraints(scene, commandBus);
+        syncMainCameraToPlayView(
+            scene, scriptRuntime, playMode.gameCameraLookYawDegrees, playMode.gameCameraLookPitchDegrees);
         tickPlayModeAnimations(scene, commandBus, playMode.gameplay, advanceSim, simDt);
         tickBootSequence(
             projectSettingsBus.settings().bootSequence, scene, playMode.gameplay, advanceSim, simDt);
@@ -8450,6 +8478,15 @@ namespace
         // intro. Animations above still tick, so a logo or camera move plays
         // over a stationary player.
         tickScripts(scene, scriptRuntime, advanceSim && !bootSequenceBlocksInput(playMode.gameplay), simDt);
+        // Scripts just moved the player, so the view moved too. Re-sync the
+        // Main Camera and re-solve the hierarchy: without this second pass a
+        // weapon parented to the camera would lag the view by exactly one
+        // frame, which reads as the gun swimming around the screen whenever
+        // the player turns. Solving twice is cheap at these scene sizes and
+        // fixes the lag for every child, not just a viewmodel.
+        syncMainCameraToPlayView(
+            scene, scriptRuntime, playMode.gameCameraLookYawDegrees, playMode.gameCameraLookPitchDegrees);
+        applyParentConstraints(scene, commandBus);
         tickProjectiles(scene, commandBus, playMode.gameplay, advanceSim, simDt);
 
         // Enemy catapult auto-fire - the "two-sided battle" simplification

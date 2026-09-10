@@ -18,6 +18,30 @@ Status key: **MISSING** (does not exist) · **PARTIAL** (exists but short of par
 **BROKEN** (wired, ships, silently does nothing) · **DEBT** (works, but will bite) ·
 **FIXED** (was a gap, since resolved — kept for the record)
 
+### Verdict
+
+**Nothing here is rotten. Three things are genuinely broken, and they share one cause.**
+
+- **Broken — ships wrong, user is not told: 3.** All of §1b, all the same root cause: the
+  Runtime stubs `ScriptRuntime` callbacks the Editor implements for real. Catapult firing,
+  catapult aiming, held-item state. Confined to catapult/siege and carry mechanics; the FPS
+  path is unaffected. One parity test prevents the whole class.
+- **Wired but inert — announced as working, does nothing: 1.** `RequestAnimationCommand`
+  (1c.4). Validated, described to the user, never executed. Currently unreachable because no
+  parser op emits it, so it is a trap set for later rather than a live failure.
+- **Visibly unfinished — honest about it: 4.** Two disabled menu items, two empty locales, a
+  placeholder provider entry (1c.1–1c.3). These are labelled or disabled; nobody is misled.
+- **Not started at all — the bulk of this document.** Lights, shadows, camera objects, empty
+  objects, the Information tab, packaging, the AI knowledge base, GFScript. These are absent,
+  not broken. Absent is the cheaper problem.
+- **Not a feature defect but the biggest structural risk:** `main.cpp`'s hierarchy transform
+  math has no test coverage and cannot be given any where it currently lives (§1d).
+
+**The pattern worth naming:** every real defect found is a *seam* defect — Editor vs Runtime,
+validator vs executor. Nothing is wrong inside any single subsystem. The code is disciplined;
+the joins between the two hosts and between the command layers are where it leaks, because
+nothing tests a seam.
+
 ---
 
 ## 0. What already works — read this first
@@ -94,7 +118,8 @@ every callback in `ScriptRuntime::Config` is non-trivially bound in both hosts.
 | 1c.1 | **`Map Humanoid Skeleton...` and `Animation Library...` do nothing.** Bare `ImGui::MenuItem` statements with no `if` — clicking them is a no-op. Documented as deliberate and rendered disabled, so not a trap, but they are two of only four items in the `Character` menu. | PARTIAL | `main.cpp:2432-2433`, comment at `2427` |
 | 1c.2 | **French / Mandarin locale options are empty.** Selectable in Settings; no translated strings exist. | PARTIAL | `main.cpp:3028` |
 | 1c.3 | **A provider entry in the default list is a placeholder** using an OpenAI-compatible shape rather than its real API. | PARTIAL | `main.cpp:753` |
-| 1c.4 | **One `SetPropertyCommand` path returns "This scene property is not implemented yet."** — a reachable AI/user action that fails at runtime rather than being rejected at validation. | PARTIAL | `EditorScene.cpp:869` |
+| 1c.4 | **`RequestAnimationCommand` is validated and described but never executed.** It is a full member of the `AIEditorCommand` variant, the bus validator returns `"Animation command is valid."` (`AICommandBus.cpp:66`), and the planner renders it to the user as `"Play animation 'X' on 'Y'"` (`AICommandPlanner.cpp:335`) — but `EditorScene::execute` has no `is_same_v<Command, RequestAnimationCommand>` branch, so it falls through to `"Animation execution is not connected yet."` A command that passes validation and is announced as an action, then does nothing. Currently unreachable in practice: the planner's op parser has no animation op, so nothing can emit one. **Dead-but-wired, not live-broken** — but it is one parser line away from becoming live-broken. | PARTIAL | `EditorScene.cpp:871-873` vs the 16-member variant in `AICommand.hpp` |
+| 1c.6 | **`"This scene property is not implemented yet."`** is the catch-all at the end of `SetPropertyCommand`'s component chain (`EditorScene.cpp:869`) — a correct rejection of an unknown component/property, wearing a misleading message. Not a defect; reword to "Unknown property" so it stops reading like an unfinished feature. | DEBT | `EditorScene.cpp:869` |
 | 1c.5 | **14 of 19 shipped Lua scripts are orphans.** Only `fps_controller`, `rigidbody`, `ranged_attacker`, `inventory_system` and `enemy_ai` are referenced by any scene. The rest — including the `FPSController` / `PlayerFPS` / `player_fps` / `controller` / `player_controller` near-duplicates and `Script.lua` / `Script_2.lua` / `test.lua` — are dead weight a user browsing the Scripts folder cannot tell apart from the real ones. | DEBT | scene grep vs `ls Game/Scripts/` |
 
 ## 1d. Verified build & test status (2026-09-10)

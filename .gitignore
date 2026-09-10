@@ -22,6 +22,19 @@ Game/AI/Providers.local.json
 *.zip
 GameForgerEditorLayout.ini
 vc140.pdb
+*.bak
+bugapp.png
+
+# Per-tool scratch state. .claude/ IS tracked (settings.json + the build hooks
+# are real project config every contributor needs); only its machine-local
+# override is ignored, and that is already covered by *.local.json above.
+/.agents/
+/omni/
+
+# Branding videos are binaries that cannot be diffed. Game/Branding/intro.mp4
+# (1.2 MB) stays tracked - it is the editor's startup splash and a fresh clone
+# needs it. Anything bigger is marketing footage, published from the website.
+Game/Branding/gameforgerai-neon-system.mp4
 
 # Scratch asset dump at the repo root (~610 MB of .glb). NOT the editor's asset
 # root - every code path reads Game/Models (see Editor/src/main.cpp's

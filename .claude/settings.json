@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"C:/GameForgerAI-Editor/.claude/hooks/rewrite-build-command.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -199,6 +199,38 @@ Checked directly, not assumed:
 | 4.8 | **No script error line reporting in the editor**, no breakpoints, no watch. | MISSING | — | later |
 | 4.9 | **No instruction-count budget on a running script.** An infinite loop in Lua hangs the editor; the sandbox closes the filesystem-escape vector but not the hang vector. | DEBT | noted in the 0.51 sandboxing work | later |
 
+## 4b. Animation panel — what is still unfinished
+
+Audited 2026-09-10 by reading `drawAnimationPanel` (`main.cpp`), `Animation.cpp`,
+`AnimationData.hpp` and `TimelinePanel.cpp`.
+
+**What works:** enable per entity, Loop toggle, a seconds scrubber, Record mode (continuous
+capture of the posed transform at the scrub time), Add/Update Keyframe, a keyframe list with
+Go To and Delete, Preview Playback, and the AI animation generator. Sampling is solid —
+linear position/scale with **quaternion slerp** for rotation, so a 0→350° key takes the 10°
+shortcut instead of spinning the long way.
+
+| # | Gap | Status | Evidence |
+|---|---|---|---|
+| 4b.1 | **It is not frame-based at all.** `TransformKeyframe::time` is a float in seconds. There is no FPS setting, no frame numbers, no snap-to-frame, and no step-one-frame-forward/back. For a panel described as frame-by-frame this is the headline gap — you cannot step through an animation a frame at a time. | MISSING | `AnimationData.hpp:17`, panel has only a `SliderFloat` |
+| 4b.2 | **Previewing permanently moves the object.** `Preview Playback` writes each sampled pose through the command bus and never restores the pose it started from, so previewing leaves the entity wherever the animation ended. Play mode has snapshot/restore; this path does not. `AnimationPanelState` holds no saved pose. | BROKEN | `main.cpp` preview block; `AnimationPanelState:548-556` |
+| 4b.3 | **Keyframes cannot be retimed.** Go To and Delete only. The draggable timeline that *can* retime exists — but `drawTimelinePanel` takes `std::vector<CineShot>&`, so it only ever edits cine shots. A plain animated object can be retimed nowhere. | MISSING | `TimelinePanel.hpp:55-61` |
+| 4b.4 | **Only transforms can be keyed.** `TransformKeyframe` is position/rotation/scale. Nothing can animate a light's intensity or colour, a camera's FOV or its lens layers, an entity's `active` flag, a material blend, or a UI element's opacity — which is most of what a cutscene actually needs, and all of it now exists as data. | MISSING | `AnimationData.hpp:15-21` |
+| 4b.5 | **No interpolation control.** Every segment is linear (slerp for rotation). No ease-in/out, no constant/stepped hold — and stepped is precisely what frame-by-frame animation is built on. No curve or graph editor. | MISSING | `Animation.cpp` `sampleAnimation` |
+| 4b.6 | **One clip per entity.** `SceneEntity::animation` is a single `EntityAnimation`, so there is no idle/walk/run set and no way to switch between them from a script. Separately, model import still keeps only the first clip from a GLB (3.4). | MISSING | `EditorScene.hpp` `animation` |
+| 4b.7 | **Keyframe edits are not undoable.** Delete and the Loop toggle write through `findEntityMutable`, so a misclicked Delete cannot be undone. Consistent with the documented bookkeeping exception (§8.4), but losing recorded work to one click is a harsher consequence than the other cases in that list. | DEBT | panel's Delete handler |
+| 4b.8 | **No copy/paste/duplicate keyframe**, no multi-select, no mirroring, no time-scaling a whole animation. | MISSING | — |
+| 4b.9 | **No onion skinning**, the standard frame-by-frame tool for seeing neighbouring poses. | MISSING | — |
+| 4b.10 | **No playback speed or reverse**, and preview always runs at 1x forward from the first key. | MISSING | preview block |
+| 4b.11 | **No animation events.** Nothing can call a script function or fire a trigger at a given time. Audio cues exist but, like retiming, only for cine shots. | MISSING | `Storyboard.hpp` `AudioCue` |
+| 4b.12 | **Record mode does not auto-advance.** It rewrites the keyframe at the current scrub time every frame, so capturing a sequence means moving the scrubber by hand between every pose. | PARTIAL | panel's record block |
+
+**Order I would fix these in:** 4b.2 first (it silently destroys authored transforms),
+then 4b.1 + 4b.3 together (frames and retiming are one piece of work, and generalising
+`drawTimelinePanel` to take any `EntityAnimation` rather than only `CineShot` gets both),
+then 4b.4 (property tracks — the largest, and the one that unlocks animating the lights,
+cameras and lens layers that now exist), then 4b.5.
+
 ## 5. Build & distribution
 
 | # | Gap | Status | Evidence | Phase |
@@ -254,7 +286,7 @@ Checked directly, not assumed:
 | 1 — Lights + shadows | 1.1 – 1.4 · extract main.cpp math helpers to `Engine/` for testability (§1d) |
 | 2 — Camera, Empty, UI children | 2.1 – 2.4, 2.6, 2.7 |
 | 3 — Information tab | 3.1 – 3.3, 3.6 |
-| 4 — GFScript + FPS scripts | 1.8, 4.1 – 4.7 · 1c.5 (prune orphan scripts) · extend `testAllShippedScriptsLoad` to `.gfs` |
+| 4 — GFScript + FPS scripts | 1.8, 4.1 – 4.7 · 4b.1 – 4b.5 (animation panel) · 1c.5 (prune orphan scripts) · extend `testAllShippedScriptsLoad` to `.gfs` |
 | 5 — OKF, provider limits, subagents | 6.1 – 6.7 · 1c.3 |
 | 6 — `.gfpak` packaging | 5.1 – 5.6 · **1b.1 – 1b.3 + the parity test** |
 | 7 — Shell polish | 2.9, 3.7, 7.1 – 7.4 · 1c.1, 1c.2 |

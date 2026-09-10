@@ -75,6 +75,33 @@ namespace gameforger::editor
 			return glm::vec2(static_cast<float>((*numbers)[0]), static_cast<float>((*numbers)[1]));
 		}
 
+		void readCameraEffects(const json::Value& obj, CameraEffects& fx)
+		{
+			fx.enabled = readBool(obj, "enabled", fx.enabled);
+			ColorFilter parsed = fx.colorFilter;
+			if (colorFilterFromName(readString(obj, "colorFilter", colorFilterName(fx.colorFilter)), parsed))
+			{
+				fx.colorFilter = parsed;
+			}
+			fx.filterStrength = readFloat(obj, "filterStrength", fx.filterStrength);
+			fx.tintColor = readVec3(obj, "tintColor", fx.tintColor);
+			fx.tintStrength = readFloat(obj, "tintStrength", fx.tintStrength);
+			fx.gradientTexturePath = readString(obj, "gradientTexturePath", fx.gradientTexturePath);
+			fx.gradientStrength = readFloat(obj, "gradientStrength", fx.gradientStrength);
+			fx.brightness = readFloat(obj, "brightness", fx.brightness);
+			fx.contrast = readFloat(obj, "contrast", fx.contrast);
+			fx.saturation = readFloat(obj, "saturation", fx.saturation);
+			fx.grainAmount = readFloat(obj, "grainAmount", fx.grainAmount);
+			fx.grainSize = readFloat(obj, "grainSize", fx.grainSize);
+			fx.flickerAmount = readFloat(obj, "flickerAmount", fx.flickerAmount);
+			fx.flickerSpeed = readFloat(obj, "flickerSpeed", fx.flickerSpeed);
+			fx.scanlineAmount = readFloat(obj, "scanlineAmount", fx.scanlineAmount);
+			fx.scanlineCount = readFloat(obj, "scanlineCount", fx.scanlineCount);
+			fx.vignetteAmount = readFloat(obj, "vignetteAmount", fx.vignetteAmount);
+			fx.vignetteSoftness = readFloat(obj, "vignetteSoftness", fx.vignetteSoftness);
+			fx.chromaticAberration = readFloat(obj, "chromaticAberration", fx.chromaticAberration);
+		}
+
 		std::optional<SceneEntity> parseEntity(const json::Value& obj)
 		{
 			if (obj.type != json::Value::Type::Object)
@@ -246,6 +273,15 @@ namespace gameforger::editor
 				entity.camera.farClip = readFloat(*camera, "farClip", entity.camera.farClip);
 				entity.camera.clearColor = readVec3(*camera, "clearColor", entity.camera.clearColor);
 				entity.camera.isMainCamera = readBool(*camera, "isMainCamera", entity.camera.isMainCamera);
+				entity.camera.cineMode = readBool(*camera, "cineMode", entity.camera.cineMode);
+				if (const json::Value* effects = camera->find("effects"))
+				{
+					readCameraEffects(*effects, entity.camera.effects);
+				}
+			}
+			if (const json::Value* cineEffects = obj.find("cineEffects"))
+			{
+				readCameraEffects(*cineEffects, entity.cineEffects);
 			}
 
 			entity.isUIElement = readBool(obj, "isUIElement", false);
@@ -436,6 +472,13 @@ namespace gameforger::editor
 			return buffer.data();
 		}
 
+		// Camera and Cine Camera share one effects block. Read and written by
+		// the SAME pair of helpers on purpose - two copies of a 17-field
+		// struct is exactly how one camera type silently stops round-tripping
+		// a field the other one keeps.
+		void readCameraEffects(const json::Value& obj, CameraEffects& fx);
+		std::string writeCameraEffects(const std::string& indent, const CameraEffects& fx);
+
 		// Same %.6f the vec helpers use, for the scalar fields of the light /
 		// camera / UI blocks. Every other scalar in this file spells out its
 		// own snprintf buffer inline; this exists because those three blocks
@@ -450,6 +493,31 @@ namespace gameforger::editor
 		std::string boolToJson(const bool value)
 		{
 			return value ? "true" : "false";
+		}
+
+		std::string writeCameraEffects(const std::string& indent, const CameraEffects& fx)
+		{
+			std::string json;
+			json += indent + "  \"enabled\": " + boolToJson(fx.enabled) + ",\n";
+			json += indent + "  \"colorFilter\": \"" + std::string(colorFilterName(fx.colorFilter)) + "\",\n";
+			json += indent + "  \"filterStrength\": " + floatToJson(fx.filterStrength) + ",\n";
+			json += indent + "  \"tintColor\": " + vec3ToJsonArray(fx.tintColor) + ",\n";
+			json += indent + "  \"tintStrength\": " + floatToJson(fx.tintStrength) + ",\n";
+			json += indent + "  \"gradientTexturePath\": \"" + escapeJson(fx.gradientTexturePath) + "\",\n";
+			json += indent + "  \"gradientStrength\": " + floatToJson(fx.gradientStrength) + ",\n";
+			json += indent + "  \"brightness\": " + floatToJson(fx.brightness) + ",\n";
+			json += indent + "  \"contrast\": " + floatToJson(fx.contrast) + ",\n";
+			json += indent + "  \"saturation\": " + floatToJson(fx.saturation) + ",\n";
+			json += indent + "  \"grainAmount\": " + floatToJson(fx.grainAmount) + ",\n";
+			json += indent + "  \"grainSize\": " + floatToJson(fx.grainSize) + ",\n";
+			json += indent + "  \"flickerAmount\": " + floatToJson(fx.flickerAmount) + ",\n";
+			json += indent + "  \"flickerSpeed\": " + floatToJson(fx.flickerSpeed) + ",\n";
+			json += indent + "  \"scanlineAmount\": " + floatToJson(fx.scanlineAmount) + ",\n";
+			json += indent + "  \"scanlineCount\": " + floatToJson(fx.scanlineCount) + ",\n";
+			json += indent + "  \"vignetteAmount\": " + floatToJson(fx.vignetteAmount) + ",\n";
+			json += indent + "  \"vignetteSoftness\": " + floatToJson(fx.vignetteSoftness) + ",\n";
+			json += indent + "  \"chromaticAberration\": " + floatToJson(fx.chromaticAberration) + "\n";
+			return json;
 		}
 
 		std::string vec2ToJsonArray(const glm::vec2& value)
@@ -613,7 +681,14 @@ namespace gameforger::editor
 			json += indent + "    \"nearClip\": " + floatToJson(entity.camera.nearClip) + ",\n";
 			json += indent + "    \"farClip\": " + floatToJson(entity.camera.farClip) + ",\n";
 			json += indent + "    \"clearColor\": " + vec3ToJsonArray(entity.camera.clearColor) + ",\n";
-			json += indent + "    \"isMainCamera\": " + boolToJson(entity.camera.isMainCamera) + "\n";
+			json += indent + "    \"isMainCamera\": " + boolToJson(entity.camera.isMainCamera) + ",\n";
+			json += indent + "    \"cineMode\": " + boolToJson(entity.camera.cineMode) + ",\n";
+			json += indent + "    \"effects\": {\n";
+			json += writeCameraEffects(indent + "    ", entity.camera.effects);
+			json += indent + "    }\n";
+			json += indent + "  },\n";
+			json += indent + "  \"cineEffects\": {\n";
+			json += writeCameraEffects(indent + "  ", entity.cineEffects);
 			json += indent + "  },\n";
 
 			json += indent + "  \"isUIElement\": " + boolToJson(entity.isUIElement) + ",\n";

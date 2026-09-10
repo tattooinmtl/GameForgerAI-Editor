@@ -55,6 +55,35 @@ namespace gameforger::editor
 		return false;
 	}
 
+	const char* colorFilterName(const ColorFilter filter) noexcept
+	{
+		switch (filter)
+		{
+			case ColorFilter::BlackAndWhite: return "black_and_white";
+			case ColorFilter::Sepia:         return "sepia";
+			case ColorFilter::Technicolor:   return "technicolor";
+			case ColorFilter::Cold:          return "cold";
+			case ColorFilter::Warm:          return "warm";
+			case ColorFilter::Infrared:      return "infrared";
+			case ColorFilter::HeatMap:       return "heat_map";
+			case ColorFilter::None: break;
+		}
+		return "none";
+	}
+
+	bool colorFilterFromName(const std::string& text, ColorFilter& outFilter) noexcept
+	{
+		if (text == "none")            { outFilter = ColorFilter::None;          return true; }
+		if (text == "black_and_white") { outFilter = ColorFilter::BlackAndWhite; return true; }
+		if (text == "sepia")           { outFilter = ColorFilter::Sepia;         return true; }
+		if (text == "technicolor")     { outFilter = ColorFilter::Technicolor;   return true; }
+		if (text == "cold")            { outFilter = ColorFilter::Cold;          return true; }
+		if (text == "warm")            { outFilter = ColorFilter::Warm;          return true; }
+		if (text == "infrared")        { outFilter = ColorFilter::Infrared;      return true; }
+		if (text == "heat_map")        { outFilter = ColorFilter::HeatMap;       return true; }
+		return false;
+	}
+
 	const char* uiElementKindName(const UIElementKind kind) noexcept
 	{
 		switch (kind)

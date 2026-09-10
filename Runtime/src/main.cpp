@@ -780,6 +780,14 @@ int main()
 		{
 			std::fprintf(stderr, "Failed to resize the game viewport.\n");
 		}
+		// Lens layers from the Main Camera - the same source and the same rule
+		// as the Editor's Game view. A grade authored in the editor that did
+		// not survive into the shipped game would be the same class of defect
+		// as MissingFunctions section 1b, so this is not optional.
+		viewportRenderer.setCameraEffects(
+			mainCameraEntity != nullptr ? mainCameraEntity->camera.effects
+										: gameforger::editor::CameraEffects{},
+			projectRoot);
 		viewportRenderer.render(scene.entities(), {}, projectRoot, excludeEntityId);
 		viewportRenderer.blitToCurrentFramebuffer(width, height);
 

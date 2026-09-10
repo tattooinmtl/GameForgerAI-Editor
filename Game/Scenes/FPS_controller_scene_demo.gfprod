@@ -746,7 +746,32 @@
           0.06,
           0.09
         ],
-        "isMainCamera": true
+        "isMainCamera": true,
+        "effects": {
+          "enabled": true,
+          "colorFilter": "none",
+          "filterStrength": 1.0,
+          "tintColor": [
+            1,
+            1,
+            1
+          ],
+          "tintStrength": 0.0,
+          "gradientTexturePath": "",
+          "gradientStrength": 0.0,
+          "brightness": 0.0,
+          "contrast": 1.12,
+          "saturation": 1.1,
+          "grainAmount": 0.1,
+          "grainSize": 2.0,
+          "flickerAmount": 0.0,
+          "flickerSpeed": 11.0,
+          "scanlineAmount": 0.0,
+          "scanlineCount": 400.0,
+          "vignetteAmount": 0.35,
+          "vignetteSoftness": 0.55,
+          "chromaticAberration": 0.08
+        }
       }
     },
     {

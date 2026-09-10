@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -268,6 +269,196 @@ void main()
 
 void main()
 {
+}
+)glsl";
+
+		// Full-screen post pass. Draws three vertices covering the screen with
+		// no vertex buffer at all - gl_VertexID arithmetic is the standard
+		// trick, and it means the post stack needs no VAO of its own beyond an
+		// empty one to satisfy core profile.
+		//
+		// A single triangle rather than a quad: the diagonal seam of a two-
+		// triangle quad causes duplicated fragment shading down the middle of
+		// the screen, and a triangle big enough to cover the viewport has no
+		// seam at all.
+		constexpr const char* postVertexShaderSource = R"glsl(
+#version 460 core
+out vec2 uv;
+
+void main()
+{
+	vec2 corner = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+	uv = corner;
+	gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+)glsl";
+
+		// The cinema stack. Order matters and follows how film actually works:
+		// lens distortion first (chromatic aberration happens in the glass),
+		// then colour grade, then the named filter, then the gradient map,
+		// then the physical film artefacts (grain, scanlines, flicker), and
+		// vignette last because it is the lens shading the whole frame.
+		constexpr const char* postFragmentShaderSource = R"glsl(
+#version 460 core
+in vec2 uv;
+out vec4 fragmentColor;
+
+uniform sampler2D sceneTexture;
+uniform sampler2D gradientTexture;
+uniform float time;
+
+uniform int colorFilter;          // matches the ColorFilter enum order
+uniform float filterStrength;
+uniform vec3 tintColor;
+uniform float tintStrength;
+uniform float gradientStrength;
+uniform float hasGradient;
+
+uniform float brightness;
+uniform float contrast;
+uniform float saturation;
+
+uniform float grainAmount;
+uniform float grainSize;
+uniform float flickerAmount;
+uniform float flickerSpeed;
+uniform float scanlineAmount;
+uniform float scanlineCount;
+uniform float vignetteAmount;
+uniform float vignetteSoftness;
+uniform float chromaticAberration;
+
+uniform vec2 viewportSize;
+
+float luminance(vec3 c)
+{
+	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// Cheap hash noise. Deterministic per pixel per frame, which is what makes
+// grain shimmer instead of crawling.
+float hash(vec2 p)
+{
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+vec3 applyNamedFilter(vec3 c, int which)
+{
+	if (which == 1) // BlackAndWhite
+	{
+		return vec3(luminance(c));
+	}
+	if (which == 2) // Sepia
+	{
+		float l = luminance(c);
+		return vec3(l * 1.07, l * 0.94, l * 0.74);
+	}
+	if (which == 3) // Technicolor - push each channel away from the others
+	{
+		vec3 boosted = c * c * 1.35;
+		return clamp(boosted + (c - vec3(luminance(c))) * 0.55, 0.0, 1.0);
+	}
+	if (which == 4) // Cold
+	{
+		return clamp(c * vec3(0.78, 0.92, 1.28), 0.0, 1.0);
+	}
+	if (which == 5) // Warm
+	{
+		return clamp(c * vec3(1.25, 1.02, 0.74), 0.0, 1.0);
+	}
+	if (which == 6) // Infrared - swap foliage response into magenta/white
+	{
+		float l = luminance(c);
+		return clamp(vec3(c.g * 1.4, l * 0.5, c.r * 1.1), 0.0, 1.0);
+	}
+	if (which == 7) // HeatMap - black -> blue -> red -> yellow -> white
+	{
+		float l = clamp(luminance(c), 0.0, 1.0);
+		vec3 result;
+		if (l < 0.25)      { result = mix(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.8), l / 0.25); }
+		else if (l < 0.5)  { result = mix(vec3(0.0, 0.0, 0.8), vec3(0.85, 0.0, 0.0), (l - 0.25) / 0.25); }
+		else if (l < 0.75) { result = mix(vec3(0.85, 0.0, 0.0), vec3(1.0, 0.95, 0.0), (l - 0.5) / 0.25); }
+		else               { result = mix(vec3(1.0, 0.95, 0.0), vec3(1.0, 1.0, 1.0), (l - 0.75) / 0.25); }
+		return result;
+	}
+	return c;
+}
+
+void main()
+{
+	vec2 centered = uv - 0.5;
+
+	// --- lens: chromatic aberration, scaled by distance from centre so the
+	// middle of the frame stays sharp, like a real lens.
+	vec3 color;
+	if (chromaticAberration > 0.0)
+	{
+		vec2 offset = centered * chromaticAberration * 0.02;
+		color.r = texture(sceneTexture, uv + offset).r;
+		color.g = texture(sceneTexture, uv).g;
+		color.b = texture(sceneTexture, uv - offset).b;
+	}
+	else
+	{
+		color = texture(sceneTexture, uv).rgb;
+	}
+
+	// --- grade
+	color = clamp(color + brightness, 0.0, 1.0);
+	color = clamp((color - 0.5) * contrast + 0.5, 0.0, 1.0);
+	color = clamp(mix(vec3(luminance(color)), color, saturation), 0.0, 1.0);
+
+	// --- named filter
+	if (colorFilter != 0)
+	{
+		color = mix(color, applyNamedFilter(color, colorFilter), clamp(filterStrength, 0.0, 1.0));
+	}
+
+	// --- gradient map: luminance picks a colour along the strip
+	if (hasGradient > 0.5 && gradientStrength > 0.0)
+	{
+		vec3 mapped = texture(gradientTexture, vec2(clamp(luminance(color), 0.0, 1.0), 0.5)).rgb;
+		color = mix(color, mapped, clamp(gradientStrength, 0.0, 1.0));
+	}
+
+	// --- tint
+	if (tintStrength > 0.0)
+	{
+		color = mix(color, color * tintColor, clamp(tintStrength, 0.0, 1.0));
+	}
+
+	// --- projector flicker: a slow wobble plus a faster one, so it does not
+	// read as a clean sine.
+	if (flickerAmount > 0.0)
+	{
+		float wobble = sin(time * flickerSpeed) * 0.6 + sin(time * flickerSpeed * 2.7) * 0.4;
+		color *= 1.0 + wobble * flickerAmount * 0.12;
+	}
+
+	// --- grain
+	if (grainAmount > 0.0)
+	{
+		vec2 grainCell = floor(uv * viewportSize / max(grainSize, 1.0));
+		float noise = hash(grainCell + fract(time) * 137.0) - 0.5;
+		color += noise * grainAmount * 0.35;
+	}
+
+	// --- scanlines
+	if (scanlineAmount > 0.0)
+	{
+		float line = sin(uv.y * scanlineCount * 3.14159265);
+		color *= 1.0 - scanlineAmount * 0.5 * (0.5 + 0.5 * line);
+	}
+
+	// --- vignette, last: the lens shading everything that came before it.
+	if (vignetteAmount > 0.0)
+	{
+		float dist = length(centered) * 1.4142;
+		float falloff = smoothstep(1.0, mix(0.95, 0.15, clamp(vignetteSoftness, 0.0, 1.0)), dist);
+		color *= mix(1.0, falloff, clamp(vignetteAmount, 0.0, 1.0));
+	}
+
+	fragmentColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 )glsl";
 
@@ -1027,7 +1218,19 @@ void main()
 			return true;
 		}
 
-		return createFramebuffer(width, height);
+		if (!createFramebuffer(width, height))
+		{
+			return false;
+		}
+		// The post buffer must match the presented one exactly, or the
+		// full-screen pass samples at the wrong scale. A failure here is not
+		// fatal: render() gates on sceneFramebuffer_ being valid, so the
+		// renderer simply draws without effects rather than not drawing.
+		if (!createPostResources(width, height))
+		{
+			std::fprintf(stderr, "Post-process buffer unavailable - camera effects disabled.\n");
+		}
+		return true;
 	}
 
 	void ViewportRenderer::render(
@@ -1140,7 +1343,13 @@ void main()
 		collectLights(entities);
 		renderShadowMaps(entities, projectRoot, excludeEntityId);
 
-		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+		// With effects configured the scene renders into its own buffer and
+		// the post pass writes the presented one; otherwise it goes straight
+		// to the presented buffer exactly as before, so an unconfigured
+		// camera costs nothing.
+		const bool usePostProcess =
+			cameraEffects_.anyEnabled() && postShaderProgram_ != 0 && sceneFramebuffer_ != 0;
+		glBindFramebuffer(GL_FRAMEBUFFER, usePostProcess ? sceneFramebuffer_ : framebuffer_);
 		glViewport(0, 0, width_, height_);
 		glEnable(GL_DEPTH_TEST);
 		glClearColor(0.055F, 0.067F, 0.09F, 1.0F);
@@ -1553,6 +1762,10 @@ void main()
 			glUseProgram(0);
 		}
 
+		if (usePostProcess)
+		{
+			runPostProcess();
+		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	}
 
@@ -2178,7 +2391,8 @@ void main()
 		GLuint textured = 0;
 		GLuint shadowDepth = 0;
 		GLuint shadowDepthSkinned = 0;
-		const std::array<ProgramSlot, 7> slots{
+		GLuint post = 0;
+		const std::array<ProgramSlot, 8> slots{
 			ProgramSlot{&line, lineVertexShaderSource, lineFragmentShaderSource},
 			ProgramSlot{&mesh, meshVertexShaderSource, litMeshFragment.c_str()},
 			ProgramSlot{&skinned, skinnedMeshVertexShaderSource, litMeshFragment.c_str()},
@@ -2186,7 +2400,8 @@ void main()
 			ProgramSlot{&textured, texturedMeshVertexShaderSource, litTexturedFragment.c_str()},
 			ProgramSlot{&shadowDepth, shadowDepthVertexShaderSource, shadowDepthFragmentShaderSource},
 			ProgramSlot{
-				&shadowDepthSkinned, shadowDepthSkinnedVertexShaderSource, shadowDepthFragmentShaderSource}};
+				&shadowDepthSkinned, shadowDepthSkinnedVertexShaderSource, shadowDepthFragmentShaderSource},
+			ProgramSlot{&post, postVertexShaderSource, postFragmentShaderSource}};
 
 		for (const ProgramSlot& slot : slots)
 		{
@@ -2212,7 +2427,149 @@ void main()
 		texturedMeshShaderProgram_ = textured;
 		shadowDepthShaderProgram_ = shadowDepth;
 		shadowDepthSkinnedShaderProgram_ = shadowDepthSkinned;
+		postShaderProgram_ = post;
 		return true;
+	}
+
+	GLuint ViewportRenderer::ensureGradientTextureGpu(const std::string& relativePath)
+	{
+		if (relativePath.empty())
+		{
+			return 0;
+		}
+		const auto cached = gradientTextureCache_.find(relativePath);
+		if (cached != gradientTextureCache_.end())
+		{
+			return cached->second;
+		}
+		// Cache the failure as 0 too, so a bad path is attempted once rather
+		// than re-decoded every frame - the same trap the mesh caches hit.
+		GLuint texture = 0;
+		const std::optional<std::filesystem::path> resolved =
+			core::resolveProjectFile(effectsProjectRoot_, relativePath, "Game", {});
+		if (resolved.has_value())
+		{
+			const LoadedTexture image = loadTextureImage(*resolved);
+			if (image.success)
+			{
+				glGenTextures(1, &texture);
+				glBindTexture(GL_TEXTURE_2D, texture);
+				glTexImage2D(
+					GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+					image.rgba.data());
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				// Clamped: a gradient is a ramp, and wrapping it would make
+				// the darkest pixels sample the brightest end of the strip.
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+				glBindTexture(GL_TEXTURE_2D, 0);
+			}
+		}
+		gradientTextureCache_[relativePath] = texture;
+		return texture;
+	}
+
+	void ViewportRenderer::setCameraEffects(
+		const CameraEffects& effects, const std::filesystem::path& projectRoot)
+	{
+		cameraEffects_ = effects;
+		effectsProjectRoot_ = projectRoot;
+	}
+
+	bool ViewportRenderer::createPostResources(const int width, const int height)
+	{
+		if (sceneFramebuffer_ != 0)
+		{
+			glDeleteRenderbuffers(1, &sceneDepthBuffer_);
+			glDeleteTextures(1, &sceneTexture_);
+			glDeleteFramebuffers(1, &sceneFramebuffer_);
+			sceneDepthBuffer_ = 0;
+			sceneTexture_ = 0;
+			sceneFramebuffer_ = 0;
+		}
+		if (postVertexArray_ == 0)
+		{
+			// Core profile requires SOME VAO bound to draw, even when the
+			// vertex shader reads nothing but gl_VertexID.
+			glGenVertexArrays(1, &postVertexArray_);
+		}
+
+		glGenFramebuffers(1, &sceneFramebuffer_);
+		glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+		glGenTextures(1, &sceneTexture_);
+		glBindTexture(GL_TEXTURE_2D, sceneTexture_);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sceneTexture_, 0);
+
+		glGenRenderbuffers(1, &sceneDepthBuffer_);
+		glBindRenderbuffer(GL_RENDERBUFFER, sceneDepthBuffer_);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+		glFramebufferRenderbuffer(
+			GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, sceneDepthBuffer_);
+
+		const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		return complete;
+	}
+
+	void ViewportRenderer::runPostProcess()
+	{
+		// Reads sceneTexture_, writes framebuffer_ (what the caller presents).
+		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+		glViewport(0, 0, width_, height_);
+		glDisable(GL_DEPTH_TEST);
+		glUseProgram(postShaderProgram_);
+
+		const CameraEffects& fx = cameraEffects_;
+		const auto setFloat = [this](const char* name, const float value)
+		{ glUniform1f(glGetUniformLocation(postShaderProgram_, name), value); };
+		const auto setInt = [this](const char* name, const int value)
+		{ glUniform1i(glGetUniformLocation(postShaderProgram_, name), value); };
+
+		setInt("colorFilter", static_cast<int>(fx.colorFilter));
+		setFloat("filterStrength", fx.filterStrength);
+		glUniform3fv(
+			glGetUniformLocation(postShaderProgram_, "tintColor"), 1, glm::value_ptr(fx.tintColor));
+		setFloat("tintStrength", fx.tintStrength);
+		setFloat("gradientStrength", fx.gradientStrength);
+		setFloat("brightness", fx.brightness);
+		setFloat("contrast", fx.contrast);
+		setFloat("saturation", fx.saturation);
+		setFloat("grainAmount", fx.grainAmount);
+		setFloat("grainSize", fx.grainSize);
+		setFloat("flickerAmount", fx.flickerAmount);
+		setFloat("flickerSpeed", fx.flickerSpeed);
+		setFloat("scanlineAmount", fx.scanlineAmount);
+		setFloat("scanlineCount", fx.scanlineCount);
+		setFloat("vignetteAmount", fx.vignetteAmount);
+		setFloat("vignetteSoftness", fx.vignetteSoftness);
+		setFloat("chromaticAberration", fx.chromaticAberration);
+		setFloat("time", static_cast<float>(glfwGetTime()));
+		glUniform2f(
+			glGetUniformLocation(postShaderProgram_, "viewportSize"), static_cast<float>(width_),
+			static_cast<float>(height_));
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, sceneTexture_);
+		setInt("sceneTexture", 0);
+
+		const GLuint gradient = ensureGradientTextureGpu(fx.gradientTexturePath);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, gradient != 0 ? gradient : fallbackWhiteTexture_);
+		setInt("gradientTexture", 1);
+		setFloat("hasGradient", gradient != 0 ? 1.0F : 0.0F);
+		glActiveTexture(GL_TEXTURE0);
+
+		glBindVertexArray(postVertexArray_);
+		glDrawArrays(GL_TRIANGLES, 0, 3);
+		glBindVertexArray(0);
+		glUseProgram(0);
+		glEnable(GL_DEPTH_TEST);
 	}
 
 	bool ViewportRenderer::createShadowResources()

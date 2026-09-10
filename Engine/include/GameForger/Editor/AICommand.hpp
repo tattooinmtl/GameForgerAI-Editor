@@ -77,6 +77,75 @@ namespace gameforger::editor
         float shadowBias = 0.0015F;
     };
 
+    // Named colour treatments applied before the film effects below. Kept as
+    // a fixed set rather than a general LUT pipeline because these are the
+    // looks people actually reach for by name; `gradientTexturePath` covers
+    // anything outside the list by mapping luminance through an image.
+    enum class ColorFilter
+    {
+        None,
+        BlackAndWhite,
+        Sepia,        // aged photograph
+        Technicolor,  // saturated three-strip film
+        Cold,         // blue-shifted night / moonlight
+        Warm,         // golden hour
+        Infrared,     // false-colour foliage
+        HeatMap       // luminance -> black/blue/red/yellow/white
+    };
+
+    [[nodiscard]] const char* colorFilterName(ColorFilter filter) noexcept;
+    [[nodiscard]] bool colorFilterFromName(const std::string& text, ColorFilter& outFilter) noexcept;
+
+    // Full-screen post-processing applied to whatever a camera renders.
+    // Shared by Camera and Cine Camera entities - a cinematic look is not a
+    // property of which KIND of camera it is, and wanting the same grade on
+    // gameplay as on a cutscene is the normal case, not the exception.
+    //
+    // Every effect is off at its default value, so an existing scene renders
+    // exactly as it did before this existed, and `enabled` gates the whole
+    // pass so the shader is skipped entirely when nothing is configured.
+    struct CameraEffects
+    {
+        bool enabled = false;
+
+        // --- Colour ---
+        ColorFilter colorFilter = ColorFilter::None;
+        float filterStrength = 1.0F;      // 0..1 blend toward the filtered look
+        glm::vec3 tintColor{1.0F, 1.0F, 1.0F};
+        float tintStrength = 0.0F;        // 0..1
+        // Luminance-mapped gradient (duotone / colour grade). The image is
+        // sampled left-to-right by pixel brightness, so a dark-blue -> orange
+        // strip gives a classic teal-and-orange grade. Relative to
+        // projectRoot; empty disables it.
+        std::string gradientTexturePath;
+        float gradientStrength = 0.0F;    // 0..1
+
+        // --- Grade ---
+        float brightness = 0.0F;          // -1..1 added
+        float contrast = 1.0F;            // 0..3 around mid grey
+        float saturation = 1.0F;          // 0..3
+
+        // --- Film ---
+        float grainAmount = 0.0F;         // 0..1 animated noise
+        float grainSize = 1.5F;           // pixels per noise cell
+        float flickerAmount = 0.0F;       // 0..1 exposure wobble
+        float flickerSpeed = 11.0F;       // Hz-ish
+        float scanlineAmount = 0.0F;      // 0..1
+        float scanlineCount = 400.0F;     // lines down the screen
+        float vignetteAmount = 0.0F;      // 0..1 corner darkening
+        float vignetteSoftness = 0.55F;   // 0..1 edge falloff
+        float chromaticAberration = 0.0F; // 0..1 RGB split at the edges
+
+        [[nodiscard]] bool anyEnabled() const noexcept
+        {
+            return enabled
+                && (colorFilter != ColorFilter::None || tintStrength > 0.0F || gradientStrength > 0.0F
+                    || brightness != 0.0F || contrast != 1.0F || saturation != 1.0F || grainAmount > 0.0F
+                    || flickerAmount > 0.0F || scanlineAmount > 0.0F || vignetteAmount > 0.0F
+                    || chromaticAberration > 0.0F);
+        }
+    };
+
     // Data for an entity with isCamera=true (see below). Distinct from
     // isCineCamera: that one is a cutscene path-follower whose "path" is its
     // own animation keyframes, with no lens settings at all. This is a real
@@ -99,6 +168,23 @@ namespace gameforger::editor
         // clears the flag on every other camera (see EditorScene.cpp) so the
         // "exactly one" invariant cannot be broken from the UI or the AI.
         bool isMainCamera = false;
+        // Game vs Cine is a MODE on one camera object, not two different
+        // kinds of object. The same camera can film gameplay attached to a
+        // player, or fly a cutscene path, and switching between the two is a
+        // checkbox rather than deleting one object and building another.
+        //
+        // Cine mode means: this camera follows its own EntityAnimation
+        // keyframes as a path, and the Storyboard panel can capture shots
+        // from it. It changes nothing about the lens or the effects stack -
+        // those work identically in both modes, which is the point.
+        //
+        // The older standalone `SceneEntity::isCineCamera` flag still loads
+        // and still works; it is what scenes built before this unification
+        // carry. New cameras use this instead.
+        bool cineMode = false;
+        // Full-screen grade/film stack - the "lens layers" applied in order
+        // over whatever this camera renders. Available in BOTH modes.
+        CameraEffects effects;
     };
 
     // Screen-space UI kinds. Deliberately a small fixed set rather than a

@@ -94,6 +94,9 @@ namespace
     using gameforger::editor::AddTagCommand;
     using gameforger::editor::AttachScriptCommand;
     using gameforger::editor::CreateEntityCommand;
+    using gameforger::editor::CameraEffects;
+    using gameforger::editor::ColorFilter;
+    using gameforger::editor::colorFilterName;
     using gameforger::editor::CreateCameraCommand;
     using gameforger::editor::CreateLightCommand;
     using gameforger::editor::CreateUIElementCommand;
@@ -3589,6 +3592,188 @@ namespace
     // Play, if a script has claimed the camera (self.camera:setMode(...)),
     // this follows that entity instead of using the fixed default framing,
     // and holding right mouse over the image looks around (see PlayModeState).
+    // The "lens layers" Inspector block, shared by Camera and Cine Camera so
+    // the two can never drift apart in what they expose.
+    //
+    // These fields are written straight through findEntityMutable rather than
+    // the command bus - the same route the Appearance material section already
+    // takes. A colour grade is dragged, not committed: routing 17 sliders'
+    // worth of continuous drag through validated, undoable commands would put
+    // hundreds of steps in the undo stack for one look. Stated here because it
+    // IS an exception to this project's normal rule.
+    void drawCameraEffectsSection(
+        const SceneEntity& entity,
+        EditorScene& scene,
+        const char* label,
+        const CameraEffects& current,
+        const std::filesystem::path& projectRoot,
+        const HWND nativeWindowHandle)
+    {
+        ImGui::Separator();
+        ImGui::PushID(label);
+
+        CameraEffects working = current;
+        bool changed = false;
+
+        changed |= ImGui::Checkbox("Enable Lens Layers", &working.enabled);
+        if (!working.enabled)
+        {
+            ImGui::TextDisabled("Grade, filters, grain, flicker, scanlines and vignette. Off costs nothing.");
+        }
+
+        if (working.enabled)
+        {
+            if (ImGui::CollapsingHeader("Colour", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                int filterIndex = static_cast<int>(working.colorFilter);
+                if (ImGui::Combo(
+                        "Filter", &filterIndex,
+                        "None\0Black and White\0Sepia\0Technicolor\0Cold\0Warm\0Infrared\0Heat Map\0"))
+                {
+                    working.colorFilter = static_cast<ColorFilter>(filterIndex);
+                    changed = true;
+                }
+                if (working.colorFilter != ColorFilter::None)
+                {
+                    changed |= ImGui::SliderFloat("Filter Strength", &working.filterStrength, 0.0F, 1.0F);
+                }
+                changed |= ImGui::ColorEdit3("Tint", &working.tintColor.x);
+                changed |= ImGui::SliderFloat("Tint Strength", &working.tintStrength, 0.0F, 1.0F);
+
+                ImGui::Text(
+                    "Gradient Map: %s",
+                    working.gradientTexturePath.empty() ? "(none)" : working.gradientTexturePath.c_str());
+                ImGui::TextDisabled("A left-to-right colour strip. Pixel brightness picks a colour along it.");
+                if (ImGui::Button("Choose Gradient...", ImVec2(-1.0F, 0.0F)))
+                {
+                    const std::filesystem::path texturesDirectory = projectRoot / "Game" / "Textures";
+                    if (const std::optional<std::filesystem::path> picked =
+                            showOpenImageDialog(nativeWindowHandle, texturesDirectory))
+                    {
+                        if (const std::optional<std::string> imported =
+                                importTextureIntoProject(*picked, projectRoot))
+                        {
+                            working.gradientTexturePath = *imported;
+                            changed = true;
+                        }
+                    }
+                }
+                if (!working.gradientTexturePath.empty())
+                {
+                    if (ImGui::Button("Clear Gradient", ImVec2(-1.0F, 0.0F)))
+                    {
+                        working.gradientTexturePath.clear();
+                        changed = true;
+                    }
+                    changed |= ImGui::SliderFloat("Gradient Strength", &working.gradientStrength, 0.0F, 1.0F);
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Grade"))
+            {
+                changed |= ImGui::SliderFloat("Brightness", &working.brightness, -1.0F, 1.0F);
+                changed |= ImGui::SliderFloat("Contrast", &working.contrast, 0.0F, 3.0F);
+                changed |= ImGui::SliderFloat("Saturation", &working.saturation, 0.0F, 3.0F);
+            }
+
+            if (ImGui::CollapsingHeader("Film", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                changed |= ImGui::SliderFloat("Grain", &working.grainAmount, 0.0F, 1.0F);
+                if (working.grainAmount > 0.0F)
+                {
+                    changed |= ImGui::SliderFloat("Grain Size (px)", &working.grainSize, 1.0F, 8.0F);
+                }
+                changed |= ImGui::SliderFloat("Flicker", &working.flickerAmount, 0.0F, 1.0F);
+                if (working.flickerAmount > 0.0F)
+                {
+                    changed |= ImGui::SliderFloat("Flicker Speed", &working.flickerSpeed, 0.5F, 30.0F);
+                }
+                changed |= ImGui::SliderFloat("Scanlines", &working.scanlineAmount, 0.0F, 1.0F);
+                if (working.scanlineAmount > 0.0F)
+                {
+                    changed |= ImGui::SliderFloat("Scanline Count", &working.scanlineCount, 60.0F, 1200.0F);
+                }
+                changed |= ImGui::SliderFloat("Vignette", &working.vignetteAmount, 0.0F, 1.0F);
+                if (working.vignetteAmount > 0.0F)
+                {
+                    changed |= ImGui::SliderFloat("Vignette Softness", &working.vignetteSoftness, 0.0F, 1.0F);
+                }
+                changed |= ImGui::SliderFloat("Chromatic Aberration", &working.chromaticAberration, 0.0F, 1.0F);
+            }
+
+            // One-click starting points. A stack this size is much easier to
+            // reach from a named look than from 17 zeroed sliders.
+            if (ImGui::CollapsingHeader("Presets"))
+            {
+                const auto preset = [&](const char* name, const CameraEffects& value)
+                {
+                    if (ImGui::Button(name, ImVec2(-1.0F, 0.0F)))
+                    {
+                        working = value;
+                        working.enabled = true;
+                        changed = true;
+                    }
+                };
+                CameraEffects oldFilm;
+                oldFilm.colorFilter = ColorFilter::Sepia;
+                oldFilm.grainAmount = 0.55F;
+                oldFilm.flickerAmount = 0.45F;
+                oldFilm.vignetteAmount = 0.6F;
+                oldFilm.contrast = 1.25F;
+                preset("Old Film", oldFilm);
+
+                CameraEffects noir;
+                noir.colorFilter = ColorFilter::BlackAndWhite;
+                noir.contrast = 1.5F;
+                noir.vignetteAmount = 0.7F;
+                noir.grainAmount = 0.25F;
+                preset("Film Noir", noir);
+
+                CameraEffects crt;
+                crt.scanlineAmount = 0.6F;
+                crt.scanlineCount = 620.0F;
+                crt.chromaticAberration = 0.35F;
+                crt.vignetteAmount = 0.45F;
+                preset("CRT Monitor", crt);
+
+                CameraEffects thermal;
+                thermal.colorFilter = ColorFilter::HeatMap;
+                thermal.grainAmount = 0.2F;
+                thermal.vignetteAmount = 0.5F;
+                preset("Thermal / Heat Map", thermal);
+
+                CameraEffects night;
+                night.colorFilter = ColorFilter::Cold;
+                night.brightness = -0.05F;
+                night.saturation = 0.7F;
+                night.vignetteAmount = 0.4F;
+                preset("Cold Night", night);
+
+                CameraEffects blockbuster;
+                blockbuster.contrast = 1.15F;
+                blockbuster.saturation = 1.15F;
+                blockbuster.vignetteAmount = 0.3F;
+                preset("Clean Blockbuster", blockbuster);
+            }
+        }
+
+        if (changed)
+        {
+            if (SceneEntity* mutableEntity = scene.findEntityMutable(entity.id))
+            {
+                if (std::string(label) == "CineCamera")
+                {
+                    mutableEntity->cineEffects = working;
+                }
+                else
+                {
+                    mutableEntity->camera.effects = working;
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+
     // Screen position an anchor resolves to inside a rect of `size`, before
     // the element's own pixel offset is added.
     ImVec2 uiAnchorPoint(const UIAnchor anchor, const ImVec2& origin, const ImVec2& size)
@@ -3841,6 +4026,15 @@ namespace
             // one whose UI children should draw this frame.
             const SceneEntity* uiHostCamera =
                 followedEntity != nullptr ? followedEntity : mainCameraEntity;
+
+            // Lens layers come from the Main Camera even when a script has
+            // claimed the view: the script drives WHERE the camera is, the
+            // camera object still owns what it LOOKS like. The Cine Camera
+            // Preview window renders separately and sets its own, so a
+            // cutscene grade never leaks into gameplay here.
+            renderer.setCameraEffects(
+                mainCameraEntity != nullptr ? mainCameraEntity->camera.effects : CameraEffects{},
+                projectRoot);
             // Standard FPS convention: don't render the player's own body
             // mesh from inside its own head. Automatic, tied to whichever
             // mode the script itself reported via self.camera:setMode(...)
@@ -4756,6 +4950,15 @@ namespace
                     cameraLookingAt(liveCamera->position, liveCamera->position + forward * 10.0F);
                 renderer.setCamera(shotCamera.yaw, shotCamera.pitch, shotCamera.distance, shotCamera.target);
             }
+            // The previewed cine camera's own lens layers. This is the window
+            // where a cinematic grade is meant to be judged, so it renders
+            // with the effects rather than showing an ungraded preview of a
+            // shot that will ship graded.
+            renderer.setCameraEffects(
+                liveCameraValid
+                    ? (liveCamera->isCineCamera ? liveCamera->cineEffects : liveCamera->camera.effects)
+                    : CameraEffects{},
+                projectRoot);
             renderer.render(scene.entities(), {}, projectRoot);
             ImGui::Image(
                 static_cast<ImTextureID>(renderer.texture()), available, ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
@@ -5853,7 +6056,40 @@ namespace
                     entity.name, "Camera", "clearColor",
                     glm::vec3(clearColor[0], clearColor[1], clearColor[2])});
             }
+            bool cineMode = entity.camera.cineMode;
+            if (ImGui::Checkbox("Cine Mode (cutscene path)", &cineMode))
+            {
+                if (SceneEntity* mutableEntity = scene.findEntityMutable(entity.id))
+                {
+                    mutableEntity->camera.cineMode = cineMode;
+                    // A cine camera needs an animation to be a path at all,
+                    // so turning the mode on enables one rather than leaving
+                    // the user wondering why Record does nothing.
+                    if (cineMode)
+                    {
+                        mutableEntity->animation.enabled = true;
+                    }
+                }
+            }
+            ImGui::TextDisabled(
+                entity.camera.cineMode
+                    ? "Follows its own Animation keyframes as a camera path. Record on the Animation tab."
+                    : "Films gameplay. Tick Cine Mode to fly it along a recorded path instead.");
             ImGui::TextDisabled("Right-click this camera in the Hierarchy to add a crosshair or HUD.");
+
+            drawCameraEffectsSection(
+                entity, scene, "Camera", entity.camera.effects, projectRoot, nativeWindowHandle);
+        }
+
+        if (entity.isCineCamera)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Cine Camera");
+            ImGui::TextDisabled(
+                "Older standalone cine camera. New scenes can use one Camera with Cine Mode instead - "
+                "same lens layers, and it can film gameplay too.");
+            drawCameraEffectsSection(
+                entity, scene, "CineCamera", entity.cineEffects, projectRoot, nativeWindowHandle);
         }
 
         if (entity.isUIElement)
@@ -8887,6 +9123,11 @@ namespace
 
         if (viewportReady)
         {
+            // The authoring Viewport is deliberately NEVER graded - you
+            // cannot judge a colour or place an object accurately through a
+            // heat map or a heavy vignette. Effects belong to what the PLAYER
+            // sees (Game view) and to the cine preview.
+            viewportRenderer.setCameraEffects(CameraEffects{}, projectRoot);
             viewportRenderer.render(scene.entities(), selection.multiSelectedIds, projectRoot);
             ImGui::Image(
                 static_cast<ImTextureID>(viewportRenderer.texture()),

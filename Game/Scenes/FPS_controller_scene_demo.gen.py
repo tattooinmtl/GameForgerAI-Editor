@@ -72,7 +72,14 @@ add("GameManager", prim="empty", pos=[0, 0, -6],
 # ---------- main camera + viewmodel children ----------
 add("MainCamera", pos=[0, 1.75, 0], rot=[0, 0, 0],
     camera={"fieldOfView": 68.0, "nearClip": 0.05, "farClip": 400.0,
-            "clearColor": [0.05, 0.06, 0.09], "isMainCamera": True})
+            "clearColor": [0.05, 0.06, 0.09], "isMainCamera": True,
+            # Lens layers. Restrained on purpose - the demo should show that
+            # the stack works without hiding the scene behind a heavy grade.
+            # The Inspector's Presets list has Old Film, Noir, CRT, Thermal.
+            "effects": {"enabled": True, "colorFilter": "none", "contrast": 1.12,
+                        "saturation": 1.10, "grainAmount": 0.10, "grainSize": 2.0,
+                        "vignetteAmount": 0.35, "vignetteSoftness": 0.55,
+                        "chromaticAberration": 0.08}})
 
 # Viewmodel placement. These numbers were tuned by running the demo and
 # looking at it, not derived - a viewmodel is judged by eye. The rule of thumb

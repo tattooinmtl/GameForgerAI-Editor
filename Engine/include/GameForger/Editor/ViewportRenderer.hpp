@@ -2,6 +2,7 @@
 
 #include <array>
 #include <filesystem>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -54,6 +55,16 @@ namespace gameforger::editor
 		// Defaults true so the Editor is unaffected; GameForgerRuntime turns
 		// it off, because a shipped game must not show authoring furniture.
 		void setShowEditorGizmos(bool show) noexcept { showEditorGizmos_ = show; }
+		// The "lens layers" - grade, named filter, gradient map, grain,
+		// flicker, scanlines, vignette - applied as one full-screen pass over
+		// the rendered image. Set from the active camera's CameraEffects each
+		// frame; pass a default-constructed one (or leave it) for no post at
+		// all, in which case the pass is skipped entirely rather than run as
+		// an identity transform.
+		//
+		// `projectRoot` resolves the gradient texture, cached by path like
+		// every other texture here.
+		void setCameraEffects(const CameraEffects& effects, const std::filesystem::path& projectRoot);
 		void shutdown() noexcept;
 
 		// Blits this renderer's own offscreen color buffer (as of the most
@@ -178,6 +189,26 @@ namespace gameforger::editor
 		// freezing in the bind pose.
 		GLuint shadowDepthShaderProgram_ = 0;
 		GLuint shadowDepthSkinnedShaderProgram_ = 0;
+
+		// Post-processing. The scene renders into sceneFramebuffer_, then the
+		// post pass writes into framebuffer_/colorTexture_, which is what
+		// texture() hands to ImGui and what blitToCurrentFramebuffer() copies.
+		// With no effects configured the scene renders straight into
+		// framebuffer_ as it always did, so the extra buffer costs nothing
+		// when it is not used.
+		GLuint postShaderProgram_ = 0;
+		GLuint postVertexArray_ = 0;     // empty VAO; the triangle is gl_VertexID maths
+		GLuint sceneFramebuffer_ = 0;
+		GLuint sceneTexture_ = 0;
+		GLuint sceneDepthBuffer_ = 0;
+		CameraEffects cameraEffects_;
+		std::filesystem::path effectsProjectRoot_;
+		// Cached gradient-map textures, keyed by project-relative path - the
+		// same load-once pattern the terrain layers and icons already use.
+		std::unordered_map<std::string, GLuint> gradientTextureCache_;
+		[[nodiscard]] GLuint ensureGradientTextureGpu(const std::string& relativePath);
+		[[nodiscard]] bool createPostResources(int width, int height);
+		void runPostProcess();
 
 		GLuint shadowAtlasFramebuffer_ = 0;
 		GLuint shadowAtlasTexture_ = 0;

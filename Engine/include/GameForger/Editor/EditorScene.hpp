@@ -318,6 +318,11 @@ namespace gameforger::editor
 		// own EntityAnimation keyframes (see `animation` above) - no separate
 		// waypoint data structure. See CineShot/StoryboardState in main.cpp.
 		bool isCineCamera = false;
+		// Cine cameras carry the same effects stack as a real Camera - a
+		// cinematic grade is not a property of which kind of camera it is, and
+		// matching a cutscene's look to gameplay is the normal case. Stored
+		// separately from `camera` because an entity can be one or the other.
+		CameraEffects cineEffects;
 		// When true, this entity is a real game Light (see LightData above) -
 		// renders as a wireframe gizmo instead of a solid primitive, and
 		// contributes to shading for every other entity. `primitive` is

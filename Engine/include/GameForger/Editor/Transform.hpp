@@ -20,6 +20,18 @@ namespace gameforger::editor
 	// the user is actually dragging.
 	[[nodiscard]] glm::mat4 composeEntityPivotFrame(const SceneEntity& entity);
 
+	// The entity's own forward axis in world space: local +Z (this project's
+	// forward convention, the same axis the cine-camera icon points down)
+	// rotated by the entity's full XYZ euler rotation.
+	//
+	// NOT the same as the script API's self.entity:getForward(), which is
+	// yaw-only by design - a character walks along the ground and must not
+	// drift up or down when the camera pitches. A light or a camera genuinely
+	// does need pitch, so this is a separate function rather than a change to
+	// that one, whose yaw-only behaviour is locked in by
+	// testGetRightMatchesFpsCamera.
+	[[nodiscard]] glm::vec3 entityForward(const SceneEntity& entity);
+
 	// Maps preset names ("center", "left", "top-right", ...) to a pivotOffset in
 	// the primitive's [-1,1] local space. Returns std::nullopt for unknown names.
 	[[nodiscard]] std::optional<glm::vec3> resolvePivotPreset(const std::string& presetName);

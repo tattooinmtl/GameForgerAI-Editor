@@ -4,6 +4,8 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <string>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -12,6 +14,7 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat3x3.hpp>
@@ -55,6 +58,141 @@ void main()
 }
 )glsl";
 
+		// Shared lighting block, textually prepended to every lit fragment
+		// shader (see makeLitFragmentShader below). Before this existed, all
+		// four fragment shaders inlined `normalize(vec3(0.4, 0.85, 0.35))` as
+		// the one and only light, five times over - changing the sun meant
+		// editing five string literals, and there was no way to author a
+		// light at all.
+		//
+		// Deliberately NOT physically-based. This renderer has no PBR, no HDR
+		// and no tonemapping, so a true inverse-square falloff would make a
+		// point light at intensity 1 essentially invisible two metres away
+		// and force absurd intensity values to compensate. Falloff here is a
+		// smooth window: full brightness at the light, zero at `range`, which
+		// is what the intensity slider needs to feel predictable.
+		//
+		// Shadows come from ONE atlas texture rather than an array of
+		// samplers: GLSL cannot index a sampler array with a non-constant
+		// expression without extra extensions, and a per-light tile in a
+		// single texture sidesteps that entirely while keeping one texture
+		// unit bound for any number of lights.
+		constexpr const char* lightingCommonSource = R"glsl(
+#define GF_MAX_LIGHTS 8
+
+uniform int lightCount;
+uniform int lightType[GF_MAX_LIGHTS];        // 0 = directional, 1 = point, 2 = spot
+uniform vec3 lightDirection[GF_MAX_LIGHTS];  // normalized, world space, points AWAY from the light
+uniform vec3 lightPosition[GF_MAX_LIGHTS];
+uniform vec3 lightColor[GF_MAX_LIGHTS];      // color premultiplied by intensity
+uniform float lightRange[GF_MAX_LIGHTS];
+uniform float lightCosInner[GF_MAX_LIGHTS];
+uniform float lightCosOuter[GF_MAX_LIGHTS];
+uniform int lightShadowSlot[GF_MAX_LIGHTS];  // atlas tile index, or -1 for no shadow
+uniform float lightShadowBias[GF_MAX_LIGHTS];
+uniform mat4 lightViewProjection[GF_MAX_LIGHTS];
+uniform vec3 ambientColor;
+
+uniform sampler2D shadowAtlas;
+uniform vec2 shadowTileScale;   // one tile's size as a fraction of the whole atlas
+uniform int shadowTilesPerRow;
+
+// 1.0 = fully lit, 0.0 = fully shadowed. 3x3 PCF inside this light's own
+// atlas tile; samples are clamped to the tile so a filter tap can never bleed
+// into a neighbouring light's depth.
+float gfShadowFactor(int index, vec3 worldPos, float normalDotLight)
+{
+	int slot = lightShadowSlot[index];
+	if (slot < 0)
+	{
+		return 1.0;
+	}
+	vec4 lightClip = lightViewProjection[index] * vec4(worldPos, 1.0);
+	if (lightClip.w <= 0.0)
+	{
+		return 1.0;
+	}
+	vec3 projected = lightClip.xyz / lightClip.w;
+	projected = projected * 0.5 + 0.5;
+	// Outside the light's own frustum: unshadowed rather than black, so a
+	// scene bigger than the shadow frustum degrades to "no shadow there"
+	// instead of a hard dark edge.
+	if (projected.z > 1.0 || projected.x < 0.0 || projected.x > 1.0
+		|| projected.y < 0.0 || projected.y > 1.0)
+	{
+		return 1.0;
+	}
+
+	int tileRow = slot / shadowTilesPerRow;
+	int tileColumn = slot - tileRow * shadowTilesPerRow;
+	vec2 tileOrigin = vec2(float(tileColumn), float(tileRow)) * shadowTileScale;
+
+	// Slope-scaled: a surface nearly edge-on to the light needs far more bias
+	// than one facing it, which is what stops acne without peter-panning.
+	float bias = max(lightShadowBias[index] * (1.0 - normalDotLight) * 4.0,
+		lightShadowBias[index] * 0.5);
+	vec2 atlasTexel = 1.0 / vec2(textureSize(shadowAtlas, 0));
+	vec2 tileLocalTexel = atlasTexel / shadowTileScale;
+
+	float lit = 0.0;
+	for (int y = -1; y <= 1; ++y)
+	{
+		for (int x = -1; x <= 1; ++x)
+		{
+			vec2 local = clamp(projected.xy + vec2(float(x), float(y)) * tileLocalTexel,
+				vec2(0.0015), vec2(0.9985));
+			float occluderDepth = texture(shadowAtlas, tileOrigin + local * shadowTileScale).r;
+			lit += (projected.z - bias) > occluderDepth ? 0.0 : 1.0;
+		}
+	}
+	return lit / 9.0;
+}
+
+vec3 gfShade(vec3 baseColor, vec3 rawNormal, vec3 worldPos)
+{
+	vec3 surfaceNormal = normalize(rawNormal);
+	vec3 result = ambientColor * baseColor;
+	for (int i = 0; i < lightCount; ++i)
+	{
+		vec3 toLight;
+		float attenuation = 1.0;
+		if (lightType[i] == 0)
+		{
+			toLight = -lightDirection[i];
+		}
+		else
+		{
+			vec3 delta = lightPosition[i] - worldPos;
+			float distanceToLight = length(delta);
+			if (distanceToLight > lightRange[i])
+			{
+				continue;
+			}
+			toLight = delta / max(distanceToLight, 0.0001);
+			float normalized = clamp(distanceToLight / max(lightRange[i], 0.0001), 0.0, 1.0);
+			float window = 1.0 - normalized * normalized;
+			attenuation = window * window;
+			if (lightType[i] == 2)
+			{
+				float cosAngle = dot(-toLight, lightDirection[i]);
+				float cone = clamp(
+					(cosAngle - lightCosOuter[i]) / max(lightCosInner[i] - lightCosOuter[i], 0.0001),
+					0.0, 1.0);
+				attenuation *= cone * cone;
+			}
+		}
+		float normalDotLight = max(dot(surfaceNormal, toLight), 0.0);
+		if (normalDotLight <= 0.0 || attenuation <= 0.0)
+		{
+			continue;
+		}
+		float shadow = gfShadowFactor(i, worldPos, normalDotLight);
+		result += baseColor * lightColor[i] * normalDotLight * attenuation * shadow;
+	}
+	return result;
+}
+)glsl";
+
 		// Lit position+normal pipeline used to draw scene entities.
 		constexpr const char* meshVertexShaderSource = R"glsl(
 #version 460 core
@@ -64,26 +202,72 @@ uniform mat4 model;
 uniform mat4 viewProjection;
 uniform mat3 normalMatrix;
 out vec3 worldNormal;
+out vec3 worldPosition;
 
 void main()
 {
 	worldNormal = normalMatrix * normal;
-	gl_Position = viewProjection * model * vec4(position, 1.0);
+	vec4 worldPos4 = model * vec4(position, 1.0);
+	worldPosition = worldPos4.xyz;
+	gl_Position = viewProjection * worldPos4;
 }
 )glsl";
 
 		constexpr const char* meshFragmentShaderSource = R"glsl(
-#version 460 core
 in vec3 worldNormal;
+in vec3 worldPosition;
 uniform vec3 baseColor;
 out vec4 fragmentColor;
 
 void main()
 {
-	vec3 lightDirection = normalize(vec3(0.4, 0.85, 0.35));
-	float diffuse = max(dot(normalize(worldNormal), lightDirection), 0.0);
-	vec3 shaded = baseColor * (0.35 + 0.65 * diffuse);
-	fragmentColor = vec4(shaded, 1.0);
+	fragmentColor = vec4(gfShade(baseColor, worldNormal, worldPosition), 1.0);
+}
+)glsl";
+
+		// Depth-only pass that fills a shadow-atlas tile. No fragment work at
+		// all - the default depth write is the entire point - so this shares
+		// one trivial fragment stage between the static and skinned variants.
+		constexpr const char* shadowDepthVertexShaderSource = R"glsl(
+#version 460 core
+layout (location = 0) in vec3 position;
+uniform mat4 model;
+uniform mat4 lightViewProjection;
+
+void main()
+{
+	gl_Position = lightViewProjection * model * vec4(position, 1.0);
+}
+)glsl";
+
+		// Skinned casters need the same bone blend the visible pass uses, or
+		// an animated character's shadow would freeze in its bind pose while
+		// the character itself moves.
+		constexpr const char* shadowDepthSkinnedVertexShaderSource = R"glsl(
+#version 460 core
+layout (location = 0) in vec3 position;
+layout (location = 2) in vec4 boneIndices;
+layout (location = 3) in vec4 boneWeights;
+uniform mat4 model;
+uniform mat4 lightViewProjection;
+uniform mat4 boneMatrices[128];
+
+void main()
+{
+	mat4 skinMatrix =
+		boneWeights.x * boneMatrices[int(boneIndices.x)] +
+		boneWeights.y * boneMatrices[int(boneIndices.y)] +
+		boneWeights.z * boneMatrices[int(boneIndices.z)] +
+		boneWeights.w * boneMatrices[int(boneIndices.w)];
+	gl_Position = lightViewProjection * model * (skinMatrix * vec4(position, 1.0));
+}
+)glsl";
+
+		constexpr const char* shadowDepthFragmentShaderSource = R"glsl(
+#version 460 core
+
+void main()
+{
 }
 )glsl";
 
@@ -112,6 +296,7 @@ uniform mat4 boneMatrices[128];
 // it to the normal in lockstep with skinMatrix's vertex transform.
 uniform mat3 boneInverseTransposeMatrices[128];
 out vec3 worldNormal;
+out vec3 worldPosition;
 
 void main()
 {
@@ -128,7 +313,9 @@ void main()
 	vec4 skinnedPosition = skinMatrix * vec4(position, 1.0);
 	vec3 skinnedNormal = skinNormalMatrix * normal;
 	worldNormal = normalMatrix * skinnedNormal;
-	gl_Position = viewProjection * model * skinnedPosition;
+	vec4 worldPos4 = model * skinnedPosition;
+	worldPosition = worldPos4.xyz;
+	gl_Position = viewProjection * worldPos4;
 }
 )glsl";
 
@@ -170,7 +357,6 @@ void main()
 		// occlusion mapping either - it's a subtle shading multiplier for
 		// visible "3D effect" without that complexity.
 		constexpr const char* terrainFragmentShaderSource = R"glsl(
-#version 460 core
 in vec3 worldNormal;
 in vec3 worldPosition;
 in vec3 vertexSplatWeight;
@@ -193,9 +379,7 @@ void main()
 	float weightSum = vertexSplatWeight.x + vertexSplatWeight.y + vertexSplatWeight.z;
 	if (weightSum < 0.0001)
 	{
-		vec3 lightDirection = normalize(vec3(0.4, 0.85, 0.35));
-		float diffuseTerm = max(dot(normalize(worldNormal), lightDirection), 0.0);
-		fragmentColor = vec4(fallbackColor * (0.35 + 0.65 * diffuseTerm), 1.0);
+		fragmentColor = vec4(gfShade(fallbackColor, worldNormal, worldPosition), 1.0);
 		return;
 	}
 	vec3 weight = vertexSplatWeight / weightSum;
@@ -217,11 +401,11 @@ void main()
 
 	vec3 bumpedNormal = normalize(worldNormal + vec3(tangentNormal.x, 0.0, tangentNormal.y) * 0.6);
 
-	vec3 lightDirection = normalize(vec3(0.4, 0.85, 0.35));
-	float diffuseTerm = max(dot(bumpedNormal, lightDirection), 0.0);
+	// heightShade stays a plain multiplier on albedo (a cheap AO-ish cue),
+	// applied BEFORE lighting so it darkens the material rather than fighting
+	// the light rig.
 	float heightShade = 0.85 + 0.3 * (heightBoost - 0.5);
-	vec3 shaded = diffuseColor * heightShade * (0.35 + 0.65 * diffuseTerm);
-	fragmentColor = vec4(shaded, 1.0);
+	fragmentColor = vec4(gfShade(diffuseColor * heightShade, bumpedNormal, worldPosition), 1.0);
 }
 )glsl";
 
@@ -238,6 +422,7 @@ uniform mat4 model;
 uniform mat4 viewProjection;
 uniform mat3 normalMatrix;
 out vec3 worldNormal;
+out vec3 worldPosition;
 out vec3 localPosition;
 out vec3 localNormal;
 
@@ -246,7 +431,9 @@ void main()
 	worldNormal = normalMatrix * normal;
 	localPosition = position;
 	localNormal = normal;
-	gl_Position = viewProjection * model * vec4(position, 1.0);
+	vec4 worldPos4 = model * vec4(position, 1.0);
+	worldPosition = worldPos4.xyz;
+	gl_Position = viewProjection * worldPos4;
 }
 )glsl";
 
@@ -264,8 +451,8 @@ void main()
 		// reoriented into object space before blending, real extra
 		// complexity for a secondary visual detail on non-terrain objects.
 		constexpr const char* texturedMeshFragmentShaderSource = R"glsl(
-#version 460 core
 in vec3 worldNormal;
+in vec3 worldPosition;
 in vec3 localPosition;
 in vec3 localNormal;
 uniform sampler2D diffuseTex0;
@@ -292,9 +479,7 @@ void main()
 	float weightSum = materialWeight.x + materialWeight.y + materialWeight.z;
 	if (weightSum < 0.0001)
 	{
-		vec3 lightDirection = normalize(vec3(0.4, 0.85, 0.35));
-		float diffuseTerm = max(dot(normalize(worldNormal), lightDirection), 0.0);
-		fragmentColor = vec4(fallbackColor * (0.35 + 0.65 * diffuseTerm), 1.0);
+		fragmentColor = vec4(gfShade(fallbackColor, worldNormal, worldPosition), 1.0);
 		return;
 	}
 	vec3 layerWeight = materialWeight / weightSum;
@@ -311,11 +496,8 @@ void main()
 		sampleTriplanar(heightTex1, triplanarBlend, localPosition).r * layerWeight.y +
 		sampleTriplanar(heightTex2, triplanarBlend, localPosition).r * layerWeight.z;
 
-	vec3 lightDirection = normalize(vec3(0.4, 0.85, 0.35));
-	float diffuseTerm = max(dot(normalize(worldNormal), lightDirection), 0.0);
 	float heightShade = 0.85 + 0.3 * (heightBoost - 0.5);
-	vec3 shaded = diffuseColor * heightShade * (0.35 + 0.65 * diffuseTerm);
-	fragmentColor = vec4(shaded, 1.0);
+	fragmentColor = vec4(gfShade(diffuseColor * heightShade, worldNormal, worldPosition), 1.0);
 }
 )glsl";
 
@@ -514,6 +696,16 @@ void main()
 		createPrimitiveMeshes();
 		createOutlineMesh();
 		createCameraIconMesh();
+		createGizmoMeshes();
+
+		// A failed shadow atlas is NOT fatal: collectLights only hands out
+		// shadow slots when shadowAtlasTexture_ is non-zero, so the editor
+		// falls back to unshadowed lighting rather than refusing to open on a
+		// driver that won't give us a depth-only FBO.
+		if (!createShadowResources())
+		{
+			std::fprintf(stderr, "Shadow atlas unavailable - lighting will render without shadows.\n");
+		}
 
 		fallbackWhiteTexture_ = createSolidColorTexture(255, 255, 255);
 		fallbackFlatNormalTexture_ = createSolidColorTexture(128, 128, 255);
@@ -637,6 +829,143 @@ void main()
 		glEnableVertexAttribArray(1);
 		glBindVertexArray(0);
 		outlineVertexCount_ = static_cast<GLsizei>(vertices.size() / 6);
+	}
+
+	ViewportRenderer::GizmoMesh ViewportRenderer::uploadGizmoMesh(const std::vector<float>& vertices) const
+	{
+		GizmoMesh mesh;
+		if (vertices.empty())
+		{
+			return mesh;
+		}
+		glGenVertexArrays(1, &mesh.vertexArray);
+		glGenBuffers(1, &mesh.vertexBuffer);
+		glBindVertexArray(mesh.vertexArray);
+		glBindBuffer(GL_ARRAY_BUFFER, mesh.vertexBuffer);
+		glBufferData(
+			GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(),
+			GL_STATIC_DRAW);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(
+			1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+		glEnableVertexAttribArray(1);
+		glBindVertexArray(0);
+		mesh.vertexCount = static_cast<GLsizei>(vertices.size() / 6);
+		return mesh;
+	}
+
+	void ViewportRenderer::destroyGizmoMesh(GizmoMesh& mesh) const noexcept
+	{
+		if (mesh.vertexBuffer != 0)
+		{
+			glDeleteBuffers(1, &mesh.vertexBuffer);
+			mesh.vertexBuffer = 0;
+		}
+		if (mesh.vertexArray != 0)
+		{
+			glDeleteVertexArrays(1, &mesh.vertexArray);
+			mesh.vertexArray = 0;
+		}
+		mesh.vertexCount = 0;
+	}
+
+	void ViewportRenderer::createGizmoMeshes()
+	{
+		const auto segment =
+			[](std::vector<float>& out, const glm::vec3& a, const glm::vec3& b, const glm::vec3& color)
+		{
+			out.insert(out.end(), {a.x, a.y, a.z, color.r, color.g, color.b});
+			out.insert(out.end(), {b.x, b.y, b.z, color.r, color.g, color.b});
+		};
+		// A ring in the plane spanned by `axisU`/`axisV`. Used for the point
+		// light's three orthogonal rings and the spot cone's mouth.
+		const auto ring = [&segment](
+							  std::vector<float>& out, const glm::vec3& center, const glm::vec3& axisU,
+							  const glm::vec3& axisV, const float radius, const int steps,
+							  const glm::vec3& color)
+		{
+			for (int step = 0; step < steps; ++step)
+			{
+				const float a0 = glm::two_pi<float>() * static_cast<float>(step) / static_cast<float>(steps);
+				const float a1 =
+					glm::two_pi<float>() * static_cast<float>(step + 1) / static_cast<float>(steps);
+				segment(
+					out, center + (axisU * std::cos(a0) + axisV * std::sin(a0)) * radius,
+					center + (axisU * std::cos(a1) + axisV * std::sin(a1)) * radius, color);
+			}
+		};
+
+		// Empty: three axis crosshairs, X/Y/Z tinted the usual red/green/blue
+		// so it doubles as an orientation reference for whatever hangs off it.
+		{
+			std::vector<float> vertices;
+			segment(vertices, glm::vec3(-0.4F, 0, 0), glm::vec3(0.4F, 0, 0), glm::vec3(0.85F, 0.35F, 0.35F));
+			segment(vertices, glm::vec3(0, -0.4F, 0), glm::vec3(0, 0.4F, 0), glm::vec3(0.35F, 0.85F, 0.40F));
+			segment(vertices, glm::vec3(0, 0, -0.4F), glm::vec3(0, 0, 0.4F), glm::vec3(0.40F, 0.55F, 0.95F));
+			emptyGizmo_ = uploadGizmoMesh(vertices);
+		}
+
+		// Directional: a small sun disc with rays, plus a long line down local
+		// +Z showing exactly which way it points - the only thing that
+		// actually matters for a sun, since its position does not.
+		{
+			constexpr glm::vec3 sunColor{1.0F, 0.88F, 0.35F};
+			std::vector<float> vertices;
+			ring(vertices, glm::vec3(0.0F), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), 0.28F, 16, sunColor);
+			for (int step = 0; step < 8; ++step)
+			{
+				const float angle = glm::two_pi<float>() * static_cast<float>(step) / 8.0F;
+				const glm::vec3 direction(std::cos(angle), std::sin(angle), 0.0F);
+				segment(vertices, direction * 0.38F, direction * 0.58F, sunColor);
+			}
+			segment(vertices, glm::vec3(0.0F), glm::vec3(0.0F, 0.0F, 1.6F), sunColor);
+			directionalLightGizmo_ = uploadGizmoMesh(vertices);
+		}
+
+		// Point: three orthogonal rings read as a sphere from any angle. Unit
+		// radius, scaled to the light's range at draw time.
+		{
+			constexpr glm::vec3 pointColor{1.0F, 0.82F, 0.45F};
+			std::vector<float> vertices;
+			ring(vertices, glm::vec3(0.0F), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), 1.0F, 24, pointColor);
+			ring(vertices, glm::vec3(0.0F), glm::vec3(1, 0, 0), glm::vec3(0, 0, 1), 1.0F, 24, pointColor);
+			ring(vertices, glm::vec3(0.0F), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1), 1.0F, 24, pointColor);
+			pointLightGizmo_ = uploadGizmoMesh(vertices);
+		}
+
+		// Spot: a unit cone opening along local +Z. Built at 45 degrees and
+		// rescaled per light at draw time from its own outer cone angle, so
+		// the gizmo always shows the real cone the shader uses.
+		{
+			constexpr glm::vec3 spotColor{1.0F, 0.75F, 0.30F};
+			std::vector<float> vertices;
+			ring(vertices, glm::vec3(0, 0, 1), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), 1.0F, 24, spotColor);
+			for (int step = 0; step < 4; ++step)
+			{
+				const float angle = glm::two_pi<float>() * static_cast<float>(step) / 4.0F;
+				segment(
+					vertices, glm::vec3(0.0F), glm::vec3(std::cos(angle), std::sin(angle), 1.0F), spotColor);
+			}
+			spotLightGizmo_ = uploadGizmoMesh(vertices);
+		}
+
+		// UI element: a small screen-shaped rectangle with a corner tick. It
+		// marks where the element hangs in the hierarchy; the element itself
+		// draws as a 2D overlay in the Game view, not here.
+		{
+			constexpr glm::vec3 uiColor{0.55F, 0.85F, 1.0F};
+			std::vector<float> vertices;
+			const std::array<glm::vec3, 4> corners{
+				glm::vec3(-0.45F, -0.30F, 0.0F), glm::vec3(0.45F, -0.30F, 0.0F),
+				glm::vec3(0.45F, 0.30F, 0.0F), glm::vec3(-0.45F, 0.30F, 0.0F)};
+			for (std::size_t i = 0; i < corners.size(); ++i)
+			{
+				segment(vertices, corners[i], corners[(i + 1) % corners.size()], uiColor);
+			}
+			segment(vertices, glm::vec3(-0.45F, 0.30F, 0.0F), glm::vec3(-0.25F, 0.10F, 0.0F), uiColor);
+			uiElementGizmo_ = uploadGizmoMesh(vertices);
+		}
 	}
 
 	void ViewportRenderer::createCameraIconMesh()
@@ -805,6 +1134,12 @@ void main()
 			it = materialCache_.erase(it);
 		}
 
+		// Lights first: the shadow pass needs them resolved, and every lit
+		// program then uploads the same frameLights_ set, so the Viewport and
+		// the Game view can never disagree about the lighting.
+		collectLights(entities);
+		renderShadowMaps(entities, projectRoot, excludeEntityId);
+
 		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
 		glViewport(0, 0, width_, height_);
 		glEnable(GL_DEPTH_TEST);
@@ -826,6 +1161,16 @@ void main()
 		glBindVertexArray(gridVertexArray_);
 		glDrawArrays(GL_LINES, 0, gridVertexCount_);
 		glBindVertexArray(0);
+
+		// Every lit program gets the same light set. Done once per frame here
+		// rather than per entity - the uniforms don't vary per draw, and the
+		// four programs each keep their own copy of the uniform state.
+		for (const GLuint litProgram :
+			{meshShaderProgram_, skinnedMeshShaderProgram_, terrainShaderProgram_, texturedMeshShaderProgram_})
+		{
+			glUseProgram(litProgram);
+			uploadLightUniforms(litProgram);
+		}
 
 		glUseProgram(meshShaderProgram_);
 		const GLint modelLocation = glGetUniformLocation(meshShaderProgram_, "model");
@@ -1069,33 +1414,110 @@ void main()
 				continue;
 			}
 
-			// Cine-camera entities render as a wireframe icon (drawn below, in
-			// the line-shader pass) instead of a solid lit primitive.
-			if (entity.isCineCamera)
+			// Cine cameras, lights, cameras, UI elements and Empties have no
+			// solid mesh - they draw as wireframe gizmos in the line-shader
+			// pass below (UI elements draw as a screen overlay in the Game
+			// view and nothing at all here). One predicate covers all of them
+			// so a future gizmo kind cannot miss this check; before it existed
+			// only isCineCamera was tested here.
+			if (isGizmoOnlyEntity(entity))
 			{
 				continue;
 			}
 
 			const std::size_t meshIndex = static_cast<std::size_t>(entity.primitive);
+			// primitiveVertexArrays_ only holds the real meshes, so an enum
+			// value past the end (PrimitiveType::Empty) must never reach the
+			// index. isGizmoOnlyEntity above already returns for Empty; this
+			// is the second line of defence, because reading past the array
+			// would be a silent out-of-bounds rather than a visible bug.
+			if (meshIndex >= primitiveVertexArrays_.size())
+			{
+				continue;
+			}
 			glBindVertexArray(primitiveVertexArrays_[meshIndex]);
 			glDrawArrays(GL_TRIANGLES, 0, primitiveVertexCounts_[meshIndex]);
 		}
 		glBindVertexArray(0);
 		glUseProgram(0);
 
-		if (cameraIconVertexArray_ != 0)
+		// Wireframe gizmos for every entity kind with no solid mesh. Cine
+		// cameras and real cameras share the frustum icon; lights get a shape
+		// per type; Empties get axis crosshairs; UI elements get a screen
+		// marker. Grouped into one pass so the line program is bound once.
 		{
 			glUseProgram(lineShaderProgram_);
-			glBindVertexArray(cameraIconVertexArray_);
 			for (const SceneEntity& entity : entities)
 			{
-				if (!entity.active || !entity.isCineCamera)
+				if (!entity.active || !isGizmoOnlyEntity(entity))
 				{
 					continue;
 				}
-				const glm::mat4 iconMvp = viewProjection * composeEntityTransform(entity);
+
+				GLuint gizmoVertexArray = 0;
+				GLsizei gizmoVertexCount = 0;
+				// Gizmos are drawn at a size that means something (a point
+				// light's ring IS its range, a spot's cone IS its cone), not
+				// at the entity's authored scale - scaling a light has no
+				// effect on the light itself, so honouring it here would draw
+				// a shape that lies about what the light does.
+				glm::mat4 gizmoModel = composeEntityPivotFrame(entity);
+				gizmoModel = glm::scale(
+					gizmoModel, 1.0F / glm::max(glm::abs(entity.scale), glm::vec3(0.0001F)));
+
+				if (entity.isLight)
+				{
+					switch (entity.light.type)
+					{
+						case LightType::Directional:
+							gizmoVertexArray = directionalLightGizmo_.vertexArray;
+							gizmoVertexCount = directionalLightGizmo_.vertexCount;
+							break;
+						case LightType::Point:
+							gizmoVertexArray = pointLightGizmo_.vertexArray;
+							gizmoVertexCount = pointLightGizmo_.vertexCount;
+							gizmoModel = glm::scale(gizmoModel, glm::vec3(entity.light.range));
+							break;
+						case LightType::Spot:
+						{
+							gizmoVertexArray = spotLightGizmo_.vertexArray;
+							gizmoVertexCount = spotLightGizmo_.vertexCount;
+							// The mesh is a unit cone one unit deep; stretch it
+							// to the light's range and flare it to the real
+							// outer half-angle.
+							const float depth = entity.light.range;
+							const float radius =
+								depth * std::tan(glm::radians(
+											std::clamp(entity.light.outerConeDegrees, 1.0F, 89.0F)));
+							gizmoModel = glm::scale(gizmoModel, glm::vec3(radius, radius, depth));
+							break;
+						}
+					}
+				}
+				else if (entity.isCineCamera || entity.isCamera)
+				{
+					gizmoVertexArray = cameraIconVertexArray_;
+					gizmoVertexCount = cameraIconVertexCount_;
+				}
+				else if (entity.isUIElement)
+				{
+					gizmoVertexArray = uiElementGizmo_.vertexArray;
+					gizmoVertexCount = uiElementGizmo_.vertexCount;
+				}
+				else
+				{
+					gizmoVertexArray = emptyGizmo_.vertexArray;
+					gizmoVertexCount = emptyGizmo_.vertexCount;
+				}
+
+				if (gizmoVertexArray == 0 || gizmoVertexCount == 0)
+				{
+					continue;
+				}
+				const glm::mat4 iconMvp = viewProjection * gizmoModel;
 				glUniformMatrix4fv(lineMvpLocation, 1, GL_FALSE, glm::value_ptr(iconMvp));
-				glDrawArrays(GL_LINES, 0, cameraIconVertexCount_);
+				glBindVertexArray(gizmoVertexArray);
+				glDrawArrays(GL_LINES, 0, gizmoVertexCount);
 			}
 			glBindVertexArray(0);
 			glUseProgram(0);
@@ -1473,6 +1895,32 @@ void main()
 
 	void ViewportRenderer::shutdown() noexcept
 	{
+		if (shadowAtlasFramebuffer_ != 0)
+		{
+			glDeleteFramebuffers(1, &shadowAtlasFramebuffer_);
+			shadowAtlasFramebuffer_ = 0;
+		}
+		if (shadowAtlasTexture_ != 0)
+		{
+			glDeleteTextures(1, &shadowAtlasTexture_);
+			shadowAtlasTexture_ = 0;
+		}
+		if (shadowDepthShaderProgram_ != 0)
+		{
+			glDeleteProgram(shadowDepthShaderProgram_);
+			shadowDepthShaderProgram_ = 0;
+		}
+		if (shadowDepthSkinnedShaderProgram_ != 0)
+		{
+			glDeleteProgram(shadowDepthSkinnedShaderProgram_);
+			shadowDepthSkinnedShaderProgram_ = 0;
+		}
+		frameLights_.clear();
+		destroyGizmoMesh(emptyGizmo_);
+		destroyGizmoMesh(directionalLightGizmo_);
+		destroyGizmoMesh(pointLightGizmo_);
+		destroyGizmoMesh(spotLightGizmo_);
+		destroyGizmoMesh(uiElementGizmo_);
 		if (depthBuffer_ != 0)
 		{
 			glDeleteRenderbuffers(1, &depthBuffer_);
@@ -1684,57 +2132,459 @@ void main()
 
 	bool ViewportRenderer::createShaderPrograms()
 	{
-		lineShaderProgram_ = compileProgram(lineVertexShaderSource, lineFragmentShaderSource);
-		if (lineShaderProgram_ == 0)
+		// Every lit fragment stage is (version + shared lighting block + its
+		// own body). The bodies above deliberately omit `#version` so they
+		// can only be used through this helper - forgetting the lighting
+		// block would otherwise compile fine right up until gfShade() is
+		// called, in a shader that is only exercised by one entity type.
+		const auto makeLitFragmentShader = [](const char* body)
 		{
-			return false;
+			return std::string("#version 460 core\n") + lightingCommonSource + body;
+		};
+		const std::string litMeshFragment = makeLitFragmentShader(meshFragmentShaderSource);
+		const std::string litTerrainFragment = makeLitFragmentShader(terrainFragmentShaderSource);
+		const std::string litTexturedFragment = makeLitFragmentShader(texturedMeshFragmentShaderSource);
+
+		// Compile everything first, then commit. The previous version undid
+		// each earlier program by hand in every later failure branch, which is
+		// O(n^2) lines and grew a new branch per program; this is one cleanup
+		// path regardless of which stage fails.
+		struct ProgramSlot
+		{
+			GLuint* target;
+			const char* vertexSource;
+			const char* fragmentSource;
+		};
+		GLuint line = 0;
+		GLuint mesh = 0;
+		GLuint skinned = 0;
+		GLuint terrain = 0;
+		GLuint textured = 0;
+		GLuint shadowDepth = 0;
+		GLuint shadowDepthSkinned = 0;
+		const std::array<ProgramSlot, 7> slots{
+			ProgramSlot{&line, lineVertexShaderSource, lineFragmentShaderSource},
+			ProgramSlot{&mesh, meshVertexShaderSource, litMeshFragment.c_str()},
+			ProgramSlot{&skinned, skinnedMeshVertexShaderSource, litMeshFragment.c_str()},
+			ProgramSlot{&terrain, terrainVertexShaderSource, litTerrainFragment.c_str()},
+			ProgramSlot{&textured, texturedMeshVertexShaderSource, litTexturedFragment.c_str()},
+			ProgramSlot{&shadowDepth, shadowDepthVertexShaderSource, shadowDepthFragmentShaderSource},
+			ProgramSlot{
+				&shadowDepthSkinned, shadowDepthSkinnedVertexShaderSource, shadowDepthFragmentShaderSource}};
+
+		for (const ProgramSlot& slot : slots)
+		{
+			*slot.target = compileProgram(slot.vertexSource, slot.fragmentSource);
+			if (*slot.target == 0)
+			{
+				for (const ProgramSlot& cleanup : slots)
+				{
+					if (*cleanup.target != 0)
+					{
+						glDeleteProgram(*cleanup.target);
+						*cleanup.target = 0;
+					}
+				}
+				return false;
+			}
 		}
 
-		meshShaderProgram_ = compileProgram(meshVertexShaderSource, meshFragmentShaderSource);
-		if (meshShaderProgram_ == 0)
-		{
-			glDeleteProgram(lineShaderProgram_);
-			lineShaderProgram_ = 0;
-			return false;
-		}
-
-		skinnedMeshShaderProgram_ = compileProgram(skinnedMeshVertexShaderSource, meshFragmentShaderSource);
-		if (skinnedMeshShaderProgram_ == 0)
-		{
-			glDeleteProgram(lineShaderProgram_);
-			lineShaderProgram_ = 0;
-			glDeleteProgram(meshShaderProgram_);
-			meshShaderProgram_ = 0;
-			return false;
-		}
-
-		terrainShaderProgram_ = compileProgram(terrainVertexShaderSource, terrainFragmentShaderSource);
-		if (terrainShaderProgram_ == 0)
-		{
-			glDeleteProgram(lineShaderProgram_);
-			lineShaderProgram_ = 0;
-			glDeleteProgram(meshShaderProgram_);
-			meshShaderProgram_ = 0;
-			glDeleteProgram(skinnedMeshShaderProgram_);
-			skinnedMeshShaderProgram_ = 0;
-			return false;
-		}
-
-		texturedMeshShaderProgram_ = compileProgram(texturedMeshVertexShaderSource, texturedMeshFragmentShaderSource);
-		if (texturedMeshShaderProgram_ == 0)
-		{
-			glDeleteProgram(lineShaderProgram_);
-			lineShaderProgram_ = 0;
-			glDeleteProgram(meshShaderProgram_);
-			meshShaderProgram_ = 0;
-			glDeleteProgram(skinnedMeshShaderProgram_);
-			skinnedMeshShaderProgram_ = 0;
-			glDeleteProgram(terrainShaderProgram_);
-			terrainShaderProgram_ = 0;
-			return false;
-		}
-
+		lineShaderProgram_ = line;
+		meshShaderProgram_ = mesh;
+		skinnedMeshShaderProgram_ = skinned;
+		terrainShaderProgram_ = terrain;
+		texturedMeshShaderProgram_ = textured;
+		shadowDepthShaderProgram_ = shadowDepth;
+		shadowDepthSkinnedShaderProgram_ = shadowDepthSkinned;
 		return true;
+	}
+
+	bool ViewportRenderer::createShadowResources()
+	{
+		glGenTextures(1, &shadowAtlasTexture_);
+		glBindTexture(GL_TEXTURE_2D, shadowAtlasTexture_);
+		glTexImage2D(
+			GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowAtlasSize, kShadowAtlasSize, 0,
+			GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		// Clamp to a border of depth 1.0 (= "nothing ever occluded this") so a
+		// sample that lands outside the atlas reads as lit rather than
+		// wrapping into a neighbouring tile.
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+		const std::array<float, 4> border{1.0F, 1.0F, 1.0F, 1.0F};
+		glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border.data());
+		glBindTexture(GL_TEXTURE_2D, 0);
+
+		glGenFramebuffers(1, &shadowAtlasFramebuffer_);
+		glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFramebuffer_);
+		glFramebufferTexture2D(
+			GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowAtlasTexture_, 0);
+		// Depth-only: with no colour attachment both buffers must be NONE, or
+		// the FBO is incomplete.
+		glDrawBuffer(GL_NONE);
+		glReadBuffer(GL_NONE);
+		const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		if (!complete)
+		{
+			glDeleteFramebuffers(1, &shadowAtlasFramebuffer_);
+			glDeleteTextures(1, &shadowAtlasTexture_);
+			shadowAtlasFramebuffer_ = 0;
+			shadowAtlasTexture_ = 0;
+			return false;
+		}
+		return true;
+	}
+
+	void ViewportRenderer::collectLights(const std::vector<SceneEntity>& entities)
+	{
+		frameLights_.clear();
+
+		// Scene bounds, used to fit the directional shadow frustum. Only
+		// entities that actually receive/cast shadows count - a light's own
+		// gizmo sitting 200 units away must not stretch the sun's frustum
+		// across the whole world and shred its effective resolution.
+		glm::vec3 boundsMin(std::numeric_limits<float>::max());
+		glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+		bool haveBounds = false;
+		for (const SceneEntity& entity : entities)
+		{
+			if (!entity.active || isGizmoOnlyEntity(entity))
+			{
+				continue;
+			}
+			// A generous per-entity extent rather than real mesh bounds:
+			// this only needs to be conservative, and pulling exact bounds
+			// would mean loading every imported mesh here every frame.
+			const float extent =
+				entity.isTerrain
+					? std::max(entity.terrain.worldSize, entity.terrain.heightScale)
+					: (std::max({std::abs(entity.scale.x), std::abs(entity.scale.y), std::abs(entity.scale.z)})
+						* 2.0F);
+			boundsMin = glm::min(boundsMin, entity.position - glm::vec3(extent));
+			boundsMax = glm::max(boundsMax, entity.position + glm::vec3(extent));
+			haveBounds = true;
+		}
+		if (!haveBounds)
+		{
+			boundsMin = glm::vec3(-20.0F);
+			boundsMax = glm::vec3(20.0F);
+		}
+		const glm::vec3 boundsCenter = (boundsMin + boundsMax) * 0.5F;
+		const float boundsRadius = std::max(glm::length(boundsMax - boundsCenter), 1.0F);
+
+		int nextShadowSlot = 0;
+		for (const SceneEntity& entity : entities)
+		{
+			if (!entity.isLight || !entity.active)
+			{
+				continue;
+			}
+			if (static_cast<int>(frameLights_.size()) >= kMaxLights)
+			{
+				// Over the cap the extra lights are simply ignored. Silently,
+				// deliberately: this runs every frame, so logging here would
+				// spam the console 60 times a second for one authoring
+				// mistake. The Inspector shows the cap instead.
+				break;
+			}
+
+			FrameLight light;
+			light.type = static_cast<int>(entity.light.type);
+			light.direction = entityForward(entity);
+			light.position = entity.position;
+			light.color = entity.light.color * entity.light.intensity;
+			light.range = std::max(entity.light.range, 0.0001F);
+			light.cosInner = std::cos(glm::radians(entity.light.innerConeDegrees));
+			light.cosOuter = std::cos(glm::radians(entity.light.outerConeDegrees));
+			light.shadowBias = entity.light.shadowBias;
+
+			// Point lights need a cube map to shadow correctly (6 faces); this
+			// pass ships directional + spot shadows only, so a point light
+			// lights the scene but never occludes. Stated in the Inspector
+			// rather than left as a mystery.
+			const bool shadowCapable =
+				entity.light.castShadows && entity.light.type != LightType::Point;
+			if (shadowCapable && nextShadowSlot < kMaxShadowLights && shadowAtlasTexture_ != 0)
+			{
+				light.shadowSlot = nextShadowSlot++;
+				if (entity.light.type == LightType::Directional)
+				{
+					// A sun has no position, so place a virtual eye outside
+					// the scene along -direction and fit an ortho box to the
+					// bounding sphere. Using the sphere (not the box) keeps
+					// the frustum stable as the light rotates, which is what
+					// stops shadow edges from swimming.
+					const glm::vec3 eye = boundsCenter - light.direction * (boundsRadius * 2.0F);
+					// lookAt degenerates when the view direction is parallel
+					// to the up vector - a sun pointing straight down is the
+					// single most common case there is.
+					const glm::vec3 up =
+						std::abs(light.direction.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F)
+														   : glm::vec3(0.0F, 1.0F, 0.0F);
+					const glm::mat4 lightView = glm::lookAt(eye, boundsCenter, up);
+					const glm::mat4 lightProjection = glm::ortho(
+						-boundsRadius, boundsRadius, -boundsRadius, boundsRadius,
+						0.05F, boundsRadius * 4.0F);
+					light.lightViewProjection = lightProjection * lightView;
+				}
+				else
+				{
+					const glm::vec3 up =
+						std::abs(light.direction.y) > 0.99F ? glm::vec3(0.0F, 0.0F, 1.0F)
+														   : glm::vec3(0.0F, 1.0F, 0.0F);
+					const glm::mat4 lightView =
+						glm::lookAt(light.position, light.position + light.direction, up);
+					// Widen slightly past the outer cone so the cone's own
+					// edge isn't sitting exactly on the frustum boundary,
+					// where PCF taps would fall outside and read as lit.
+					const float fov = glm::radians(
+						std::clamp(entity.light.outerConeDegrees * 2.0F + 8.0F, 5.0F, 175.0F));
+					const glm::mat4 lightProjection =
+						glm::perspective(fov, 1.0F, 0.05F, light.range);
+					light.lightViewProjection = lightProjection * lightView;
+				}
+			}
+			frameLights_.push_back(light);
+		}
+
+		if (frameLights_.empty())
+		{
+			// No authored lights: reproduce EXACTLY the single hardcoded light
+			// every shader used to inline (direction normalize(0.4,0.85,0.35),
+			// 0.65 diffuse over 0.35 ambient). Without this, every scene made
+			// before lights existed would open flat-shaded - a silent, total
+			// visual regression on content that never opted in.
+			FrameLight legacy;
+			legacy.type = static_cast<int>(LightType::Directional);
+			legacy.direction = -glm::normalize(glm::vec3(0.4F, 0.85F, 0.35F));
+			legacy.color = glm::vec3(0.65F);
+			legacy.shadowSlot = -1;
+			frameLights_.push_back(legacy);
+		}
+	}
+
+	void ViewportRenderer::drawEntityGeometryForShadow(
+		const SceneEntity& entity,
+		const glm::mat4& model,
+		const GLuint staticProgram,
+		const GLuint skinnedProgram,
+		const std::filesystem::path& projectRoot)
+	{
+		if (entity.isTerrain)
+		{
+			ensureTerrainGpu(entity, projectRoot);
+			const auto cacheEntry = terrainCache_.find(entity.id);
+			if (cacheEntry == terrainCache_.end() || cacheEntry->second.vertexCount <= 0)
+			{
+				return;
+			}
+			glUseProgram(staticProgram);
+			glUniformMatrix4fv(
+				glGetUniformLocation(staticProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+			glBindVertexArray(cacheEntry->second.vertexArray);
+			glDrawArrays(GL_TRIANGLES, 0, cacheEntry->second.vertexCount);
+			return;
+		}
+
+		if (entity.isImportedMesh)
+		{
+			ensureImportedMeshGpu(entity, projectRoot);
+			const auto cacheEntry = importedMeshCache_.find(entity.id);
+			if (cacheEntry == importedMeshCache_.end() || cacheEntry->second.vertexCount <= 0)
+			{
+				return;
+			}
+			if (cacheEntry->second.hasSkeleton)
+			{
+				const std::vector<glm::mat4> boneMatrices = computeSkinningMatrices(
+					cacheEntry->second.bones, cacheEntry->second.animations, glfwGetTime());
+				glUseProgram(skinnedProgram);
+				glUniformMatrix4fv(
+					glGetUniformLocation(skinnedProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+				if (!boneMatrices.empty())
+				{
+					glUniformMatrix4fv(
+						glGetUniformLocation(skinnedProgram, "boneMatrices"),
+						static_cast<GLsizei>(boneMatrices.size()), GL_FALSE,
+						glm::value_ptr(boneMatrices.front()));
+				}
+			}
+			else
+			{
+				glUseProgram(staticProgram);
+				glUniformMatrix4fv(
+					glGetUniformLocation(staticProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+			}
+			glBindVertexArray(cacheEntry->second.vertexArray);
+			glDrawArrays(GL_TRIANGLES, 0, cacheEntry->second.vertexCount);
+			return;
+		}
+
+		if (entity.isTextMesh)
+		{
+			ensureTextMeshGpu(entity, projectRoot);
+			const auto cacheEntry = textMeshCache_.find(entity.id);
+			if (cacheEntry == textMeshCache_.end() || cacheEntry->second.vertexCount <= 0)
+			{
+				return;
+			}
+			glUseProgram(staticProgram);
+			glUniformMatrix4fv(
+				glGetUniformLocation(staticProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+			glBindVertexArray(cacheEntry->second.vertexArray);
+			glDrawArrays(GL_TRIANGLES, 0, cacheEntry->second.vertexCount);
+			return;
+		}
+
+		const std::size_t meshIndex = static_cast<std::size_t>(entity.primitive);
+		if (meshIndex >= primitiveVertexArrays_.size() || primitiveVertexCounts_[meshIndex] <= 0)
+		{
+			return;
+		}
+		glUseProgram(staticProgram);
+		glUniformMatrix4fv(
+			glGetUniformLocation(staticProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+		glBindVertexArray(primitiveVertexArrays_[meshIndex]);
+		glDrawArrays(GL_TRIANGLES, 0, primitiveVertexCounts_[meshIndex]);
+	}
+
+	void ViewportRenderer::renderShadowMaps(
+		const std::vector<SceneEntity>& entities,
+		const std::filesystem::path& projectRoot,
+		const int excludeEntityId)
+	{
+		if (shadowAtlasFramebuffer_ == 0 || shadowDepthShaderProgram_ == 0)
+		{
+			return;
+		}
+		const bool anyShadowCaster = std::any_of(
+			frameLights_.begin(), frameLights_.end(),
+			[](const FrameLight& light) { return light.shadowSlot >= 0; });
+		if (!anyShadowCaster)
+		{
+			return;
+		}
+
+		glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFramebuffer_);
+		glEnable(GL_DEPTH_TEST);
+		glDepthFunc(GL_LESS);
+		glDepthMask(GL_TRUE);
+		// Scissor so clearing one tile cannot wipe the others - the atlas is
+		// one texture shared by every shadow-casting light this frame.
+		glEnable(GL_SCISSOR_TEST);
+		// Front-face culling during the depth pass pushes acne to surfaces
+		// the camera cannot see, which is what lets the bias stay small
+		// enough to keep contact shadows attached.
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_FRONT);
+
+		for (const FrameLight& light : frameLights_)
+		{
+			if (light.shadowSlot < 0)
+			{
+				continue;
+			}
+			const int tileRow = light.shadowSlot / kShadowTilesPerRow;
+			const int tileColumn = light.shadowSlot % kShadowTilesPerRow;
+			const GLint tileX = tileColumn * kShadowTileSize;
+			const GLint tileY = tileRow * kShadowTileSize;
+			glViewport(tileX, tileY, kShadowTileSize, kShadowTileSize);
+			glScissor(tileX, tileY, kShadowTileSize, kShadowTileSize);
+			glClear(GL_DEPTH_BUFFER_BIT);
+
+			for (const GLuint program : {shadowDepthShaderProgram_, shadowDepthSkinnedShaderProgram_})
+			{
+				glUseProgram(program);
+				glUniformMatrix4fv(
+					glGetUniformLocation(program, "lightViewProjection"), 1, GL_FALSE,
+					glm::value_ptr(light.lightViewProjection));
+			}
+
+			for (const SceneEntity& entity : entities)
+			{
+				// Same exclusions as the visible pass, plus gizmo-only kinds:
+				// a light's own wireframe icon must not cast a shadow, and the
+				// player's hidden first-person body must not either - its
+				// shadow would give away a mesh the camera is inside.
+				if (!entity.active || isGizmoOnlyEntity(entity) || entity.id == excludeEntityId)
+				{
+					continue;
+				}
+				drawEntityGeometryForShadow(
+					entity, composeEntityTransform(entity), shadowDepthShaderProgram_,
+					shadowDepthSkinnedShaderProgram_, projectRoot);
+			}
+		}
+
+		glBindVertexArray(0);
+		glUseProgram(0);
+		glCullFace(GL_BACK);
+		glDisable(GL_CULL_FACE);
+		glDisable(GL_SCISSOR_TEST);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+
+	void ViewportRenderer::uploadLightUniforms(const GLuint program) const
+	{
+		if (program == 0)
+		{
+			return;
+		}
+		const int count = std::min(static_cast<int>(frameLights_.size()), kMaxLights);
+		glUniform1i(glGetUniformLocation(program, "lightCount"), count);
+		glUniform3fv(glGetUniformLocation(program, "ambientColor"), 1, glm::value_ptr(ambientColor_));
+
+		// Uniform arrays are set element by element via "name[i]". Uploading
+		// the whole array in one call would need the elements contiguous in
+		// memory, which they are not - FrameLight is struct-of-arrays on the
+		// GPU side and array-of-structs here. At kMaxLights = 8 the call count
+		// is small and this stays readable.
+		for (int index = 0; index < count; ++index)
+		{
+			const FrameLight& light = frameLights_[static_cast<std::size_t>(index)];
+			const auto uniformName = [index](const char* base)
+			{
+				std::array<char, 64> buffer{};
+				std::snprintf(buffer.data(), buffer.size(), "%s[%d]", base, index);
+				return std::string(buffer.data());
+			};
+			glUniform1i(glGetUniformLocation(program, uniformName("lightType").c_str()), light.type);
+			glUniform3fv(
+				glGetUniformLocation(program, uniformName("lightDirection").c_str()), 1,
+				glm::value_ptr(light.direction));
+			glUniform3fv(
+				glGetUniformLocation(program, uniformName("lightPosition").c_str()), 1,
+				glm::value_ptr(light.position));
+			glUniform3fv(
+				glGetUniformLocation(program, uniformName("lightColor").c_str()), 1,
+				glm::value_ptr(light.color));
+			glUniform1f(glGetUniformLocation(program, uniformName("lightRange").c_str()), light.range);
+			glUniform1f(glGetUniformLocation(program, uniformName("lightCosInner").c_str()), light.cosInner);
+			glUniform1f(glGetUniformLocation(program, uniformName("lightCosOuter").c_str()), light.cosOuter);
+			glUniform1i(
+				glGetUniformLocation(program, uniformName("lightShadowSlot").c_str()), light.shadowSlot);
+			glUniform1f(
+				glGetUniformLocation(program, uniformName("lightShadowBias").c_str()), light.shadowBias);
+			glUniformMatrix4fv(
+				glGetUniformLocation(program, uniformName("lightViewProjection").c_str()), 1, GL_FALSE,
+				glm::value_ptr(light.lightViewProjection));
+		}
+
+		// The shadow atlas lives on a texture unit well past the 9 the terrain
+		// shader claims for its splat layers, so binding it here can never
+		// stomp one of those.
+		constexpr GLint kShadowAtlasTextureUnit = 12;
+		glActiveTexture(static_cast<GLenum>(GL_TEXTURE0 + kShadowAtlasTextureUnit));
+		glBindTexture(GL_TEXTURE_2D, shadowAtlasTexture_);
+		glUniform1i(glGetUniformLocation(program, "shadowAtlas"), kShadowAtlasTextureUnit);
+		glActiveTexture(GL_TEXTURE0);
+
+		const float tileScale = 1.0F / static_cast<float>(kShadowTilesPerRow);
+		glUniform2f(glGetUniformLocation(program, "shadowTileScale"), tileScale, tileScale);
+		glUniform1i(glGetUniformLocation(program, "shadowTilesPerRow"), kShadowTilesPerRow);
 	}
 
 	bool ViewportRenderer::createFramebuffer(const int width, const int height)

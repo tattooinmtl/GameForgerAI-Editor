@@ -22,6 +22,7 @@ namespace gameforger::editor
 				case PrimitiveType::Cone: return "cone";
 				case PrimitiveType::Plane: return "plane";
 				case PrimitiveType::Capsule: return "capsule";
+				case PrimitiveType::Empty: return "empty";
 			}
 			return "shape";
 		}

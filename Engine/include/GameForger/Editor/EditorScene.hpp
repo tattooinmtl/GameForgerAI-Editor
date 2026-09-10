@@ -318,6 +318,23 @@ namespace gameforger::editor
 		// own EntityAnimation keyframes (see `animation` above) - no separate
 		// waypoint data structure. See CineShot/StoryboardState in main.cpp.
 		bool isCineCamera = false;
+		// When true, this entity is a real game Light (see LightData above) -
+		// renders as a wireframe gizmo instead of a solid primitive, and
+		// contributes to shading for every other entity. `primitive` is
+		// ignored for rendering/picking.
+		bool isLight = false;
+		LightData light;
+		// When true, this entity is a real game Camera (see CameraData above)
+		// - renders as a wireframe frustum instead of a solid primitive.
+		// Distinct from isCineCamera; `primitive` is ignored.
+		bool isCamera = false;
+		CameraData camera;
+		// When true, this entity is a screen-space UI element (see
+		// UIElementData above) - additive, and it draws in the Game view only
+		// while parented under the active camera. It has no 3D geometry at
+		// all, so like a Light it is skipped by the mesh pass.
+		bool isUIElement = false;
+		UIElementData ui;
 		// When true, this entity is a real heightmap Terrain (see
 		// TerrainData/Terrain.hpp) instead of one of the shared PrimitiveType
 		// meshes - `primitive` is ignored for rendering/picking in that case.
@@ -374,6 +391,22 @@ namespace gameforger::editor
 	[[nodiscard]] inline std::string primaryTag(const SceneEntity& entity)
 	{
 		return entity.tags.empty() ? "Untagged" : entity.tags.front();
+	}
+
+	// True for entities that have no solid geometry to draw: the transform-only
+	// Empty, and the four gizmo/overlay kinds (cine camera, light, camera, UI).
+	// The mesh pass skips these, and picking uses a small fixed-size box around
+	// their origin rather than mesh bounds.
+	//
+	// Use this rather than testing the flags one at a time - before it existed
+	// the renderer only knew about isCineCamera, so every new gizmo kind had to
+	// find and update the same scattered checks. Anything added here is skipped
+	// by every mesh consumer at once.
+	[[nodiscard]] inline bool isGizmoOnlyEntity(const SceneEntity& entity) noexcept
+	{
+		return entity.isCineCamera || entity.isLight || entity.isCamera || entity.isUIElement
+			|| (entity.primitive == PrimitiveType::Empty && !entity.isTerrain && !entity.isTextMesh
+				&& !entity.isImportedMesh);
 	}
 
 	class EditorScene final

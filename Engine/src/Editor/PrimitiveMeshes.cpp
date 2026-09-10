@@ -231,6 +231,13 @@ namespace gameforger::editor
 			case PrimitiveType::Capsule:
 				generateCapsule(mesh.vertices);
 				break;
+			case PrimitiveType::Empty:
+				// Deliberately no geometry. Callers that draw meshes skip
+				// Empty via isGizmoOnlyEntity() before ever getting here;
+				// returning an empty vertex list rather than asserting keeps
+				// any caller that misses that check harmless (draws nothing)
+				// instead of crashing.
+				break;
 		}
 		return mesh;
 	}

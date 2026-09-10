@@ -37,6 +37,26 @@ namespace gameforger::editor
 		return glm::make_mat4(matrix);
 	}
 
+	glm::vec3 entityForward(const SceneEntity& entity)
+	{
+		// Reuses the pivot frame rather than rebuilding a rotation matrix by
+		// hand, so this can never disagree with the gizmo about euler order -
+		// SceneEntity::rotationEuler is XYZ, and RecomposeMatrixFromComponents
+		// is the one place that convention is actually implemented.
+		//
+		// Scale rides along in the matrix, so the result is normalized: a
+		// light scaled to (1, 1, 3) still points the same way, and a zero or
+		// negative scale on Z cannot produce a zero-length direction vector.
+		const glm::mat4 frame = composeEntityPivotFrame(entity);
+		const glm::vec3 forward(frame[2].x, frame[2].y, frame[2].z);
+		const float length = glm::length(forward);
+		if (length < 1e-6F)
+		{
+			return glm::vec3(0.0F, 0.0F, 1.0F);
+		}
+		return forward / length;
+	}
+
 	glm::mat4 composeEntityTransform(const SceneEntity& entity)
 	{
 		const glm::mat4 trs = composeEntityPivotFrame(entity);
@@ -127,6 +147,12 @@ namespace gameforger::editor
 				// Perfectly symmetric - the cube offsets are already
 				// correct in every direction.
 				return cube;
+			case PrimitiveType::Empty:
+				// No geometry, so there is no "top of the mesh" to offset
+				// toward - every preset resolves to the origin. An Empty is
+				// a pure transform; moving its pivot off itself would only
+				// make the gizmo lie about where its children hang from.
+				return glm::vec3(0.0F);
 			case PrimitiveType::Cube:
 			default:
 				return cube;

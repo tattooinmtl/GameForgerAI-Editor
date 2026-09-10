@@ -20,6 +20,7 @@ namespace gameforger::editor
 			if (text == "cone") return PrimitiveType::Cone;
 			if (text == "plane") return PrimitiveType::Plane;
 			if (text == "capsule") return PrimitiveType::Capsule;
+			if (text == "empty") return PrimitiveType::Empty;
 			return PrimitiveType::Cube;
 		}
 
@@ -214,6 +215,64 @@ namespace gameforger::editor
 				entity.textMesh.depth = readFloat(*textMesh, "depth", entity.textMesh.depth);
 			}
 
+			// Light / Camera / UI are additive like every block around them:
+			// an older scene has none of these keys, the flags default false,
+			// and the nested defaults come from the structs. Enums round-trip
+			// by NAME, so reordering LightType can never silently reinterpret
+			// a saved scene (same rule as audioFilter/BootStep).
+			entity.isLight = readBool(obj, "isLight", false);
+			if (const json::Value* light = obj.find("light"))
+			{
+				LightType parsedType = entity.light.type;
+				if (lightTypeFromName(readString(*light, "type", lightTypeName(entity.light.type)), parsedType))
+				{
+					entity.light.type = parsedType;
+				}
+				entity.light.color = readVec3(*light, "color", entity.light.color);
+				entity.light.intensity = readFloat(*light, "intensity", entity.light.intensity);
+				entity.light.range = readFloat(*light, "range", entity.light.range);
+				entity.light.innerConeDegrees = readFloat(*light, "innerCone", entity.light.innerConeDegrees);
+				entity.light.outerConeDegrees = readFloat(*light, "outerCone", entity.light.outerConeDegrees);
+				entity.light.castShadows = readBool(*light, "castShadows", entity.light.castShadows);
+				entity.light.shadowBias = readFloat(*light, "shadowBias", entity.light.shadowBias);
+			}
+
+			entity.isCamera = readBool(obj, "isCamera", false);
+			if (const json::Value* camera = obj.find("camera"))
+			{
+				entity.camera.fieldOfViewDegrees =
+					readFloat(*camera, "fieldOfView", entity.camera.fieldOfViewDegrees);
+				entity.camera.nearClip = readFloat(*camera, "nearClip", entity.camera.nearClip);
+				entity.camera.farClip = readFloat(*camera, "farClip", entity.camera.farClip);
+				entity.camera.clearColor = readVec3(*camera, "clearColor", entity.camera.clearColor);
+				entity.camera.isMainCamera = readBool(*camera, "isMainCamera", entity.camera.isMainCamera);
+			}
+
+			entity.isUIElement = readBool(obj, "isUIElement", false);
+			if (const json::Value* ui = obj.find("ui"))
+			{
+				UIElementKind parsedKind = entity.ui.kind;
+				if (uiElementKindFromName(readString(*ui, "kind", uiElementKindName(entity.ui.kind)), parsedKind))
+				{
+					entity.ui.kind = parsedKind;
+				}
+				UIAnchor parsedAnchor = entity.ui.anchor;
+				if (uiAnchorFromName(readString(*ui, "anchor", uiAnchorName(entity.ui.anchor)), parsedAnchor))
+				{
+					entity.ui.anchor = parsedAnchor;
+				}
+				entity.ui.offsetPixels = readVec2(*ui, "offset", entity.ui.offsetPixels);
+				entity.ui.sizePixels = readVec2(*ui, "size", entity.ui.sizePixels);
+				entity.ui.color = readVec3(*ui, "color", entity.ui.color);
+				entity.ui.opacity = readFloat(*ui, "opacity", entity.ui.opacity);
+				entity.ui.text = readString(*ui, "text", entity.ui.text);
+				entity.ui.fontPath = readString(*ui, "fontPath", entity.ui.fontPath);
+				entity.ui.fontSizePixels = readFloat(*ui, "fontSize", entity.ui.fontSizePixels);
+				entity.ui.imagePath = readString(*ui, "imagePath", entity.ui.imagePath);
+				entity.ui.thicknessPixels = readFloat(*ui, "thickness", entity.ui.thicknessPixels);
+				entity.ui.gapPixels = readFloat(*ui, "gap", entity.ui.gapPixels);
+			}
+
 			entity.isPickupItem = readBool(obj, "isPickupItem", false);
 			if (const json::Value* pickupItem = obj.find("pickupItem"))
 			{
@@ -346,6 +405,7 @@ namespace gameforger::editor
 				case PrimitiveType::Cone: return "cone";
 				case PrimitiveType::Plane: return "plane";
 				case PrimitiveType::Capsule: return "capsule";
+				case PrimitiveType::Empty: return "empty";
 			}
 			return "cube";
 		}
@@ -374,6 +434,22 @@ namespace gameforger::editor
 			std::array<char, 96> buffer{};
 			std::snprintf(buffer.data(), buffer.size(), "[%.6f, %.6f, %.6f]", value.x, value.y, value.z);
 			return buffer.data();
+		}
+
+		// Same %.6f the vec helpers use, for the scalar fields of the light /
+		// camera / UI blocks. Every other scalar in this file spells out its
+		// own snprintf buffer inline; this exists because those three blocks
+		// alone would have added ~20 more of them.
+		std::string floatToJson(const float value)
+		{
+			std::array<char, 32> buffer{};
+			std::snprintf(buffer.data(), buffer.size(), "%.6f", value);
+			return buffer.data();
+		}
+
+		std::string boolToJson(const bool value)
+		{
+			return value ? "true" : "false";
 		}
 
 		std::string vec2ToJsonArray(const glm::vec2& value)
@@ -514,6 +590,48 @@ namespace gameforger::editor
 			}
 			json += indent + "  \"isTextMesh\": " + std::string(entity.isTextMesh ? "true" : "false") + ",\n";
 			json += indent + "  \"isCineCamera\": " + std::string(entity.isCineCamera ? "true" : "false") + ",\n";
+
+			// Written unconditionally, like "terrain" above - the nested block
+			// costs a few bytes on entities that aren't lights, and always
+			// emitting it keeps the writer branch-free and the diff of a saved
+			// scene stable when a flag is toggled.
+			json += indent + "  \"isLight\": " + boolToJson(entity.isLight) + ",\n";
+			json += indent + "  \"light\": {\n";
+			json += indent + "    \"type\": \"" + std::string(lightTypeName(entity.light.type)) + "\",\n";
+			json += indent + "    \"color\": " + vec3ToJsonArray(entity.light.color) + ",\n";
+			json += indent + "    \"intensity\": " + floatToJson(entity.light.intensity) + ",\n";
+			json += indent + "    \"range\": " + floatToJson(entity.light.range) + ",\n";
+			json += indent + "    \"innerCone\": " + floatToJson(entity.light.innerConeDegrees) + ",\n";
+			json += indent + "    \"outerCone\": " + floatToJson(entity.light.outerConeDegrees) + ",\n";
+			json += indent + "    \"castShadows\": " + boolToJson(entity.light.castShadows) + ",\n";
+			json += indent + "    \"shadowBias\": " + floatToJson(entity.light.shadowBias) + "\n";
+			json += indent + "  },\n";
+
+			json += indent + "  \"isCamera\": " + boolToJson(entity.isCamera) + ",\n";
+			json += indent + "  \"camera\": {\n";
+			json += indent + "    \"fieldOfView\": " + floatToJson(entity.camera.fieldOfViewDegrees) + ",\n";
+			json += indent + "    \"nearClip\": " + floatToJson(entity.camera.nearClip) + ",\n";
+			json += indent + "    \"farClip\": " + floatToJson(entity.camera.farClip) + ",\n";
+			json += indent + "    \"clearColor\": " + vec3ToJsonArray(entity.camera.clearColor) + ",\n";
+			json += indent + "    \"isMainCamera\": " + boolToJson(entity.camera.isMainCamera) + "\n";
+			json += indent + "  },\n";
+
+			json += indent + "  \"isUIElement\": " + boolToJson(entity.isUIElement) + ",\n";
+			json += indent + "  \"ui\": {\n";
+			json += indent + "    \"kind\": \"" + std::string(uiElementKindName(entity.ui.kind)) + "\",\n";
+			json += indent + "    \"anchor\": \"" + std::string(uiAnchorName(entity.ui.anchor)) + "\",\n";
+			json += indent + "    \"offset\": " + vec2ToJsonArray(entity.ui.offsetPixels) + ",\n";
+			json += indent + "    \"size\": " + vec2ToJsonArray(entity.ui.sizePixels) + ",\n";
+			json += indent + "    \"color\": " + vec3ToJsonArray(entity.ui.color) + ",\n";
+			json += indent + "    \"opacity\": " + floatToJson(entity.ui.opacity) + ",\n";
+			json += indent + "    \"text\": \"" + escapeJson(entity.ui.text) + "\",\n";
+			json += indent + "    \"fontPath\": \"" + escapeJson(entity.ui.fontPath) + "\",\n";
+			json += indent + "    \"fontSize\": " + floatToJson(entity.ui.fontSizePixels) + ",\n";
+			json += indent + "    \"imagePath\": \"" + escapeJson(entity.ui.imagePath) + "\",\n";
+			json += indent + "    \"thickness\": " + floatToJson(entity.ui.thicknessPixels) + ",\n";
+			json += indent + "    \"gap\": " + floatToJson(entity.ui.gapPixels) + "\n";
+			json += indent + "  },\n";
+
 			json += indent + "  \"isTerrain\": " + std::string(entity.isTerrain ? "true" : "false") + ",\n";
 
 			std::array<char, 32> terrainScalarBuffer{};

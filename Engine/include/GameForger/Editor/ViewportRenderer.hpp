@@ -62,9 +62,66 @@ namespace gameforger::editor
 		[[nodiscard]] const glm::mat4& projection() const noexcept;
 		[[nodiscard]] glm::vec3 cameraPosition() const noexcept;
 
+		// Shading limits. kMaxLights must match GF_MAX_LIGHTS in the shared
+		// lighting GLSL (ViewportRenderer.cpp) - the uniform arrays are sized
+		// by it on both sides.
+		static constexpr int kMaxLights = 8;
+		// Shadow-casting lights get one tile each in a single atlas texture,
+		// laid out kShadowTilesPerRow x kShadowTilesPerRow. One texture (not a
+		// sampler array) because GLSL cannot index sampler arrays with a
+		// non-constant expression without extensions.
+		static constexpr int kShadowTilesPerRow = 2;
+		static constexpr int kMaxShadowLights = kShadowTilesPerRow * kShadowTilesPerRow;
+		static constexpr int kShadowTileSize = 1024;
+		static constexpr int kShadowAtlasSize = kShadowTileSize * kShadowTilesPerRow;
+
 	private:
+		// One light resolved for the current frame: world-space direction and
+		// position pulled off the entity's transform, colour premultiplied by
+		// intensity, and - if it got an atlas tile - the matrix that maps
+		// world space into that tile's depth space.
+		struct FrameLight
+		{
+			int type = 0; // matches the shader's 0=directional, 1=point, 2=spot
+			glm::vec3 direction{0.0F, -1.0F, 0.0F};
+			glm::vec3 position{0.0F};
+			glm::vec3 color{1.0F};
+			float range = 25.0F;
+			float cosInner = 1.0F;
+			float cosOuter = 0.0F;
+			int shadowSlot = -1; // atlas tile, or -1 for an unshadowed light
+			float shadowBias = 0.0015F;
+			glm::mat4 lightViewProjection{1.0F};
+		};
+
 		[[nodiscard]] bool createShaderPrograms();
 		[[nodiscard]] bool createFramebuffer(int width, int height);
+		[[nodiscard]] bool createShadowResources();
+		// Resolves every isLight entity into frameLights_, assigns atlas tiles
+		// to the shadow casters, and builds each caster's light-space matrix
+		// from the scene's own bounds. When a scene contains NO lights at all
+		// this synthesises the single hardcoded directional light every shader
+		// used to inline, so scenes authored before lights existed render
+		// exactly as they did before.
+		void collectLights(const std::vector<SceneEntity>& entities);
+		// Depth-only pass filling each shadow caster's atlas tile.
+		void renderShadowMaps(
+			const std::vector<SceneEntity>& entities,
+			const std::filesystem::path& projectRoot,
+			int excludeEntityId);
+		// Pushes frameLights_ plus the ambient/atlas uniforms into `program`.
+		// Called once per lit program per frame, before it draws anything.
+		void uploadLightUniforms(GLuint program) const;
+		// Draws one entity's geometry with whatever program is already bound,
+		// setting only `model`. Shared by the shadow pass across primitives,
+		// terrain, text and imported meshes so a caster's shadow always
+		// matches the shape actually drawn in the visible pass.
+		void drawEntityGeometryForShadow(
+			const SceneEntity& entity,
+			const glm::mat4& model,
+			GLuint staticProgram,
+			GLuint skinnedProgram,
+			const std::filesystem::path& projectRoot);
 		void createPrimitiveMeshes();
 		void createOutlineMesh();
 		void createCameraIconMesh();
@@ -104,6 +161,19 @@ namespace gameforger::editor
 		// instead, the same "no dedicated UV data" approach terrainShader-
 		// Program_ already uses via world-space tiling).
 		GLuint texturedMeshShaderProgram_ = 0;
+		// Depth-only programs for the shadow pass. The skinned variant exists
+		// so an animated character's shadow follows its animation instead of
+		// freezing in the bind pose.
+		GLuint shadowDepthShaderProgram_ = 0;
+		GLuint shadowDepthSkinnedShaderProgram_ = 0;
+
+		GLuint shadowAtlasFramebuffer_ = 0;
+		GLuint shadowAtlasTexture_ = 0;
+		// Rebuilt every render() from the scene's isLight entities.
+		std::vector<FrameLight> frameLights_;
+		// Ambient fill. 0.30 is close to the 0.35 constant the old hardcoded
+		// shading used, so an unlit scene keeps roughly its previous look.
+		glm::vec3 ambientColor_{0.30F, 0.31F, 0.34F};
 
 		std::array<GLuint, 6> primitiveVertexArrays_{};
 		std::array<GLuint, 6> primitiveVertexBuffers_{};
@@ -238,6 +308,27 @@ namespace gameforger::editor
 		GLuint cameraIconVertexArray_ = 0;
 		GLuint cameraIconVertexBuffer_ = 0;
 		GLsizei cameraIconVertexCount_ = 0;
+
+		// A GL_LINES wireframe drawn in place of a solid mesh for the
+		// gizmo-only entity kinds. Colour is baked per vertex (the line shader
+		// takes a colour attribute), so each gizmo carries its own identity
+		// and they stay distinguishable at a glance in a busy scene.
+		struct GizmoMesh
+		{
+			GLuint vertexArray = 0;
+			GLuint vertexBuffer = 0;
+			GLsizei vertexCount = 0;
+		};
+		GizmoMesh emptyGizmo_;             // three axis crosshairs
+		GizmoMesh directionalLightGizmo_;  // sun disc + rays + a long aim line
+		GizmoMesh pointLightGizmo_;        // three orthogonal rings
+		GizmoMesh spotLightGizmo_;         // cone opening along local +Z
+		GizmoMesh uiElementGizmo_;         // small screen-ish rectangle
+
+		void createGizmoMeshes();
+		// Uploads one GL_LINES vertex buffer (x,y,z,r,g,b per vertex).
+		[[nodiscard]] GizmoMesh uploadGizmoMesh(const std::vector<float>& vertices) const;
+		void destroyGizmoMesh(GizmoMesh& mesh) const noexcept;
 
 		GLuint framebuffer_ = 0;
 		GLuint colorTexture_ = 0;

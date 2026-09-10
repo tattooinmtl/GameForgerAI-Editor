@@ -821,6 +821,7 @@ namespace
             case PrimitiveType::Cone: return "Cone";
             case PrimitiveType::Plane: return "Plane";
             case PrimitiveType::Capsule: return "Capsule";
+            case PrimitiveType::Empty: return "Empty";
         }
         return "Unknown";
     }

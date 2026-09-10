@@ -25,6 +25,7 @@ namespace gameforger::editor
 				case PrimitiveType::Cone: return "cone";
 				case PrimitiveType::Plane: return "plane";
 				case PrimitiveType::Capsule: return "capsule";
+				case PrimitiveType::Empty: return "empty";
 			}
 			return "shape";
 		}
@@ -80,6 +81,7 @@ namespace gameforger::editor
 			if (text == "cone") return PrimitiveType::Cone;
 			if (text == "plane") return PrimitiveType::Plane;
 			if (text == "capsule") return PrimitiveType::Capsule;
+			if (text == "empty") return PrimitiveType::Empty;
 			return PrimitiveType::Cube;
 		}
 
@@ -360,6 +362,22 @@ namespace gameforger::editor
 				{
 					return "Create text mesh \"" + value.content + "\"" +
 						(value.name.empty() ? "" : (" '" + value.name + "'"));
+				}
+				else if constexpr (std::is_same_v<Command, CreateLightCommand>)
+				{
+					return "Create " + value.type + " light" +
+						(value.name.empty() ? "" : (" '" + value.name + "'"));
+				}
+				else if constexpr (std::is_same_v<Command, CreateCameraCommand>)
+				{
+					return std::string(value.makeMain ? "Create main camera" : "Create camera") +
+						(value.name.empty() ? "" : (" '" + value.name + "'"));
+				}
+				else if constexpr (std::is_same_v<Command, CreateUIElementCommand>)
+				{
+					return "Create " + value.kind + " UI element" +
+						(value.name.empty() ? "" : (" '" + value.name + "'")) +
+						(value.parentName.empty() ? "" : (" on '" + value.parentName + "'"));
 				}
 				else if constexpr (std::is_same_v<Command, CreateImportedMeshCommand>)
 				{

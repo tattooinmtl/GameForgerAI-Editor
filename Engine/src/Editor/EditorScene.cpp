@@ -32,6 +32,81 @@ namespace gameforger::editor
 		return false;
 	}
 
+	// Same name-not-ordinal rule as audioFilterName above.
+	const char* lightTypeName(const LightType type) noexcept
+	{
+		switch (type)
+		{
+			case LightType::Point: return "point";
+			case LightType::Spot:  return "spot";
+			case LightType::Directional: break;
+		}
+		return "directional";
+	}
+
+	bool lightTypeFromName(const std::string& text, LightType& outType) noexcept
+	{
+		if (text == "directional") { outType = LightType::Directional; return true; }
+		if (text == "point")       { outType = LightType::Point;       return true; }
+		if (text == "spot")        { outType = LightType::Spot;        return true; }
+		// Unity calls a directional light "Sun" in some UI surfaces and glTF
+		// spells it "sun"; accept both rather than rejecting a reasonable word.
+		if (text == "sun")         { outType = LightType::Directional; return true; }
+		return false;
+	}
+
+	const char* uiElementKindName(const UIElementKind kind) noexcept
+	{
+		switch (kind)
+		{
+			case UIElementKind::Image: return "image";
+			case UIElementKind::Text:  return "text";
+			case UIElementKind::Panel: return "panel";
+			case UIElementKind::Crosshair: break;
+		}
+		return "crosshair";
+	}
+
+	bool uiElementKindFromName(const std::string& text, UIElementKind& outKind) noexcept
+	{
+		if (text == "crosshair") { outKind = UIElementKind::Crosshair; return true; }
+		if (text == "image")     { outKind = UIElementKind::Image;     return true; }
+		if (text == "text")      { outKind = UIElementKind::Text;      return true; }
+		if (text == "panel")     { outKind = UIElementKind::Panel;     return true; }
+		return false;
+	}
+
+	const char* uiAnchorName(const UIAnchor anchor) noexcept
+	{
+		switch (anchor)
+		{
+			case UIAnchor::TopLeft:      return "top_left";
+			case UIAnchor::TopCenter:    return "top_center";
+			case UIAnchor::TopRight:     return "top_right";
+			case UIAnchor::MiddleLeft:   return "middle_left";
+			case UIAnchor::MiddleRight:  return "middle_right";
+			case UIAnchor::BottomLeft:   return "bottom_left";
+			case UIAnchor::BottomCenter: return "bottom_center";
+			case UIAnchor::BottomRight:  return "bottom_right";
+			case UIAnchor::Center: break;
+		}
+		return "center";
+	}
+
+	bool uiAnchorFromName(const std::string& text, UIAnchor& outAnchor) noexcept
+	{
+		if (text == "center")        { outAnchor = UIAnchor::Center;       return true; }
+		if (text == "top_left")      { outAnchor = UIAnchor::TopLeft;      return true; }
+		if (text == "top_center")    { outAnchor = UIAnchor::TopCenter;    return true; }
+		if (text == "top_right")     { outAnchor = UIAnchor::TopRight;     return true; }
+		if (text == "middle_left")   { outAnchor = UIAnchor::MiddleLeft;   return true; }
+		if (text == "middle_right")  { outAnchor = UIAnchor::MiddleRight;  return true; }
+		if (text == "bottom_left")   { outAnchor = UIAnchor::BottomLeft;   return true; }
+		if (text == "bottom_center") { outAnchor = UIAnchor::BottomCenter; return true; }
+		if (text == "bottom_right")  { outAnchor = UIAnchor::BottomRight;  return true; }
+		return false;
+	}
+
 	EditorScene::EditorScene(std::filesystem::path projectRoot)
 		: projectRoot_(std::filesystem::weakly_canonical(std::move(projectRoot)))
 	{
@@ -418,6 +493,126 @@ namespace gameforger::editor
 					entities_.push_back(entity);
 					return {true, false, "Text mesh created in the editor scene."};
 				}
+				else if constexpr (std::is_same_v<Command, CreateLightCommand>)
+				{
+					LightType type = LightType::Directional;
+					if (!lightTypeFromName(value.type, type))
+					{
+						return {false, false, "Light type must be directional, point, or spot."};
+					}
+					const std::string name = value.name.empty() ? makeUniqueName("Light") : value.name;
+					if (nameInUse(name))
+					{
+						return {false, false, "An entity with this name already exists."};
+					}
+					SceneEntity entity;
+					entity.id = nextEntityId_++;
+					entity.name = name;
+					entity.position = value.position;
+					entity.rotationEuler = value.rotationEuler;
+					entity.localPosition = value.position;
+					entity.localRotationEuler = value.rotationEuler;
+					entity.isLight = true;
+					entity.light.type = type;
+					entity.light.color = value.color;
+					entity.light.intensity = value.intensity > 0.0F ? value.intensity : 1.0F;
+					// A point light at the default 25-unit range lighting a
+					// room-sized scene reads as washed out; a spot wants a
+					// tighter default than a bulb. Only the range differs -
+					// cone angles already default sensibly.
+					if (type == LightType::Spot)
+					{
+						entity.light.range = 20.0F;
+					}
+					entities_.push_back(entity);
+					return {true, false, "Light created in the editor scene."};
+				}
+				else if constexpr (std::is_same_v<Command, CreateCameraCommand>)
+				{
+					const std::string name = value.name.empty() ? makeUniqueName("Camera") : value.name;
+					if (nameInUse(name))
+					{
+						return {false, false, "An entity with this name already exists."};
+					}
+					if (!(value.fieldOfViewDegrees > 0.0F) || value.fieldOfViewDegrees >= 180.0F)
+					{
+						return {false, false, "Field of view must be between 0 and 180 degrees."};
+					}
+					if (value.makeMain)
+					{
+						// Enforce the "exactly one main camera" invariant here
+						// rather than leaving it to the UI - the AI reaches this
+						// path too, and two main cameras would make which one the
+						// Game view picks depend on entity order.
+						for (SceneEntity& other : entities_)
+						{
+							if (other.isCamera)
+							{
+								other.camera.isMainCamera = false;
+							}
+						}
+					}
+					SceneEntity entity;
+					entity.id = nextEntityId_++;
+					entity.name = name;
+					entity.position = value.position;
+					entity.rotationEuler = value.rotationEuler;
+					entity.localPosition = value.position;
+					entity.localRotationEuler = value.rotationEuler;
+					entity.isCamera = true;
+					entity.camera.fieldOfViewDegrees = value.fieldOfViewDegrees;
+					entity.camera.isMainCamera = value.makeMain;
+					entities_.push_back(entity);
+					return {true, false, "Camera created in the editor scene."};
+				}
+				else if constexpr (std::is_same_v<Command, CreateUIElementCommand>)
+				{
+					UIElementKind kind = UIElementKind::Crosshair;
+					if (!uiElementKindFromName(value.kind, kind))
+					{
+						return {false, false, "UI kind must be crosshair, image, text, or panel."};
+					}
+					if (!value.parentName.empty() && findEntity(value.parentName) == nullptr)
+					{
+						return {false, false, "Parent entity was not found in the editor scene."};
+					}
+					const std::string name =
+						value.name.empty() ? makeUniqueName(uiElementKindName(kind)) : value.name;
+					if (nameInUse(name))
+					{
+						return {false, false, "An entity with this name already exists."};
+					}
+					SceneEntity entity;
+					entity.id = nextEntityId_++;
+					entity.name = name;
+					entity.isUIElement = true;
+					entity.ui.kind = kind;
+					entity.parentName = value.parentName;
+					// A UI element is positioned by anchor+offsetPixels, never
+					// by its transform, so it sits at its parent's origin
+					// rather than the (0,1,0) offset a new child normally gets
+					// - an offset there would be invisible but would still
+					// drag the gizmo somewhere confusing.
+					entity.localPosition = glm::vec3(0.0F);
+					if (kind == UIElementKind::Text && !value.text.empty())
+					{
+						entity.ui.text = value.text;
+					}
+					if (kind == UIElementKind::Image)
+					{
+						entity.ui.imagePath = value.imagePath;
+					}
+					if (kind == UIElementKind::Panel)
+					{
+						// A panel is a background, so it defaults larger and
+						// semi-transparent rather than a 24px opaque square.
+						entity.ui.sizePixels = glm::vec2(220.0F, 120.0F);
+						entity.ui.color = glm::vec3(0.05F, 0.06F, 0.09F);
+						entity.ui.opacity = 0.65F;
+					}
+					entities_.push_back(entity);
+					return {true, false, "UI element created in the editor scene."};
+				}
 				else if constexpr (std::is_same_v<Command, SetPropertyCommand>)
 				{
 					SceneEntity* entity = findEntityMutable(value.entityName);
@@ -788,8 +983,81 @@ namespace gameforger::editor
 					}
 					else if (value.component == "Camera")
 					{
+						// This component covers BOTH the scripted-camera rig
+						// (fpsEyeHeight etc, which any entity can carry) and a
+						// real Camera entity's lens settings. The property
+						// names don't overlap, so they share one component
+						// name rather than making the user learn two.
+						if (value.property == "enabled")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->isCamera = *enabled;
+								return {true, false, "Camera flag updated."};
+							}
+						}
+						if (value.property == "isMainCamera")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								if (*enabled)
+								{
+									if (!entity->isCamera)
+									{
+										return {false, false, "Entity is not a camera."};
+									}
+									// Same "exactly one main camera" invariant
+									// CreateCameraCommand enforces.
+									const int keepId = entity->id;
+									for (SceneEntity& other : entities_)
+									{
+										if (other.isCamera && other.id != keepId)
+										{
+											other.camera.isMainCamera = false;
+										}
+									}
+								}
+								entity->camera.isMainCamera = *enabled;
+								return {true, false, "Main camera updated."};
+							}
+						}
+						if (value.property == "clearColor")
+						{
+							if (const auto* color = std::get_if<glm::vec3>(&value.value))
+							{
+								entity->camera.clearColor = *color;
+								return {true, false, "Camera clear color updated."};
+							}
+						}
 						if (const auto* number = std::get_if<float>(&value.value))
 						{
+							if (value.property == "fieldOfView")
+							{
+								if (!(*number > 0.0F) || *number >= 180.0F)
+								{
+									return {false, false, "Field of view must be between 0 and 180 degrees."};
+								}
+								entity->camera.fieldOfViewDegrees = *number;
+								return {true, false, "Camera field of view updated."};
+							}
+							if (value.property == "nearClip")
+							{
+								if (!(*number > 0.0F) || *number >= entity->camera.farClip)
+								{
+									return {false, false, "Near clip must be above 0 and below the far clip."};
+								}
+								entity->camera.nearClip = *number;
+								return {true, false, "Camera near clip updated."};
+							}
+							if (value.property == "farClip")
+							{
+								if (*number <= entity->camera.nearClip)
+								{
+									return {false, false, "Far clip must be above the near clip."};
+								}
+								entity->camera.farClip = *number;
+								return {true, false, "Camera far clip updated."};
+							}
 							if (value.property == "fpsEyeHeight")
 							{
 								entity->cameraRig.fpsEyeHeight = *number;
@@ -821,6 +1089,211 @@ namespace gameforger::editor
 						// self.gameManager:setCursorLock() - see game_manager.lua.
 						// An old scene still carrying the key just falls through
 						// to the unknown-property result below rather than failing.
+					}
+					else if (value.component == "Light")
+					{
+						if (value.property == "enabled")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->isLight = *enabled;
+								return {true, false, "Light flag updated."};
+							}
+						}
+						if (value.property == "type")
+						{
+							if (const auto* text = std::get_if<std::string>(&value.value))
+							{
+								LightType parsed = LightType::Directional;
+								if (!lightTypeFromName(*text, parsed))
+								{
+									return {false, false, "Light type must be directional, point, or spot."};
+								}
+								entity->light.type = parsed;
+								return {true, false, "Light type updated."};
+							}
+						}
+						if (value.property == "color")
+						{
+							if (const auto* color = std::get_if<glm::vec3>(&value.value))
+							{
+								entity->light.color = *color;
+								return {true, false, "Light color updated."};
+							}
+						}
+						if (value.property == "castShadows")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->light.castShadows = *enabled;
+								return {true, false, "Light shadow casting updated."};
+							}
+						}
+						if (const auto* number = std::get_if<float>(&value.value))
+						{
+							if (!std::isfinite(*number))
+							{
+								return {false, false, "Light values must be finite."};
+							}
+							if (value.property == "intensity")
+							{
+								if (*number < 0.0F)
+								{
+									return {false, false, "Light intensity cannot be negative."};
+								}
+								entity->light.intensity = *number;
+								return {true, false, "Light intensity updated."};
+							}
+							if (value.property == "range")
+							{
+								if (!(*number > 0.0F))
+								{
+									return {false, false, "Light range must be above 0."};
+								}
+								entity->light.range = *number;
+								return {true, false, "Light range updated."};
+							}
+							if (value.property == "innerCone")
+							{
+								// Clamped rather than rejected: dragging the
+								// inner slider past the outer one is a normal
+								// thing to do in a UI, and snapping outer along
+								// with it is what Unity does.
+								const float clamped = std::clamp(*number, 0.0F, 89.0F);
+								entity->light.innerConeDegrees = clamped;
+								if (entity->light.outerConeDegrees < clamped)
+								{
+									entity->light.outerConeDegrees = clamped;
+								}
+								return {true, false, "Spot inner cone updated."};
+							}
+							if (value.property == "outerCone")
+							{
+								const float clamped = std::clamp(*number, 0.0F, 89.0F);
+								entity->light.outerConeDegrees = clamped;
+								if (entity->light.innerConeDegrees > clamped)
+								{
+									entity->light.innerConeDegrees = clamped;
+								}
+								return {true, false, "Spot outer cone updated."};
+							}
+							if (value.property == "shadowBias")
+							{
+								entity->light.shadowBias = std::clamp(*number, 0.0F, 0.1F);
+								return {true, false, "Light shadow bias updated."};
+							}
+						}
+					}
+					else if (value.component == "UI")
+					{
+						if (value.property == "enabled")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->isUIElement = *enabled;
+								return {true, false, "UI element flag updated."};
+							}
+						}
+						if (const auto* text = std::get_if<std::string>(&value.value))
+						{
+							if (value.property == "kind")
+							{
+								UIElementKind parsed = UIElementKind::Crosshair;
+								if (!uiElementKindFromName(*text, parsed))
+								{
+									return {false, false, "UI kind must be crosshair, image, text, or panel."};
+								}
+								entity->ui.kind = parsed;
+								return {true, false, "UI kind updated."};
+							}
+							if (value.property == "anchor")
+							{
+								UIAnchor parsed = UIAnchor::Center;
+								if (!uiAnchorFromName(*text, parsed))
+								{
+									return {false, false, "Unknown UI anchor."};
+								}
+								entity->ui.anchor = parsed;
+								return {true, false, "UI anchor updated."};
+							}
+							if (value.property == "text")
+							{
+								entity->ui.text = *text;
+								return {true, false, "UI text updated."};
+							}
+							if (value.property == "fontPath" || value.property == "imagePath")
+							{
+								// Empty clears the slot; anything else must
+								// resolve inside the project, same rule the
+								// text-mesh font path follows.
+								if (!text->empty() && !std::filesystem::exists(projectRoot_ / *text))
+								{
+									return {false, false, "That file does not exist in the project."};
+								}
+								if (value.property == "fontPath") { entity->ui.fontPath = *text; }
+								else { entity->ui.imagePath = *text; }
+								return {true, false, "UI asset path updated."};
+							}
+						}
+						if (value.property == "color")
+						{
+							if (const auto* color = std::get_if<glm::vec3>(&value.value))
+							{
+								entity->ui.color = *color;
+								return {true, false, "UI color updated."};
+							}
+						}
+						if (value.property == "offset" || value.property == "size")
+						{
+							// vec2-shaped values ride in on a vec3's xy - the
+							// EditableValue variant has no vec2, and adding one
+							// would touch every command consumer for two fields.
+							if (const auto* vec = std::get_if<glm::vec3>(&value.value))
+							{
+								if (value.property == "offset")
+								{
+									entity->ui.offsetPixels = glm::vec2(vec->x, vec->y);
+									return {true, false, "UI offset updated."};
+								}
+								if (!(vec->x > 0.0F) || !(vec->y > 0.0F))
+								{
+									return {false, false, "UI size must be above 0 on both axes."};
+								}
+								entity->ui.sizePixels = glm::vec2(vec->x, vec->y);
+								return {true, false, "UI size updated."};
+							}
+						}
+						if (const auto* number = std::get_if<float>(&value.value))
+						{
+							if (!std::isfinite(*number))
+							{
+								return {false, false, "UI values must be finite."};
+							}
+							if (value.property == "opacity")
+							{
+								entity->ui.opacity = std::clamp(*number, 0.0F, 1.0F);
+								return {true, false, "UI opacity updated."};
+							}
+							if (value.property == "fontSize")
+							{
+								if (!(*number > 0.0F))
+								{
+									return {false, false, "UI font size must be above 0."};
+								}
+								entity->ui.fontSizePixels = *number;
+								return {true, false, "UI font size updated."};
+							}
+							if (value.property == "thickness")
+							{
+								entity->ui.thicknessPixels = std::clamp(*number, 1.0F, 32.0F);
+								return {true, false, "Crosshair thickness updated."};
+							}
+							if (value.property == "gap")
+							{
+								entity->ui.gapPixels = std::clamp(*number, 0.0F, 64.0F);
+								return {true, false, "Crosshair gap updated."};
+							}
+						}
 					}
 					else if (value.component == "TextMesh")
 					{

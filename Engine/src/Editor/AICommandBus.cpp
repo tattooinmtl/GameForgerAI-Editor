@@ -184,6 +184,51 @@ namespace gameforger::editor
 					}
 					return {true, false, "Create text mesh command is valid."};
 				}
+				else if constexpr (std::is_same_v<Command, CreateLightCommand>)
+				{
+					LightType parsed = LightType::Directional;
+					if (!lightTypeFromName(value.type, parsed))
+					{
+						return invalid("Light type must be directional, point, or spot.");
+					}
+					if (!std::isfinite(value.position.x) || !std::isfinite(value.position.y)
+						|| !std::isfinite(value.position.z) || !std::isfinite(value.rotationEuler.x)
+						|| !std::isfinite(value.rotationEuler.y) || !std::isfinite(value.rotationEuler.z))
+					{
+						return invalid("Light position and rotation must contain finite values.");
+					}
+					if (!std::isfinite(value.intensity) || value.intensity < 0.0F)
+					{
+						return invalid("Light intensity must be finite and not negative.");
+					}
+					return {true, false, "Create light command is valid."};
+				}
+				else if constexpr (std::is_same_v<Command, CreateCameraCommand>)
+				{
+					if (!std::isfinite(value.position.x) || !std::isfinite(value.position.y)
+						|| !std::isfinite(value.position.z) || !std::isfinite(value.rotationEuler.x)
+						|| !std::isfinite(value.rotationEuler.y) || !std::isfinite(value.rotationEuler.z))
+					{
+						return invalid("Camera position and rotation must contain finite values.");
+					}
+					if (!(value.fieldOfViewDegrees > 0.0F) || value.fieldOfViewDegrees >= 180.0F)
+					{
+						return invalid("Field of view must be between 0 and 180 degrees.");
+					}
+					return {true, false, "Create camera command is valid."};
+				}
+				else if constexpr (std::is_same_v<Command, CreateUIElementCommand>)
+				{
+					UIElementKind parsedKind = UIElementKind::Crosshair;
+					if (!uiElementKindFromName(value.kind, parsedKind))
+					{
+						return invalid("UI kind must be crosshair, image, text, or panel.");
+					}
+					// parentName is optional here (a UI element can be created
+					// loose and dragged onto a camera later), but if given it
+					// must name something - the executor re-checks it exists.
+					return {true, false, "Create UI element command is valid."};
+				}
 				else
 				{
 					// Default branch: previously returned "Command is valid."

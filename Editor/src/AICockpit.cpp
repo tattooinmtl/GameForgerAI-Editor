@@ -306,6 +306,7 @@ namespace gameforger::editor
 			if (lower == "cone")     return PrimitiveType::Cone;
 			if (lower == "plane")    return PrimitiveType::Plane;
 			if (lower == "capsule")  return PrimitiveType::Capsule;
+			if (lower == "empty")    return PrimitiveType::Empty;
 			return PrimitiveType::Cube;
 		}
 

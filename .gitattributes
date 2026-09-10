@@ -1,0 +1,52 @@
+# Without this file, line-ending handling depends on each machine's
+# core.autocrlf, and every `git add` on this repo printed a "LF will be
+# replaced by CRLF" warning for every file touched. Declaring the policy here
+# makes it a property of the repository instead of the checkout.
+#
+# `text=auto` matches what core.autocrlf=true was already doing - LF in the
+# repository, native endings in the working tree - so adding this causes no
+# renormalisation of existing history.
+* text=auto
+
+# Sources and text assets: normalise explicitly rather than relying on the
+# auto-detection heuristic.
+*.cpp   text
+*.hpp   text
+*.h     text
+*.c     text
+*.lua   text
+*.json  text
+*.md    text
+*.txt   text
+*.cmake text
+*.yml   text
+*.iss   text
+*.glsl  text
+
+# Windows-only scripts. CRLF in the working tree regardless of platform -
+# cmd.exe mis-parses LF-terminated .cmd/.bat files.
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary assets: never touch these. Newline translation inside a .glb or a
+# .png silently corrupts it.
+*.glb   binary
+*.gltf  binary
+*.fbx   binary
+*.obj   binary
+*.blend binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.tga   binary
+*.psd   binary
+*.dds   binary
+*.ico   binary
+*.mp4   binary
+*.ttf   binary
+*.otf   binary
+*.wav   binary
+*.ogg   binary
+*.zip   binary
+*.pdb   binary

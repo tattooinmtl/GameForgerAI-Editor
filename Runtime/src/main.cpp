@@ -21,6 +21,9 @@
 #include <glm/common.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Editor/AudioSourceEffects.hpp"
+#include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/GlfwInputSource.hpp"
@@ -36,6 +39,15 @@
 
 namespace
 {
+	void executeOrLog(gameforger::editor::AICommandBus& commandBus, const gameforger::editor::AIEditorCommand& command)
+	{
+		const gameforger::editor::AICommandResult result = commandBus.execute(command);
+		if (!result.success)
+		{
+			std::fprintf(stderr, "Runtime command failed: %s\n", result.message.c_str());
+		}
+	}
+
 	void glfwErrorCallback(const int error, const char* description)
 	{
 		std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -422,6 +434,17 @@ int main()
 	commandBus.setHandler([&scene](const AIEditorCommand& command) { return scene.execute(command); });
 
 	GlfwInputSource inputSource(window);
+	// Runtime had no audio at all: hooks and self.audio were silent here
+	// while working in the Editor's Play mode. A scene has to behave the same
+	// standalone, so the engine and the hook list live here too.
+	gameforger::core::AudioEngine audioEngine;
+	if (!audioEngine.initialize())
+	{
+		std::fprintf(stderr, "[audio] No audio device - continuing silently.\n");
+	}
+	ProjectSettings projectSettings;
+	(void)loadProjectSettings(projectRoot, projectSettings);
+
 	GameplayState gameplay;
 	if (resumedFromSave)
 	{
@@ -439,14 +462,13 @@ int main()
 	// instance needs shutting down and restarting against the new ids).
 	const auto startAllScripts = [&]()
 	{
-		scriptRuntime.initialize(
-			scene,
-			commandBus,
-			inputSource,
+		ScriptRuntime::Config scriptConfig;
+		scriptConfig.logCallback =
 			[](const bool isError, const std::string& message)
 			{
 				std::fprintf(stderr, "%s%s\n", isError ? "[script error] " : "[script] ", message.c_str());
-			},
+			};
+		scriptConfig.projectileSpawnCallback =
 			[&gameplay](
 				const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
 			{
@@ -455,21 +477,48 @@ int main()
 				const glm::vec3 velocity =
 					distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
 				gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
-			},
-			// Runtime doesn't build the Editor's F-hold/E-aim-catapult
-			// interactions (Editor-Play-only, see drawGameViewPanel in
-			// Editor/src/main.cpp) - self.world:isHoldingItem()/
-			// isAimingCatapult() simply always report false here, and
-			// the catapult set callback / gravity projectile spawn
-			// callback are no-ops (Runtime has no catapult UI of its
-			// own, so nothing ever calls them).
-			[]() { return false; },
-			[]() { return false; },
-			[](const bool) { /* no-op: Runtime has no catapult UI */ },
+			};
+		scriptConfig.heldItemQueryCallback = []() { return false; };
+		scriptConfig.aimingCatapultQueryCallback = []() { return false; };
+		scriptConfig.operatingCatapultSetCallback = [](const bool) { /* no-op: Runtime has no catapult UI */ };
+		scriptConfig.gravityProjectileSpawnCallback =
 			[](const glm::vec3&, const glm::vec3&, const float, const std::string&)
 			{
 				/* no-op: Runtime does not spawn gravity projectiles */
-			});
+			};
+		// Same manager-driven cursor lock as the Editor, so a scene behaves
+		// identically standalone.
+		scriptConfig.cursorLockSetCallback =
+			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
+		scriptConfig.audioCommandCallback =
+			[&audioEngine, &projectRoot](
+				const ScriptRuntime::AudioCommand command,
+				const std::string& clipPath,
+				const float value,
+				const bool loop)
+			{
+				switch (command)
+				{
+					case ScriptRuntime::AudioCommand::Play:
+						(void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
+						break;
+					case ScriptRuntime::AudioCommand::Stop:
+						audioEngine.stop(clipPath);
+						break;
+					case ScriptRuntime::AudioCommand::StopAll:
+						audioEngine.stopAll();
+						break;
+					case ScriptRuntime::AudioCommand::SetMasterVolume:
+						audioEngine.setMasterVolume(value);
+						break;
+				}
+			};
+		scriptConfig.audioQueryCallback =
+			[&audioEngine](const std::string& clipPath)
+			{
+				return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
+			};
+		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
 		for (const SceneEntity& entity : scene.entities())
 		{
 			for (const std::string& scriptPath : entity.scripts)
@@ -479,6 +528,16 @@ int main()
 		}
 	};
 	startAllScripts();
+
+	// Standalone has one continuous session, so on_play_start fires once here
+	// rather than on a Play button. This is what makes a looping background
+	// music hook actually play in the shipped game.
+	fireAudioHooks(audioEngine, projectRoot, projectSettings.audioHooks, AudioHook::Event::OnPlayStart);
+
+	// ...and the same for per-object sources. Standalone used to fire only the
+	// project-wide hooks, so an object given a looping ambience in the Audio
+	// Manager played in the editor and was silent in the shipped game.
+	playSourcesOnAwake(audioEngine, projectRoot, scene);
 
 	// Mouse-look state for the scripted Game camera - same fields/meaning as
 	// the Editor's PlayModeState (main.cpp), just local here since Runtime
@@ -553,7 +612,8 @@ int main()
 		{
 			menuOpen = !menuOpen;
 		}
-		const bool wantsCursorLock = followedEntity != nullptr && followedEntity->cameraRig.lockCursor && !menuOpen;
+		const bool wantsCursorLock = followedEntity != nullptr &&
+			gameplay.cursorLockDesired && !scriptRuntime.listManagers().empty() && !menuOpen;
 		if (wantsCursorLock && !gameplay.cursorCurrentlyLocked)
 		{
 			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -590,7 +650,7 @@ int main()
 					followedEntity->rotationEuler.x,
 					followedEntity->rotationEuler.y - static_cast<float>(mouseDeltaX) * mouseLookSensitivity,
 					followedEntity->rotationEuler.z);
-				commandBus.execute(SetPropertyCommand{followedEntity->name, "Transform", "rotation", newRotation});
+				executeOrLog(commandBus, SetPropertyCommand{followedEntity->name, "Transform", "rotation", newRotation});
 				// Rotation just changed under the entity findEntity() found
 				// earlier this frame - re-resolve so the pickup check below
 				// (and this frame's camera framing) see the fresh facing.
@@ -626,7 +686,7 @@ int main()
 					const glm::vec3 itemMaterialBlendWeight = candidate->materialBlendWeight;
 					const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
 					const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
-					commandBus.execute(DeleteEntityCommand{candidate->name});
+					executeOrLog(commandBus, DeleteEntityCommand{candidate->name});
 					const auto existing = std::find_if(
 						gameplay.inventoryItems.begin(),
 						gameplay.inventoryItems.end(),
@@ -671,7 +731,10 @@ int main()
 			? followedEntity->id
 			: -1;
 
-		viewportRenderer.resize(width, height);
+		if (!viewportRenderer.resize(width, height))
+		{
+			std::fprintf(stderr, "Failed to resize the game viewport.\n");
+		}
 		viewportRenderer.render(scene.entities(), {}, projectRoot, excludeEntityId);
 		viewportRenderer.blitToCurrentFramebuffer(width, height);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -27,7 +28,8 @@ namespace gameforger::editor
 	// getRight), `self.input` (isKeyDown/isKeyPressed/getAxis), `self.camera`
 	// (setMode/getMode, "fps" or "third_person"), and `self.physics`
 	// (resolve(position, halfWidth, height) -> correctedPosition, grounded -
-	// simple AABB collision/ground-check against Collider-enabled entities),
+	// box vs Collider-enabled primitives, imported-mesh triangles, and
+	// children of a Collider-enabled parent; see Collision.hpp),
 	// and `self.world` (findNearestWithTag(tag) -> position|nil, distance,
 	// name - nearest OTHER entity carrying that tag anywhere in its tags
 	// list, not just primaryTag; findPositionByTag(tag) -> position|nil,
@@ -78,6 +80,49 @@ namespace gameforger::editor
 		using GravityProjectileSpawnCallback =
 			std::function<void(const glm::vec3&, const glm::vec3&, float, const std::string&)>;
 
+		// Asks the host to lock or release the mouse cursor. Cursor ownership
+		// moved off the per-entity Inspector checkbox and onto whichever
+		// script declares itself the Game Manager - see game_manager.lua.
+		using CursorLockSetCallback = std::function<void(bool)>;
+
+		// What a script asked the host to do with audio. An explicit verb
+		// rather than the previous overloaded clipPath, which used "" to mean
+		// stop-everything and the reserved path "@master" to mean set-volume -
+		// a clip legitimately named that would have silently changed volume.
+		enum class AudioCommand
+		{
+			Play,            // clipPath, volume, loop
+			Stop,            // clipPath - that clip only
+			StopAll,         // everything this engine is playing
+			SetMasterVolume  // value in 0..1
+		};
+
+		// Routed through the host for the same reason ProjectileSpawnCallback
+		// is: ScriptRuntime never links AudioEngine.
+		using AudioCommandCallback =
+			std::function<void(AudioCommand, const std::string& clipPath, float value, bool loop)>;
+
+		// Answers self.audio:isPlaying([clip]). An empty clip means "anything".
+		using AudioQueryCallback = std::function<bool(const std::string& clipPath)>;
+
+		// Grouping what used to be nine positional parameters on initialize().
+		// Adding a capability meant touching every call site and risking a
+		// silent mis-ordering between two same-typed callbacks (there are
+		// already two BoolQueryCallbacks next to each other); a struct with
+		// named fields cannot be mis-ordered.
+		struct Config
+		{
+			LogCallback logCallback;
+			ProjectileSpawnCallback projectileSpawnCallback;
+			BoolQueryCallback heldItemQueryCallback;
+			BoolQueryCallback aimingCatapultQueryCallback;
+			BoolSetCallback operatingCatapultSetCallback;
+			GravityProjectileSpawnCallback gravityProjectileSpawnCallback;
+			CursorLockSetCallback cursorLockSetCallback;
+			AudioCommandCallback audioCommandCallback;
+			AudioQueryCallback audioQueryCallback;
+		};
+
 		ScriptRuntime() = default;
 		~ScriptRuntime();
 
@@ -88,12 +133,7 @@ namespace gameforger::editor
 			EditorScene& scene,
 			AICommandBus& commandBus,
 			InputSource& inputSource,
-			LogCallback logCallback,
-			ProjectileSpawnCallback projectileSpawnCallback,
-			BoolQueryCallback heldItemQueryCallback,
-			BoolQueryCallback aimingCatapultQueryCallback,
-			BoolSetCallback operatingCatapultSetCallback,
-			GravityProjectileSpawnCallback gravityProjectileSpawnCallback);
+			Config config);
 		void shutdown() noexcept;
 		[[nodiscard]] bool isRunning() const noexcept;
 
@@ -122,6 +162,24 @@ namespace gameforger::editor
 			bool defaultBool = false;
 			glm::vec3 defaultVec3{0.0F};
 		};
+
+		// Cursor lock, driven by self.gameManager:setCursorLock(). Forwards to
+		// the host through Config::cursorLockSetCallback.
+		void setCursorLock(bool locked);
+
+		// self.audio, forwarded to the host through Config's audio callbacks.
+		void playAudio(const std::string& clipPath, float volume, bool loop);
+		void stopAudioClip(const std::string& clipPath);
+		void stopAllAudio();
+		void setAudioMasterVolume(float volume);
+		[[nodiscard]] bool isAudioPlaying(const std::string& clipPath) const;
+
+		// Manager registry, driven by the self.managers proxy. registerManager
+		// is idempotent; unregisterManager on an unknown name is a no-op.
+		void registerManager(const std::string& name);
+		void unregisterManager(const std::string& name);
+		[[nodiscard]] bool hasManager(const std::string& name) const;
+		[[nodiscard]] const std::vector<std::string>& listManagers() const noexcept { return registeredManagers_; }
 
 		[[nodiscard]] static std::vector<ExposedScriptProperty> parseScriptProperties(
 			const std::filesystem::path& fullScriptPath);
@@ -181,12 +239,12 @@ namespace gameforger::editor
 		EditorScene* scene_ = nullptr;
 		AICommandBus* commandBus_ = nullptr;
 		InputSource* inputSource_ = nullptr;
-		LogCallback logCallback_;
-		ProjectileSpawnCallback projectileSpawnCallback_;
-		BoolQueryCallback heldItemQueryCallback_;
-		BoolQueryCallback aimingCatapultQueryCallback_;
-		BoolSetCallback operatingCatapultSetCallback_;
-		GravityProjectileSpawnCallback gravityProjectileSpawnCallback_;
+		Config config_;
+		// Names registered via self.managers:register(). A controller
+		// registers itself on start and is auto-unregistered on on_end, so
+		// "is anything driving the player?" is answerable without the host
+		// tracking script lifetimes itself.
+		std::vector<std::string> registeredManagers_;
 		std::unordered_map<int, std::vector<ScriptInstance>> instancesByEntity_;
 		int activeCameraEntityId_ = -1;
 		std::string activeCameraMode_ = "fps";
@@ -195,9 +253,18 @@ namespace gameforger::editor
 		// error that aborts the pcall with LUA_ERRRUN. Stops a `while true`
 		// in on_update from freezing the editor indefinitely.
 		std::atomic<std::int64_t> instructionsRemaining_{0};
+		std::atomic<std::size_t> luaBytesUsed_{0};
+		static constexpr std::size_t kLuaMemoryBudgetBytes = 8 * 1024 * 1024;
+
+		// on_end() dispatch - one instance, or every live instance during
+		// shutdown. Private: lifecycle is the runtime's business, not a
+		// caller's.
+		void dispatchOnEnd(const ScriptInstance& instance);
+		void dispatchOnEndForAll();
 
 		static void instructionHook(lua_State* L, lua_Debug* ar);
 		void installBudgetHook(lua_State* L);
 		void resetBudget();
+		static void* luaAlloc(void* userData, void* pointer, std::size_t oldSize, std::size_t newSize);
 	};
 }

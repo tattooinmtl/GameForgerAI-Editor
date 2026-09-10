@@ -8,11 +8,20 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Core/FrameProfiler.hpp"
+#include "GameForger/Core/ProjectPaths.hpp"
+#include "GameForger/Editor/ProjectSettings.hpp"
+#include "GameForger/Editor/ProjectSettingsBus.hpp"
+#include "GameForger/Runtime/GameplayLoop.hpp"
+#include "GameForger/Editor/AIChatResponse.hpp"
 #include "GameForger/Editor/AICommand.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Editor/AudioSourceEffects.hpp"
 #include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
+#include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
 
@@ -130,6 +139,44 @@ void testJsonParser()
 	// 2. Reject trailing garbage / invalid JSON
 	const std::optional<json::Value> invalidDoc = json::parse("{\"name\": \"Player\"} extra_junk");
 	TEST_ASSERT(!invalidDoc.has_value(), "JSON with trailing garbage must be rejected");
+
+	// 3. RFC 8259: leading '+' is not a valid number (F-10 / DEF-05)
+	const std::optional<json::Value> plusNumber = json::parse("{\"n\": +42}");
+	TEST_ASSERT(!plusNumber.has_value(), "JSON numbers must not accept a leading '+'");
+
+	// 4. UTF-16 surrogate pair \uD83D\uDE00 (😀) must decode to one code point
+	const std::optional<json::Value> emoji = json::parse("{\"g\":\"\\uD83D\\uDE00\"}");
+	TEST_ASSERT(emoji.has_value(), "Surrogate-pair JSON string must parse");
+	const json::Value* g = emoji->find("g");
+	TEST_ASSERT(g != nullptr && g->type == json::Value::Type::String, "emoji field must be a string");
+	TEST_ASSERT(g->stringValue.size() == 4 &&
+			static_cast<unsigned char>(g->stringValue[0]) == 0xF0 &&
+			static_cast<unsigned char>(g->stringValue[1]) == 0x9F &&
+			static_cast<unsigned char>(g->stringValue[2]) == 0x98 &&
+			static_cast<unsigned char>(g->stringValue[3]) == 0x80,
+		"\\uD83D\\uDE00 must decode to UTF-8 F0 9F 98 80");
+
+	// 5. Nesting depth is capped. Without a cap this input recurses ~50k deep
+	// and overflows the stack - a hard crash, reachable from any AI provider
+	// response, Blender MCP reply or scene file the editor is asked to read.
+	// Rejection must be graceful (nullopt), not a process death.
+	{
+		const std::size_t kNesting = 50000;
+		std::string deep;
+		deep.reserve(kNesting * 2);
+		deep.append(kNesting, '[');
+		deep.append(kNesting, ']');
+		TEST_ASSERT(!json::parse(deep).has_value(),
+			"Deeply nested JSON must be rejected rather than overflowing the stack");
+
+		// The cap must not reject documents of a sane shape. Scenes nest ~6
+		// levels; 40 is comfortably legal and must still parse.
+		std::string legal;
+		legal.append(40, '[');
+		legal.append(40, ']');
+		TEST_ASSERT(json::parse(legal).has_value(),
+			"Moderately nested JSON (40 levels) must still parse");
+	}
 }
 
 // ----------------------------------------------------------------------------
@@ -182,6 +229,34 @@ void testSceneSerialization()
 
 	std::filesystem::remove(tempSceneFile);
 	std::filesystem::remove(tempSceneFile.string() + ".bak");
+
+	// Collider type round-trip (Box / Mesh / Convex)
+	const std::filesystem::path colliderSceneFile = "test_collider_type.scene";
+	{
+		SceneEntity boxEntity;
+		boxEntity.name = "BoxCol";
+		boxEntity.hasCollider = true;
+		boxEntity.colliderType = ColliderType::Box;
+		SceneEntity meshEntity;
+		meshEntity.name = "MeshCol";
+		meshEntity.hasCollider = true;
+		meshEntity.colliderType = ColliderType::Mesh;
+		meshEntity.isImportedMesh = true;
+		SceneEntity convexEntity;
+		convexEntity.name = "ConvexCol";
+		convexEntity.hasCollider = true;
+		convexEntity.colliderType = ColliderType::Convex;
+		const SceneSaveResult typedSave =
+			saveScene(colliderSceneFile, {boxEntity, meshEntity, convexEntity});
+		TEST_ASSERT(typedSave.success, "Saving collider types must succeed");
+		const SceneLoadResult typedLoad = loadScene(colliderSceneFile);
+		TEST_ASSERT(typedLoad.success && typedLoad.entities.size() == 3, "Load collider types");
+		TEST_ASSERT(typedLoad.entities[0].colliderType == ColliderType::Box, "Box type round-trip");
+		TEST_ASSERT(typedLoad.entities[1].colliderType == ColliderType::Mesh, "Mesh type round-trip");
+		TEST_ASSERT(typedLoad.entities[2].colliderType == ColliderType::Convex, "Convex type round-trip");
+		std::filesystem::remove(colliderSceneFile);
+		std::filesystem::remove(colliderSceneFile.string() + ".bak");
+	}
 }
 
 // ----------------------------------------------------------------------------
@@ -210,6 +285,31 @@ void testEditorScene()
 	const SceneEntity* player2 = scene.findEntity("Player (1)");
 	TEST_ASSERT(player2 != nullptr, "findEntity('Player (1)') must return unique duplicated entity");
 	TEST_ASSERT(scene.entities().size() == 2, "Total entities count must be 2");
+
+	// 4. Rename rewrites children's parentName (F-02 / R-01)
+	const AICommandResult childCreate = scene.execute(CreateEntityCommand{"Turret", PrimitiveType::Cube, glm::vec3(1.0F)});
+	TEST_ASSERT(childCreate.success, "Creating child 'Turret' must succeed");
+	const AICommandResult parented = scene.execute(
+		SetPropertyCommand{"Turret", "Parent", "parentName", std::string("Player")});
+	TEST_ASSERT(parented.success, "Parenting Turret under Player must succeed");
+	TEST_ASSERT(scene.findEntity("Turret") != nullptr && scene.findEntity("Turret")->parentName == "Player",
+		"Turret.parentName must be Player before rename");
+
+	const AICommandResult renamed = scene.execute(RenameEntityCommand{"Player", "Hero"});
+	TEST_ASSERT(renamed.success, "Renaming Player to Hero must succeed");
+	TEST_ASSERT(scene.findEntity("Player") == nullptr, "Old name Player must be gone");
+	TEST_ASSERT(scene.findEntity("Hero") != nullptr, "Hero must exist after rename");
+	const SceneEntity* turretAfterRename = scene.findEntity("Turret");
+	TEST_ASSERT(turretAfterRename != nullptr && turretAfterRename->parentName == "Hero",
+		"Child parentName must follow parent rename");
+
+	// 5. Delete parent promotes children to root (clears parentName) without deleting them
+	const AICommandResult deleted = scene.execute(DeleteEntityCommand{"Hero"});
+	TEST_ASSERT(deleted.success, "Deleting Hero must succeed");
+	TEST_ASSERT(scene.findEntity("Hero") == nullptr, "Hero must be gone");
+	const SceneEntity* turretAfterDelete = scene.findEntity("Turret");
+	TEST_ASSERT(turretAfterDelete != nullptr, "Child must survive parent delete");
+	TEST_ASSERT(turretAfterDelete->parentName.empty(), "Orphaned child must be promoted to root");
 }
 
 // ----------------------------------------------------------------------------
@@ -270,12 +370,11 @@ void testScriptRuntimeSandboxing()
 	ScriptRuntime runtime;
 
 	std::vector<std::string> logs;
-	runtime.initialize(
-		scene, bus, input,
-		[&logs](bool isError, const std::string& msg) {
-			if (isError) logs.push_back(msg);
-		},
-		nullptr, nullptr, nullptr, nullptr, nullptr);
+	ScriptRuntime::Config runtimeConfig;
+	runtimeConfig.logCallback = [&logs](bool isError, const std::string& msg) {
+		if (isError) logs.push_back(msg);
+	};
+	runtime.initialize(scene, bus, input, runtimeConfig);
 
 	TEST_ASSERT(runtime.isRunning(), "ScriptRuntime must be running");
 
@@ -296,6 +395,41 @@ void testScriptRuntimeSandboxing()
 
 	std::filesystem::remove(script1Path);
 	std::filesystem::remove(script2Path);
+}
+
+void testGetRightMatchesFpsCamera()
+{
+	// GLM lookAtRH screen-right is cross(forward, +Y). At yaw 0 the entity
+	// looks +Z, so D-strafe (getRight) must be -X, matching the Game view.
+	const std::filesystem::path scriptsDir = "Game/Scripts";
+	std::filesystem::create_directories(scriptsDir);
+	const std::filesystem::path scriptPath = scriptsDir / "test_get_right.lua";
+	{
+		std::ofstream out(scriptPath);
+		out << R"(
+			local Controller = { right_x = 0.0 }
+			function Controller:on_start()
+				self.right_x = self.entity:getRight().x
+			end
+			return Controller
+		)";
+	}
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	MockInputSource input;
+	ScriptRuntime runtime;
+	runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
+
+	TEST_ASSERT(runtime.startScript(1, "Game/Scripts/test_get_right.lua", "."),
+		"getRight probe script must start");
+	const float rightX = runtime.getScriptNumberField(1, "Game/Scripts/test_get_right.lua", "right_x", 0.0F);
+	TEST_ASSERT(rightX < -0.5F,
+		"getRight at yaw 0 must point -X (FPS camera screen-right), not +X");
+
+	runtime.shutdown();
+	std::filesystem::remove(scriptPath);
 }
 
 // ----------------------------------------------------------------------------
@@ -483,7 +617,7 @@ return Controller
 	MockInputSource input;
 	gameforger::editor::ScriptRuntime runtime;
 
-	runtime.initialize(scene, bus, input, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+	runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
 	const bool started = runtime.startScript(1, "Game/Scripts/test_reflected_props.lua", ".");
 	TEST_ASSERT(started, "Starting script must succeed");
 
@@ -507,6 +641,1226 @@ return Controller
 }
 
 // ----------------------------------------------------------------------------
+// Test: Inspector Collider actually blocks (primitives, imported mesh, parent)
+// ----------------------------------------------------------------------------
+#include "GameForger/Editor/Collision.hpp"
+
+void testColliderPrimitiveBlocksWhenChecked()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(0.0F, 1.0F, 0.0F)}).success,
+		"create wall");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Collider", "enabled", true}).success, "check Collider");
+	const SceneEntity* wall = scene.findEntity("Wall");
+	TEST_ASSERT(wall != nullptr && wall->hasCollider, "Inspector Collider must set hasCollider");
+
+	const BoxCollisionResult blocked =
+		resolveBoxCollision(scene, 999, glm::vec3(1.2F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(blocked.position.x > 1.35F && blocked.position.x < 1.45F,
+		"Cube collider at origin scale 1 must push a 0.4-radius mover out to x=1.4");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Collider", "enabled", false}).success, "uncheck Collider");
+	const BoxCollisionResult open =
+		resolveBoxCollision(scene, 999, glm::vec3(1.2F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(std::abs(open.position.x - 1.2F) < 0.001F, "Unchecked Collider must not block");
+}
+
+void testImportedMeshColliderUsesTrianglesNotScaleBox()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Castle", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create castle");
+	const SceneEntity* castleFound = scene.findEntity("Castle");
+	TEST_ASSERT(castleFound != nullptr, "castle entity exists");
+	SceneEntity* castle = scene.findEntityMutable(castleFound->id);
+	TEST_ASSERT(castle != nullptr, "castle entity");
+	castle->isImportedMesh = true;
+	castle->hasCollider = true;
+	castle->colliderType = ColliderType::Mesh;
+	castle->scale = glm::vec3(1.0F);
+
+	// Thin wall at x=10 (local), taller/wider than the default 2x2x2 scale box.
+	MeshCollisionGeometry wall;
+	wall.triangleVertices = {
+		{10.0F, 0.0F, -4.0F}, {10.0F, 4.0F, -4.0F}, {10.0F, 4.0F, 4.0F},
+		{10.0F, 0.0F, -4.0F}, {10.0F, 4.0F, 4.0F}, {10.0F, 0.0F, 4.0F},
+	};
+	wall.localMin = {10.0F, 0.0F, -4.0F};
+	wall.localMax = {10.0F, 4.0F, 4.0F};
+	wall.valid = true;
+	const ImportedMeshProvider provider = [&](const SceneEntity&) { return &wall; };
+
+	const BoxCollisionResult intoWall =
+		resolveBoxCollision(scene, 999, glm::vec3(9.7F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(intoWall.position.x < 9.65F,
+		"Imported-mesh wall at x=10 must push the player back (not ignore the mesh)");
+
+	const BoxCollisionResult courtyard =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(std::abs(courtyard.position.x) < 0.01F && std::abs(courtyard.position.y) < 0.01F,
+		"Courtyard inside a hollow castle must stay walkable (not a solid AABB)");
+
+	const BoxCollisionResult nearOrigin =
+		resolveBoxCollision(scene, 999, glm::vec3(0.5F, 0.0F, 0.0F), 0.4F, 2.0F, provider);
+	TEST_ASSERT(std::abs(nearOrigin.position.x - 0.5F) < 0.01F,
+		"Imported collider must not use the Transform Scale 2x2x2 box");
+}
+
+void testParentColliderSolidsChildren()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Castle", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create castle root");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(10.0F, 1.0F, 0.0F)}).success,
+		"create wall child");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Parent", "parentName", std::string("Castle")}).success,
+		"parent wall");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Castle", "Collider", "enabled", true}).success,
+		"check Collider on parent only");
+
+	const BoxCollisionResult intoChild =
+		resolveBoxCollision(scene, 999, glm::vec3(8.7F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(intoChild.position.x < 8.65F,
+		"Collider on castle parent must block against child wall cubes");
+
+	const BoxCollisionResult courtyard =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(std::abs(courtyard.position.x) < 0.01F && std::abs(courtyard.position.y) < 0.01F,
+		"Parent collider must not fill the courtyard with the root cube AABB");
+}
+
+void testColliderBoxMeshConvexTypes()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Pyramid", PrimitiveType::Cube, glm::vec3(0.0F)}).success,
+		"create pyramid");
+	const SceneEntity* found = scene.findEntity("Pyramid");
+	TEST_ASSERT(found != nullptr, "pyramid exists");
+	SceneEntity* pyramid = scene.findEntityMutable(found->id);
+	pyramid->isImportedMesh = true;
+	pyramid->hasCollider = true;
+	pyramid->scale = glm::vec3(1.0F);
+
+	MeshCollisionGeometry geom;
+	geom.triangleVertices = {
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F},
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, 2.0F},
+		{-2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, -2.0F}, {0.0F, 4.0F, 0.0F},
+		{2.0F, 0.0F, -2.0F}, {2.0F, 0.0F, 2.0F}, {0.0F, 4.0F, 0.0F},
+		{2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, 2.0F}, {0.0F, 4.0F, 0.0F},
+		{-2.0F, 0.0F, 2.0F}, {-2.0F, 0.0F, -2.0F}, {0.0F, 4.0F, 0.0F},
+	};
+	geom.localMin = {-2.0F, 0.0F, -2.0F};
+	geom.localMax = {2.0F, 4.0F, 2.0F};
+	geom.valid = true;
+	const ImportedMeshProvider provider = [&](const SceneEntity&) { return &geom; };
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("box")}).success,
+		"set Box");
+	const BoxCollisionResult boxInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(boxInside.position.y > 3.9F, "Box collider is a solid AABB - inside the bounds is pushed to the roof");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("mesh")}).success,
+		"set Mesh");
+	const BoxCollisionResult meshInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(std::abs(meshInside.position.y - 1.5F) < 0.05F,
+		"Mesh collider is hollow - standing inside the pyramid does not hit a triangle");
+
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Pyramid", "Collider", "type", std::string("convex")}).success,
+		"set Convex");
+	const BoxCollisionResult convexInside =
+		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 1.5F, 0.0F), 0.3F, 1.0F, provider);
+	TEST_ASSERT(std::abs(convexInside.position.x) > 0.01F || std::abs(convexInside.position.y - 1.5F) > 0.05F,
+		"Convex hull is solid - a point inside the pyramid must be pushed out");
+
+	const BoxCollisionResult convexCorner =
+		resolveBoxCollision(scene, 999, glm::vec3(1.8F, 3.5F, 1.8F), 0.1F, 0.2F, provider);
+	TEST_ASSERT(std::abs(convexCorner.position.x - 1.8F) < 0.05F && std::abs(convexCorner.position.y - 3.5F) < 0.05F,
+		"Convex does not fill the AABB corners the way Box does");
+}
+
+// ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Provider response parsing. The editor ships with Anthropic as the DEFAULT
+// provider, and its Messages API returns a content[] block array rather than
+// OpenAI's choices[0].message.content. Parsing only the OpenAI shape silently
+// broke AI script/animation/command generation on a clean install, so both
+// shapes are pinned here.
+// ----------------------------------------------------------------------------
+static void testChatResponseBothProtocols()
+{
+	// OpenAI-compatible.
+	const std::optional<std::string> openai = extractChatMessageContent(
+		R"({"choices":[{"message":{"role":"assistant","content":"hello from openai"}}]})");
+	TEST_ASSERT(openai.has_value() && *openai == "hello from openai",
+		"OpenAI choices[0].message.content must be extracted");
+
+	// Anthropic Messages.
+	const std::optional<std::string> anthropic = extractChatMessageContent(
+		R"({"content":[{"type":"text","text":"hello from anthropic"}],"stop_reason":"end_turn"})");
+	TEST_ASSERT(anthropic.has_value() && *anthropic == "hello from anthropic",
+		"Anthropic content[] text block must be extracted");
+
+	// Anthropic with a non-text block interleaved: text blocks concatenate,
+	// everything else is skipped rather than derailing the parse.
+	const std::optional<std::string> mixed = extractChatMessageContent(
+		R"({"content":[{"type":"thinking","thinking":"ignore me"},)"
+		R"({"type":"text","text":"part one "},{"type":"text","text":"part two"}]})");
+	TEST_ASSERT(mixed.has_value() && *mixed == "part one part two",
+		"Anthropic text blocks must concatenate and skip non-text blocks");
+
+	// A body with neither shape must report absence, not an empty string.
+	TEST_ASSERT(!extractChatMessageContent(R"({"unexpected":true})").has_value(),
+		"Unrecognised response shape must yield nullopt");
+
+	// Anthropic's error envelope must still surface through the shared path.
+	const std::string err = extractErrorMessage(
+		R"({"type":"error","error":{"type":"invalid_request_error","message":"max_tokens is required"}})");
+	TEST_ASSERT(err == "max_tokens is required", "Anthropic error.message must be extracted");
+}
+
+// ----------------------------------------------------------------------------
+// gameforger::core::resolveProjectFile is THE project-boundary check - every script, model,
+// font and texture path authored into a scene goes through it (ScriptRuntime,
+// ViewportRenderer, EditorScene). A silent regression here is a security
+// regression: scene files are shareable, so a hostile one could otherwise name
+// any path on disk. It had no coverage at all until this test.
+// ----------------------------------------------------------------------------
+static void testResolveProjectFileConfinement()
+{
+	namespace fs = std::filesystem;
+
+	// A real directory tree, because resolveProjectFile calls weakly_canonical
+	// and a purely fictional root would exercise different code paths.
+	const fs::path root = fs::absolute("test_confinement_root");
+	fs::create_directories(root / "Game" / "Scripts");
+	fs::create_directories(root / "Game" / "ScriptsEvil");
+	fs::create_directories(root / "Secrets");
+	{
+		std::ofstream(root / "Game" / "Scripts" / "ok.lua") << "-- ok\n";
+		std::ofstream(root / "Game" / "ScriptsEvil" / "sneaky.lua") << "-- sneaky\n";
+		std::ofstream(root / "Secrets" / "keys.lua") << "-- secret\n";
+	}
+
+	const std::vector<std::string> lua{".lua"};
+
+	// Happy path.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", lua).has_value(),
+		"A normal in-bounds script path must resolve");
+
+	// Traversal out of the required subdirectory.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/Scripts/../../Secrets/keys.lua", "Game/Scripts", lua).has_value(),
+		"'..' traversal escaping the required directory must be rejected");
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Secrets/keys.lua", "Game/Scripts", lua).has_value(),
+		"A path outside the required directory must be rejected");
+
+	// Sibling directory sharing a string prefix. This is the case a naive
+	// starts_with() boundary check would wrongly allow.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/ScriptsEvil/sneaky.lua", "Game/Scripts", lua).has_value(),
+		"A sibling directory with a matching string prefix must be rejected");
+
+	// Absolute paths bypass the root entirely, so they are never acceptable.
+	const fs::path absolute = root / "Game" / "Scripts" / "ok.lua";
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, absolute, "Game/Scripts", lua).has_value(),
+		"An absolute path must be rejected even when it points somewhere legal");
+
+	// Empty input.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "", "Game/Scripts", lua).has_value(),
+		"An empty relative path must be rejected");
+
+	// Extension allowlist, and its case-insensitivity.
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", {".glb"}).has_value(),
+		"A disallowed extension must be rejected");
+	{
+		std::ofstream(root / "Game" / "Scripts" / "SHOUTY.LUA") << "-- ok\n";
+	}
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/SHOUTY.LUA", "Game/Scripts", lua).has_value(),
+		"Extension matching must be case-insensitive");
+
+	// No allowlist means any extension is acceptable.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/ok.lua", "Game/Scripts", {}).has_value(),
+		"An empty allowedExtensions list must accept any extension");
+
+	// A file that does not exist yet still resolves - confinement is a path
+	// question, not an existence one, and callers report missing files
+	// themselves. Pinned so nobody "fixes" this into an exists() check and
+	// breaks save-to-new-path flows.
+	TEST_ASSERT(gameforger::core::resolveProjectFile(root, "Game/Scripts/not_created.lua", "Game/Scripts", lua).has_value(),
+		"A not-yet-existing in-bounds path must still resolve");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
+// ----------------------------------------------------------------------------
+// json::serializePretty must produce a tree equal to what it was given -
+// Project.json/Settings.json are written through it, so a bug here corrupts
+// project config rather than just looking untidy.
+// ----------------------------------------------------------------------------
+static void testJsonPrettyPrinter()
+{
+	const std::string source =
+		R"({"a":1,"b":[1,2,{"c":"x \" y"}],"d":{"e":true,"f":null},"g":[],"h":{}})";
+	const std::optional<json::Value> original = json::parse(source);
+	TEST_ASSERT(original.has_value(), "Pretty-printer fixture must parse");
+
+	const std::string pretty = json::serializePretty(*original);
+	TEST_ASSERT(pretty.find('\n') != std::string::npos, "Pretty output must contain newlines");
+	TEST_ASSERT(!pretty.empty() && pretty.back() == '\n', "Pretty output must end with a newline");
+	// Empty containers stay inline rather than becoming "[\n]".
+	TEST_ASSERT(pretty.find("[]") != std::string::npos, "Empty array must stay inline");
+	TEST_ASSERT(pretty.find("{}") != std::string::npos, "Empty object must stay inline");
+
+	const std::optional<json::Value> reparsed = json::parse(pretty);
+	TEST_ASSERT(reparsed.has_value(), "Pretty output must re-parse");
+	// Round-tripping through the compact serialiser is the equality check:
+	// same tree => byte-identical compact form.
+	TEST_ASSERT(json::serialize(*reparsed) == json::serialize(*original),
+		"Pretty output must re-parse to an equal tree");
+
+	// Compact serialize() must be untouched - the AI Cockpit's tool-argument
+	// path depends on it staying single-line.
+	TEST_ASSERT(json::serialize(*original).find('\n') == std::string::npos,
+		"Compact serialize() must remain newline-free");
+}
+
+// ----------------------------------------------------------------------------
+// ProjectSettings round-trip + the command bus's validation. The bus is the
+// only writer to project config and the AI drives it, so the rejection cases
+// matter more than the happy path.
+// ----------------------------------------------------------------------------
+static void testProjectSettingsAndBus()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_project_settings_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Scenes");
+	{
+		std::ofstream(root / "Game" / "Scenes" / "Main.gfprod") << "{}";
+	}
+
+	// A Project.json with a UTF-8 BOM and NO bootSequence key - exactly the
+	// shape this project ships today. Must load cleanly.
+	{
+		std::ofstream out(root / "Game" / "Project.json", std::ios::binary);
+		out << "\xEF\xBB\xBF"
+			<< R"({"format":"GameForgerProject","version":1,"name":"Demo",)"
+			<< R"("startupScene":"Game/Scenes/Main.gfprod","assetDirectories":["Game/Audio"],)"
+			<< R"("customKeySomeoneAddedByHand":42})";
+	}
+	{
+		std::ofstream out(root / "Game" / "Settings.json");
+		out << R"({"mouseSensitivity":0.25,"targetFps":144})";
+	}
+
+	ProjectSettings loaded;
+	TEST_ASSERT(loadProjectSettings(root, loaded).success, "Loading project settings must succeed");
+	TEST_ASSERT(loaded.name == "Demo", "name must load (past the BOM)");
+	TEST_ASSERT(loaded.startupScene == "Game/Scenes/Main.gfprod", "startupScene must load");
+	TEST_ASSERT(loaded.assetDirectories.size() == 1, "assetDirectories must load");
+	TEST_ASSERT(loaded.bootSequence.empty(), "A file with no bootSequence key must load as empty");
+	TEST_ASSERT(std::abs(loaded.mouseSensitivity - 0.25F) < 0.0001F, "mouseSensitivity must load");
+	TEST_ASSERT(loaded.targetFps == 144, "targetFps must load");
+
+	ProjectSettingsBus bus(root);
+	TEST_ASSERT(bus.settings().name == "Demo", "Bus must load settings on construction");
+
+	// --- rejections -------------------------------------------------------
+	SetProjectSettingCommand unknown;
+	unknown.key = "notARealKey";
+	unknown.stringValue = "x";
+	TEST_ASSERT(!bus.validate(unknown).success, "An unknown setting key must be rejected");
+
+	SetProjectSettingCommand missingScene;
+	missingScene.key = "startupScene";
+	missingScene.stringValue = "Game/Scenes/DoesNotExist.gfprod";
+	TEST_ASSERT(!bus.validate(missingScene).success,
+		"A startupScene that does not exist on disk must be rejected");
+
+	SetProjectSettingCommand badFps;
+	badFps.key = "targetFps";
+	badFps.numberValue = 5000.0;
+	TEST_ASSERT(!bus.validate(badFps).success, "An out-of-range targetFps must be rejected");
+
+	SetProjectSettingCommand nanSensitivity;
+	nanSensitivity.key = "mouseSensitivity";
+	nanSensitivity.numberValue = std::nan("");
+	TEST_ASSERT(!bus.validate(nanSensitivity).success, "A non-finite number must be rejected");
+
+	TEST_ASSERT(!bus.validate(RemoveBootStepCommand{0}).success,
+		"Removing from an empty boot sequence must be rejected");
+
+	AddBootStepCommand incomplete;
+	incomplete.step.kind = BootStep::Kind::PlayCutscene; // shotName left empty
+	TEST_ASSERT(!bus.validate(incomplete).success,
+		"play_cutscene with no shotName must be rejected");
+
+	// A rejected command must not have mutated anything.
+	TEST_ASSERT(bus.settings().targetFps == 144, "A rejected command must leave settings untouched");
+
+	// --- accepted ---------------------------------------------------------
+	SetProjectSettingCommand goodFps;
+	goodFps.key = "targetFps";
+	goodFps.numberValue = 60.0;
+	TEST_ASSERT(bus.execute(goodFps).success, "A valid targetFps must be accepted");
+	TEST_ASSERT(bus.settings().targetFps == 60, "targetFps must be applied");
+
+	AddBootStepCommand addWait;
+	addWait.step.kind = BootStep::Kind::WaitSeconds;
+	addWait.step.seconds = 2.5F;
+	TEST_ASSERT(bus.execute(addWait).success, "Adding a wait step must succeed");
+
+	AddBootStepCommand addCutscene;
+	addCutscene.step.kind = BootStep::Kind::PlayCutscene;
+	addCutscene.step.shotName = "Intro";
+	TEST_ASSERT(bus.execute(addCutscene).success, "Adding a cutscene step must succeed");
+	TEST_ASSERT(bus.settings().bootSequence.size() == 2, "Boot sequence must have 2 steps");
+
+	TEST_ASSERT(bus.execute(MoveBootStepCommand{1, 0}).success, "Moving a step must succeed");
+	TEST_ASSERT(bus.settings().bootSequence[0].kind == BootStep::Kind::PlayCutscene,
+		"Move must reorder the sequence");
+
+	// --- persistence ------------------------------------------------------
+	// execute() writes through to disk, so a fresh load must agree.
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reload after execute must succeed");
+	TEST_ASSERT(reloaded.targetFps == 60, "targetFps must have been persisted");
+	TEST_ASSERT(reloaded.bootSequence.size() == 2, "Boot sequence must have been persisted");
+	TEST_ASSERT(reloaded.bootSequence[0].kind == BootStep::Kind::PlayCutscene &&
+			reloaded.bootSequence[0].shotName == "Intro",
+		"Boot step kind and fields must survive the round-trip");
+	TEST_ASSERT(std::abs(reloaded.bootSequence[1].seconds - 2.5F) < 0.0001F,
+		"Boot step seconds must survive the round-trip");
+
+	// A hand-added key must not be destroyed by an editor save.
+	{
+		std::ifstream in(root / "Game" / "Project.json", std::ios::binary);
+		const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		TEST_ASSERT(text.find("customKeySomeoneAddedByHand") != std::string::npos,
+			"Saving must preserve unknown keys already in Project.json");
+		TEST_ASSERT(text.find('\n') != std::string::npos,
+			"Saved Project.json must stay pretty-printed, not collapse to one line");
+	}
+
+	// An unknown boot-step kind (a newer editor's file) is skipped, not fatal.
+	{
+		std::ofstream out(root / "Game" / "Project.json", std::ios::binary);
+		out << R"({"bootSequence":[{"kind":"from_the_future"},{"kind":"lock_player_input"}]})";
+	}
+	ProjectSettings forward;
+	TEST_ASSERT(loadProjectSettings(root, forward).success, "A file with an unknown step kind must still load");
+	TEST_ASSERT(forward.bootSequence.size() == 1 &&
+			forward.bootSequence[0].kind == BootStep::Kind::LockPlayerInput,
+		"An unknown boot step kind must be skipped, keeping the ones we understand");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
+// ----------------------------------------------------------------------------
+// The boot sequence gates player control, so "does it ever unlock" is the
+// property that matters - a sequence that never finishes leaves the game
+// permanently unplayable.
+// ----------------------------------------------------------------------------
+static void testBootSequence()
+{
+	EditorScene scene(".");
+	GameplayState gameplay;
+
+	// No steps: control is immediate, exactly as before the feature existed.
+	resetBootSequence(gameplay, {});
+	TEST_ASSERT(!gameplay.bootSequence.running, "An empty boot sequence must not arm");
+	TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "An empty boot sequence must not block input");
+
+	// Two waits totalling 0.3s, then control.
+	std::vector<BootStep> steps;
+	{
+		BootStep a;
+		a.kind = BootStep::Kind::WaitSeconds;
+		a.seconds = 0.1F;
+		BootStep b;
+		b.kind = BootStep::Kind::WaitSeconds;
+		b.seconds = 0.2F;
+		steps.push_back(a);
+		steps.push_back(b);
+	}
+	resetBootSequence(gameplay, steps);
+	TEST_ASSERT(bootSequenceBlocksInput(gameplay), "An armed boot sequence must block input");
+
+	// Not playing => no progress at all.
+	tickBootSequence(steps, scene, gameplay, false, 1.0F);
+	TEST_ASSERT(bootSequenceBlocksInput(gameplay), "A paused game must not advance the boot sequence");
+
+	for (int i = 0; i < 10 && gameplay.bootSequence.running; ++i)
+	{
+		tickBootSequence(steps, scene, gameplay, true, 0.05F);
+	}
+	TEST_ASSERT(!gameplay.bootSequence.running, "A wait-only sequence must finish");
+	TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "Input must be released once the sequence ends");
+
+	// unlock_player_input hands control back early, mid-sequence.
+	{
+		std::vector<BootStep> early;
+		BootStep unlock;
+		unlock.kind = BootStep::Kind::UnlockPlayerInput;
+		BootStep wait;
+		wait.kind = BootStep::Kind::WaitSeconds;
+		wait.seconds = 5.0F;
+		early.push_back(unlock);
+		early.push_back(wait);
+
+		resetBootSequence(gameplay, early);
+		TEST_ASSERT(bootSequenceBlocksInput(gameplay), "Sequence must start locked");
+		tickBootSequence(early, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!bootSequenceBlocksInput(gameplay),
+			"unlock_player_input must release control while later steps still run");
+		TEST_ASSERT(gameplay.bootSequence.running, "The sequence must keep running after an early unlock");
+	}
+
+	// A cutscene step waits on the host rather than guessing a duration, but
+	// must not deadlock once the host reports back.
+	{
+		std::vector<BootStep> cut;
+		BootStep shot;
+		shot.kind = BootStep::Kind::PlayCutscene;
+		shot.shotName = "Intro";
+		cut.push_back(shot);
+
+		resetBootSequence(gameplay, cut);
+		tickBootSequence(cut, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(gameplay.bootSequence.requestedCutsceneShot == "Intro",
+			"A cutscene step must publish the shot name for the host");
+		tickBootSequence(cut, scene, gameplay, true, 10.0F);
+		TEST_ASSERT(gameplay.bootSequence.running,
+			"A cutscene step must NOT time out on its own - it waits for the host");
+
+		gameplay.bootSequence.hostStepFinished = true;
+		tickBootSequence(cut, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running, "Host completion must advance past the cutscene");
+		TEST_ASSERT(!bootSequenceBlocksInput(gameplay), "Control must return after the cutscene");
+	}
+
+	// A play_animation step naming an entity that does not exist must not
+	// stall the sequence forever.
+	{
+		std::vector<BootStep> anim;
+		BootStep play;
+		play.kind = BootStep::Kind::PlayAnimation;
+		play.targetEntity = "NoSuchEntity";
+		anim.push_back(play);
+
+		resetBootSequence(gameplay, anim);
+		tickBootSequence(anim, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running,
+			"play_animation on a missing entity must complete rather than hang");
+	}
+
+	// Steps deleted mid-Play must not index out of bounds.
+	{
+		resetBootSequence(gameplay, steps);
+		const std::vector<BootStep> emptied;
+		tickBootSequence(emptied, scene, gameplay, true, 0.016F);
+		TEST_ASSERT(!gameplay.bootSequence.running && !bootSequenceBlocksInput(gameplay),
+			"Emptying the sequence mid-Play must release control, not read past the end");
+	}
+}
+
+static void writeMinimalWav(const std::filesystem::path& path)
+{
+	// 44-byte PCM header + 8 silent 16-bit samples (mono, 8000 Hz).
+	const unsigned char wav[] = {
+		'R','I','F','F', 36 + 16, 0, 0, 0, 'W','A','V','E',
+		'f','m','t',' ', 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1F, 0, 0,
+		0x80, 0x3E, 0, 0, 2, 0, 16, 0, 'd','a','t','a', 16, 0, 0, 0,
+		0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0
+	};
+	std::ofstream out(path, std::ios::binary);
+	out.write(reinterpret_cast<const char*>(wav), sizeof(wav));
+}
+
+static void testAudioSourceAndHooks()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::temp_directory_path() / "gf_audio_test";
+	std::error_code ec;
+	fs::remove_all(root, ec);
+	fs::create_directories(root / "Game" / "Audio", ec);
+	fs::create_directories(root / "Game" / "Scenes", ec);
+	writeMinimalWav(root / "Game" / "Audio" / "beep.wav");
+	{
+		std::ofstream project(root / "Game" / "Project.json");
+		project << R"({"format":"GameForgerProject","version":1,"name":"t","startupScene":"Game/Scenes/Main.gfprod"})";
+	}
+	{
+		std::ofstream scene(root / "Game" / "Scenes" / "Main.gfprod");
+		scene << "{}";
+	}
+
+	TEST_ASSERT(gameforger::core::resolveProjectFile(
+		root, "Game/Audio/beep.wav", "Game/Audio", gameforger::core::audioClipExtensions()).has_value(),
+		"A clip under Game/Audio must resolve");
+	TEST_ASSERT(!gameforger::core::resolveProjectFile(
+		root, "Game/Audio/../Scripts/x.wav", "Game/Audio", gameforger::core::audioClipExtensions()).has_value(),
+		"A clip that escapes Game/Audio must be rejected");
+
+	gameforger::core::AudioEngine audio;
+	(void)audio.initialize();
+	TEST_ASSERT(audio.play(root, "Game/Audio/beep.wav"),
+		"play() must succeed for a valid clip even in silent mode");
+	TEST_ASSERT(!audio.play(root, "Game/Audio/missing.wav"),
+		"play() must reject a clip that does not exist");
+	TEST_ASSERT(audio.clipDurationSeconds(root, "Game/Audio/beep.wav") > 0.0F,
+		"A real wav must report a positive duration");
+	audio.shutdown();
+
+	EditorScene scene(root.string());
+	SceneEntity entity;
+	entity.name = "Speaker";
+	entity.hasAudioSource = true;
+	entity.audioSource.clipAssetPath = "Game/Audio/beep.wav";
+	entity.audioSource.loop = true;
+	entity.audioSource.is3D = false;
+	scene.replaceEntities({entity});
+
+	const fs::path scenePath = root / "Game" / "Scenes" / "audio.gfprod";
+	TEST_ASSERT(saveScene(scenePath, scene.entities()).success, "Saving a scene with an audio source must succeed");
+	const SceneLoadResult loaded = loadScene(scenePath);
+	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "Loading a scene with an audio source must succeed");
+	TEST_ASSERT(loaded.entities[0].hasAudioSource &&
+		loaded.entities[0].audioSource.clipAssetPath == "Game/Audio/beep.wav" && loaded.entities[0].audioSource.loop,
+		"AudioSourceData must round-trip through the scene file");
+
+	ProjectSettingsBus bus(root);
+	AddAudioHookCommand add;
+	add.hook.event = AudioHook::Event::OnPickup;
+	add.hook.clipPath = "Game/Audio/beep.wav";
+	add.hook.volume = 0.5F;
+	TEST_ASSERT(bus.execute(add).success, "Adding an audio hook must succeed");
+	TEST_ASSERT(bus.settings().audioHooks.size() == 1 &&
+		bus.settings().audioHooks[0].event == AudioHook::Event::OnPickup,
+		"The hook must persist in memory");
+
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reloading settings must succeed");
+	TEST_ASSERT(reloaded.audioHooks.size() == 1 &&
+		reloaded.audioHooks[0].clipPath == "Game/Audio/beep.wav",
+		"Audio hooks must round-trip through Settings.json");
+
+	AddAudioHookCommand bad;
+	bad.hook.event = AudioHook::Event::OnPickup;
+	TEST_ASSERT(!bus.validate(bad).success, "A hook with an empty clipPath must be rejected");
+
+	fs::remove_all(root, ec);
+}
+
+// ----------------------------------------------------------------------------
+// Storyboard shots used to live only in session state and were lost on every
+// restart. They now ride along in the scene file, so the round-trip - and the
+// backward compatibility of a scene saved before they existed - is pinned.
+// ----------------------------------------------------------------------------
+static void testStoryboardSerialization()
+{
+	const std::filesystem::path sceneFile = "test_storyboard.scene";
+
+	CineShot intro;
+	intro.name = "Intro";
+	intro.cameraPath.enabled = true;
+	intro.cameraPath.looping = true;
+	intro.cameraPath.keyframes.push_back(TransformKeyframe{0.0F, glm::vec3(1.0F, 2.0F, 3.0F), glm::vec3(0.0F), glm::vec3(1.0F)});
+	intro.cameraPath.keyframes.push_back(TransformKeyframe{2.5F, glm::vec3(4.0F, 5.0F, 6.0F), glm::vec3(0.0F, 90.0F, 0.0F), glm::vec3(1.0F)});
+	// Deliberately out of order: the loader must sort these.
+	(void)insertAudioCueSorted(intro.audioCues, AudioCue{2.0F, "Game/Audio/late.wav", 0.5F});
+	(void)insertAudioCueSorted(intro.audioCues, AudioCue{0.5F, "Game/Audio/early.wav", 1.0F});
+
+	CineShot empty;
+	empty.name = "NoCues";
+
+	std::vector<SceneEntity> entities;
+	SceneEntity camera;
+	camera.name = "CineCam";
+	camera.isCineCamera = true;
+	entities.push_back(camera);
+
+	TEST_ASSERT(saveScene(sceneFile, entities, {intro, empty}).success, "Saving a scene with shots must succeed");
+
+	const SceneLoadResult loaded = loadScene(sceneFile);
+	TEST_ASSERT(loaded.success, "Loading a scene with shots must succeed");
+	TEST_ASSERT(loaded.shots.size() == 2, "Both shots must round-trip");
+	TEST_ASSERT(loaded.shots[0].name == "Intro", "Shot name must round-trip");
+	TEST_ASSERT(loaded.shots[0].cameraPath.looping, "Shot looping flag must round-trip");
+	TEST_ASSERT(loaded.shots[0].cameraPath.keyframes.size() == 2, "Camera path keyframes must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].cameraPath.keyframes[1].time - 2.5F) < 0.001F,
+		"Keyframe time must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].cameraPath.keyframes[1].rotationEuler.y - 90.0F) < 0.01F,
+		"Keyframe rotation must round-trip");
+
+	TEST_ASSERT(loaded.shots[0].audioCues.size() == 2, "Audio cues must round-trip");
+	TEST_ASSERT(loaded.shots[0].audioCues[0].clipPath == "Game/Audio/early.wav",
+		"Audio cues must come back sorted by time, earliest first");
+	TEST_ASSERT(std::abs(loaded.shots[0].audioCues[0].time - 0.5F) < 0.001F, "Cue time must round-trip");
+	TEST_ASSERT(std::abs(loaded.shots[0].audioCues[1].volume - 0.5F) < 0.001F, "Cue volume must round-trip");
+	TEST_ASSERT(loaded.shots[1].audioCues.empty(), "A shot with no cues must load with none");
+
+	// A scene written before storyboards existed has no "storyboard" key at
+	// all. It must load cleanly with an empty shot list, not fail.
+	TEST_ASSERT(saveScene(sceneFile, entities).success, "Saving with no shots must succeed");
+	const SceneLoadResult noShots = loadScene(sceneFile);
+	TEST_ASSERT(noShots.success, "A scene with no storyboard must load");
+	TEST_ASSERT(noShots.shots.empty(), "A scene with no storyboard must yield no shots");
+	TEST_ASSERT(noShots.entities.size() == 1, "Entities must still load alongside an empty storyboard");
+
+	std::filesystem::remove(sceneFile);
+	std::filesystem::remove(sceneFile.string() + ".bak");
+}
+
+// ----------------------------------------------------------------------------
+// Cue ordering helpers. Playback walks the list assuming it is sorted, and the
+// timeline drags cues around freely, so a retimed cue must land in the right
+// slot AND the caller's selection must follow it.
+// ----------------------------------------------------------------------------
+static void testAudioCueOrdering()
+{
+	std::vector<AudioCue> cues;
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{5.0F, "e.wav", 1.0F}) == 0, "First insert lands at 0");
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{1.0F, "a.wav", 1.0F}) == 0, "Earlier cue lands at the front");
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{3.0F, "c.wav", 1.0F}) == 1, "Middle cue lands between");
+	TEST_ASSERT(cues[0].clipPath == "a.wav" && cues[1].clipPath == "c.wav" && cues[2].clipPath == "e.wav",
+		"Cues must be ordered by time");
+
+	// Ties keep insertion order rather than jumping ahead of what is there.
+	TEST_ASSERT(insertAudioCueSorted(cues, AudioCue{3.0F, "c2.wav", 1.0F}) == 2,
+		"A cue at the same time must land after the existing one");
+
+	// Retime the first cue past the end; the returned index must track it.
+	cues[0].time = 99.0F;
+	const std::size_t moved = resortAudioCues(cues, 0);
+	TEST_ASSERT(moved == cues.size() - 1, "A cue dragged to the end must report its new index");
+	TEST_ASSERT(cues[moved].clipPath == "a.wav", "The reported index must be the cue that moved");
+	for (std::size_t i = 1; i < cues.size(); ++i)
+	{
+		TEST_ASSERT(cues[i - 1].time <= cues[i].time, "Cues must remain sorted after a retime");
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Manager registry + on_end. This is what replaced the per-entity "Lock Cursor"
+// checkbox: the host asks "is anything registered?" instead of reading a flag
+// off an entity. A leaked registration would leave the cursor captured with
+// nothing driving it, so registration/unregistration is pinned here.
+// ----------------------------------------------------------------------------
+static void testManagerRegistryAndOnEnd()
+{
+	const std::filesystem::path scriptsDir = "Game/Scripts";
+	std::filesystem::create_directories(scriptsDir);
+	const std::filesystem::path scriptFile = scriptsDir / "test_manager_lifecycle.lua";
+	{
+		std::ofstream out(scriptFile);
+		out << "local M = {}\n"
+			<< "function M:on_start()\n"
+			<< "  self.managers:register('test_manager')\n"
+			<< "  self.gameManager:setCursorLock(true)\n"
+			<< "end\n"
+			<< "function M:on_end()\n"
+			<< "  self.managers:unregister('test_manager')\n"
+			<< "  self.gameManager:setCursorLock(false)\n"
+			<< "end\n"
+			<< "return M\n";
+	}
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	(void)scene.execute(CreateEntityCommand{"Player", PrimitiveType::Capsule, glm::vec3(0.0F)});
+	const SceneEntity* player = scene.findEntity("Player");
+	TEST_ASSERT(player != nullptr, "Test entity must exist");
+
+	MockInputSource input;
+
+	bool cursorLocked = false;
+	ScriptRuntime::Config config;
+	config.cursorLockSetCallback = [&cursorLocked](const bool locked) { cursorLocked = locked; };
+
+	ScriptRuntime runtime;
+	runtime.initialize(scene, bus, input, config);
+	TEST_ASSERT(runtime.listManagers().empty(), "Registry must start empty");
+
+	TEST_ASSERT(runtime.startScript(player->id, "Game/Scripts/test_manager_lifecycle.lua", "."),
+		"Manager lifecycle script must start");
+	TEST_ASSERT(runtime.hasManager("test_manager"), "on_start must register the manager");
+	TEST_ASSERT(runtime.listManagers().size() == 1, "Exactly one manager registered");
+	TEST_ASSERT(cursorLocked, "setCursorLock(true) must reach the host callback");
+
+	// Registering the same name twice must not duplicate - otherwise one
+	// unregister would leave a phantom entry and the cursor would stay locked.
+	runtime.registerManager("test_manager");
+	TEST_ASSERT(runtime.listManagers().size() == 1, "register must be idempotent");
+
+	// Detaching the script fires on_end, which unregisters and releases.
+	runtime.stopScript(player->id, "Game/Scripts/test_manager_lifecycle.lua");
+	TEST_ASSERT(!runtime.hasManager("test_manager"), "on_end must unregister on stopScript");
+	TEST_ASSERT(!cursorLocked, "on_end must release the cursor on stopScript");
+
+	// And shutdown must fire on_end for anything still running.
+	runtime.initialize(scene, bus, input, config);
+	TEST_ASSERT(runtime.startScript(player->id, "Game/Scripts/test_manager_lifecycle.lua", "."),
+		"Script must restart for the shutdown case");
+	TEST_ASSERT(cursorLocked, "Cursor locked again after restart");
+	runtime.shutdown();
+	TEST_ASSERT(!cursorLocked, "shutdown must fire on_end before closing the VM");
+	TEST_ASSERT(runtime.listManagers().empty(), "shutdown must clear the registry");
+
+	// Unregistering something unknown is a no-op, not a crash.
+	runtime.unregisterManager("never_registered");
+
+	std::filesystem::remove(scriptFile);
+}
+
+// ----------------------------------------------------------------------------
+// AudioHook::loop. Background music is an on_play_start hook with this set;
+// without it the track fired once and stopped, so BG music was impossible even
+// though AudioEngine::play always took a loop argument. A file written before
+// the field existed must still load, with loop defaulting to false.
+// ----------------------------------------------------------------------------
+static void testAudioHookLoopRoundTrip()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_audio_hook_loop_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Audio");
+	{ std::ofstream(root / "Game" / "Audio" / "music.wav") << "x"; }
+	{
+		std::ofstream out(root / "Game" / "Project.json");
+		out << R"({"format":"GameForgerProject","version":1})";
+	}
+
+	ProjectSettingsBus bus(root);
+
+	AddAudioHookCommand music;
+	music.hook.event = AudioHook::Event::OnPlayStart;
+	music.hook.clipPath = "Game/Audio/music.wav";
+	music.hook.volume = 0.5F;
+	music.hook.loop = true;
+	TEST_ASSERT(bus.execute(music).success, "Adding a looping hook must succeed");
+
+	AddAudioHookCommand oneShot;
+	oneShot.hook.event = AudioHook::Event::OnPickup;
+	oneShot.hook.clipPath = "Game/Audio/music.wav";
+	TEST_ASSERT(bus.execute(oneShot).success, "Adding a one-shot hook must succeed");
+	TEST_ASSERT(!oneShot.hook.loop, "loop must default to false");
+
+	ProjectSettings reloaded;
+	TEST_ASSERT(loadProjectSettings(root, reloaded).success, "Reload must succeed");
+	TEST_ASSERT(reloaded.audioHooks.size() == 2, "Both hooks must persist");
+	TEST_ASSERT(reloaded.audioHooks[0].loop, "loop=true must survive the round-trip");
+	TEST_ASSERT(!reloaded.audioHooks[1].loop, "loop=false must survive the round-trip");
+
+	// A settings file written before `loop` existed: the key is simply absent
+	// and must read as false rather than failing or defaulting to true.
+	// Note audioHooks live in Settings.json, not Project.json - reader and
+	// writer agree on that, so this fixture has to match.
+	{
+		std::ofstream out(root / "Game" / "Settings.json");
+		out << R"({"audioHooks":[{"event":"on_play_start","clipPath":"Game/Audio/music.wav","volume":1.0}]})";
+	}
+	ProjectSettings legacy;
+	TEST_ASSERT(loadProjectSettings(root, legacy).success, "A pre-loop file must still load");
+	TEST_ASSERT(legacy.audioHooks.size() == 1, "The legacy hook must load");
+	TEST_ASSERT(!legacy.audioHooks[0].loop, "A missing loop key must default to false");
+
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
+// ----------------------------------------------------------------------------
+// Every script shipped in Game/Scripts must actually load and run. Several did
+// not: controller.lua was written against a Unity-shaped API that never existed
+// here (Input./Entity./Vector()/Raycast()/UI. and an Update() entry point),
+// test.lua was a LOVE 2D sketch, SlidingPuzzle.lua was a bare print() with no
+// returned table, BlockDragger.lua registered mouse callbacks that do not
+// exist, Script.lua called camera:setCrosshair, and Script_2.lua multiplied a
+// table by a number. All of them failed the moment they were attached.
+//
+// Nothing caught that, because the C++ tests never loaded a .lua file. This
+// walks the real directory, so a newly added broken script fails the suite
+// rather than waiting to be discovered by someone pressing Play.
+// ----------------------------------------------------------------------------
+static void testAllShippedScriptsLoad()
+{
+	namespace fs = std::filesystem;
+
+	// ctest runs this from the build directory, and other tests create an
+	// empty Game/Scripts there for their own probe files - so "does
+	// Game/Scripts exist relative to cwd" finds the wrong one. Walk up until a
+	// Game/Scripts is found that holds at least one non-probe script, which
+	// lands on the real source tree both locally and on CI.
+	fs::path scriptsDir;
+	{
+		std::error_code walkError;
+		fs::path candidate = fs::current_path(walkError);
+		for (int depth = 0; depth < 6 && !candidate.empty(); ++depth)
+		{
+			const fs::path guess = candidate / "Game" / "Scripts";
+			std::error_code ec;
+			if (fs::is_directory(guess, ec))
+			{
+				for (const fs::directory_entry& entry : fs::directory_iterator(guess, ec))
+				{
+					const std::string name = entry.path().filename().string();
+					if (entry.path().extension() == ".lua" && name.rfind("test_", 0) != 0)
+					{
+						scriptsDir = guess;
+						break;
+					}
+				}
+			}
+			if (!scriptsDir.empty() || !candidate.has_parent_path() ||
+				candidate.parent_path() == candidate)
+			{
+				break;
+			}
+			candidate = candidate.parent_path();
+		}
+	}
+	TEST_ASSERT(!scriptsDir.empty(), "Could not locate the project's Game/Scripts from the test working directory");
+
+	std::vector<std::string> scripts;
+	std::error_code ec;
+	for (const fs::directory_entry& entry : fs::directory_iterator(scriptsDir, ec))
+	{
+		if (entry.is_regular_file(ec) && entry.path().extension() == ".lua")
+		{
+			// The suite writes its own probe scripts into this directory; skip
+			// those so this test only judges what the project ships.
+			const std::string name = entry.path().filename().string();
+			if (name.rfind("test_", 0) == 0)
+			{
+				continue;
+			}
+			scripts.push_back("Game/Scripts/" + name);
+		}
+	}
+	TEST_ASSERT(!scripts.empty(), "Game/Scripts must contain at least one script to check");
+
+	// startScript confines paths under projectRoot/Game/Scripts and REJECTS
+	// absolute ones, so pass the relative form plus the root it resolves against.
+	const fs::path projectRoot = scriptsDir.parent_path().parent_path();
+
+	int failed = 0;
+	for (const std::string& scriptPath : scripts)
+	{
+		// A fresh scene and runtime per script: one script leaving the VM in a
+		// bad state must not be reported against the next one.
+		EditorScene scene(".");
+		AICommandBus bus;
+		bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+		MockInputSource input;
+		ScriptRuntime runtime;
+		runtime.initialize(scene, bus, input, ScriptRuntime::Config{});
+
+		if (!runtime.startScript(1, scriptPath, projectRoot))
+		{
+			std::cerr << "       script failed to start: " << scriptPath << "\n";
+			++failed;
+			continue;
+		}
+		// on_start ran; drive one frame so on_update is exercised too - most of
+		// the fictional-API calls lived there, not in on_start.
+		runtime.updateEntity(1, 0.016F);
+		runtime.shutdown();
+	}
+
+	TEST_ASSERT(failed == 0, "Every script in Game/Scripts must load and tick without error");
+}
+
+// ----------------------------------------------------------------------------
+// The frame profiler and its exported report. buildReport returns a string
+// rather than writing a file precisely so it can be checked here: the export
+// is meant to be read after a stutter, so it has to contain the breakdown of
+// the dip and not just a frame count.
+// ----------------------------------------------------------------------------
+static void testFrameProfilerReport()
+{
+	gameforger::core::FrameProfiler profiler;
+	profiler.setDipThresholdMs(5.0F);
+
+	// An empty profiler must produce a report, not crash or lie.
+	TEST_ASSERT(profiler.buildReport().find("No frames were recorded") != std::string::npos,
+		"An empty profiler must say so rather than emitting an empty report");
+
+	// A fast frame: two cheap zones, well under the threshold.
+	for (int i = 0; i < 3; ++i)
+	{
+		profiler.beginFrame();
+		profiler.beginZone("Cheap");
+		profiler.endZone();
+		profiler.endFrame();
+	}
+	TEST_ASSERT(profiler.dipCount() == 0, "Fast frames must not be recorded as dips");
+	TEST_ASSERT(profiler.history().size() == 3, "Every frame must land in the rolling window");
+
+	// A deliberately slow frame, with the cost inside a named zone so the
+	// report can attribute it.
+	profiler.beginFrame();
+	profiler.beginZone("Slow Zone");
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+	while (std::chrono::steady_clock::now() < until) { /* burn wall time */ }
+	profiler.endZone();
+	profiler.endFrame();
+
+	TEST_ASSERT(profiler.dipCount() == 1, "A frame over the threshold must be recorded as a dip");
+	TEST_ASSERT(!profiler.worstFrames().empty(), "The dip must be retained for inspection");
+	const auto& dip = profiler.worstFrames().front();
+	TEST_ASSERT(dip.totalMilliseconds >= 10.0F, "The dip must record its real cost");
+	TEST_ASSERT(!dip.zones.empty() && dip.zones.front().name == "Slow Zone",
+		"The dominant zone must be first, so the report names the culprit");
+
+	// Zones accumulate rather than overwrite when entered twice in one frame.
+	profiler.beginFrame();
+	profiler.beginZone("Twice");
+	profiler.endZone();
+	profiler.beginZone("Twice");
+	profiler.endZone();
+	profiler.endFrame();
+	int twiceCount = 0;
+	for (const auto& zone : profiler.lastFrame().zones)
+	{
+		if (zone.name == "Twice") { ++twiceCount; }
+	}
+	TEST_ASSERT(twiceCount == 1, "A zone entered twice must accumulate into one entry, not duplicate");
+
+	const std::string report = profiler.buildReport("Test report");
+	TEST_ASSERT(report.find("# Test report") != std::string::npos, "Report must carry its title");
+	TEST_ASSERT(report.find("## Summary") != std::string::npos, "Report must have a summary");
+	TEST_ASSERT(report.find("## Average cost per zone") != std::string::npos, "Report must average zones");
+	TEST_ASSERT(report.find("Slow Zone") != std::string::npos,
+		"Report must name the zone responsible for the dip");
+	TEST_ASSERT(report.find("## Raw frame times") != std::string::npos, "Report must include raw samples");
+
+	profiler.clearWorst();
+	TEST_ASSERT(profiler.dipCount() == 0 && profiler.worstFrames().empty(),
+		"Clearing dips must reset both the list and the counter");
+}
+
+// ----------------------------------------------------------------------------
+// self.audio:isPlaying() and clip-scoped stop. isPlaying was hardcoded to
+// false, so any script branching on it silently took the wrong path, and
+// stop() had no scope at all - a music manager stopping its own track
+// silenced every other sound in the game.
+// ----------------------------------------------------------------------------
+static void testAudioQueryAndScopedStop()
+{
+	namespace fs = std::filesystem;
+	const fs::path root = fs::absolute("test_audio_scope_root");
+	std::error_code cleanupBefore;
+	fs::remove_all(root, cleanupBefore);
+	fs::create_directories(root / "Game" / "Audio");
+
+	gameforger::core::AudioEngine audio;
+	const bool haveDevice = audio.initialize();
+
+	// Nothing has been played, so nothing can be playing - true with or
+	// without a device.
+	TEST_ASSERT(!audio.isAnyPlaying(), "A fresh engine must report nothing playing");
+	TEST_ASSERT(!audio.isPlaying("Game/Audio/anything.wav"),
+		"An unplayed clip must not report as playing");
+
+	// Stopping a clip that was never started, and stopping everything on an
+	// empty engine, must both be harmless rather than crashing.
+	audio.stop("Game/Audio/never-started.wav");
+	audio.stopAll();
+	TEST_ASSERT(!audio.isAnyPlaying(), "Stopping on an empty engine must stay empty");
+
+	// A path outside Game/Audio must be refused by the confinement check
+	// regardless of whether a device exists.
+	TEST_ASSERT(!audio.play(root, "Game/Scripts/notaudio.lua"),
+		"A clip outside Game/Audio must be refused");
+
+	if (!haveDevice)
+	{
+		// CI has no audio device. The queries above are the parts that must
+		// hold everywhere; actual playback cannot be asserted here.
+		std::cout << "      (no audio device - playback assertions skipped)\n";
+	}
+
+	audio.shutdown();
+	std::error_code cleanup;
+	fs::remove_all(root, cleanup);
+}
+
+// ----------------------------------------------------------------------------
+// Per-source audio effects. These are edited by the panel, by the AI and by
+// hand-editing a scene file, all through the same SetPropertyCommand handler,
+// so the clamping matters as much as the round-trip. A delay feedback of 1.0
+// never decays; a delay of 0 seconds is a division trap.
+// ----------------------------------------------------------------------------
+static void testAudioSourceEffectsConversion()
+{
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+
+	TEST_ASSERT(bus.execute(CreateEntityCommand{"Speaker"}).success, "Creating the entity must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "enabled", true}).success,
+		"Enabling the audio source must succeed");
+
+	// Held across the whole test: no entity is created after this point, so
+	// the scene's storage cannot reallocate and invalidate it.
+	const SceneEntity* speaker = scene.findEntity("Speaker");
+	TEST_ASSERT(speaker != nullptr, "The entity must exist");
+
+	// A dry source must convert to dry settings, or every object would build a
+	// node graph it does not need.
+	{
+		const gameforger::core::EffectSettings settings = toEngineEffectSettings(speaker->audioSource);
+		TEST_ASSERT(!settings.anyEnabled(), "A default source must convert to no effects");
+		TEST_ASSERT(settings.filter == gameforger::core::EffectSettings::Filter::None, "Default filter must be None");
+	}
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverb", true}).success, "reverb");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbWet", 0.25F}).success, "wet");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelay", true}).success, "delay");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelaySeconds", 0.5F}).success, "time");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxCutoffHz", 800.0F}).success, "cutoff");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", 2.0F}).success, "fade in");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeOutSeconds", 3.0F}).success, "fade out");
+
+	{
+		const gameforger::core::EffectSettings settings = toEngineEffectSettings(speaker->audioSource);
+		TEST_ASSERT(settings.reverb, "Reverb must carry across");
+		TEST_ASSERT(std::fabs(settings.reverbWet - 0.25F) < 0.001F, "Reverb wet must carry across");
+		TEST_ASSERT(settings.delay, "Delay must carry across");
+		TEST_ASSERT(std::fabs(settings.delaySeconds - 0.5F) < 0.001F, "Delay time must carry across");
+		TEST_ASSERT(std::fabs(settings.cutoffHz - 800.0F) < 0.001F, "Cutoff must carry across");
+		// Fades live on the source rather than inside AudioEffects, which makes
+		// them the fields a converter is most likely to forget.
+		TEST_ASSERT(std::fabs(settings.fadeInSeconds - 2.0F) < 0.001F, "Fade in must carry across");
+		TEST_ASSERT(std::fabs(settings.fadeOutSeconds - 3.0F) < 0.001F, "Fade out must carry across");
+	}
+
+	// The filter is the one field converted by hand, case by case. Transposing
+	// two cases would swap muffled for thin with nothing to catch it.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("low_pass")}).success,
+		"Selecting the low pass filter must succeed");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::LowPass,
+		"low_pass must convert to LowPass, not HighPass");
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("high_pass")}).success,
+		"Selecting the high pass filter must succeed");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::HighPass,
+		"high_pass must convert to HighPass, not LowPass");
+
+	// The names are the serialized spelling, not the C++ enumerator spelling.
+	// Writing this test with "LowPass" is what proved the validator rejects a
+	// name it does not know rather than silently leaving the filter untouched.
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("LowPass")}).success,
+		"An unknown filter name must be rejected");
+	TEST_ASSERT(toEngineEffectSettings(speaker->audioSource).filter == gameforger::core::EffectSettings::Filter::HighPass,
+		"A rejected filter edit must leave the previous filter in place");
+}
+
+static void testAudioEffectsRoundTripAndClamping()
+{
+	const std::filesystem::path sceneFile = "test_audio_effects.scene";
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+
+	TEST_ASSERT(bus.execute(CreateEntityCommand{"Speaker"}).success, "Creating the entity must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "enabled", true}).success,
+		"Enabling the audio source must succeed");
+
+	// Defaults: a brand-new source is dry.
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr && !e->audioSource.effects.anyEnabled(),
+			"A new audio source must start with no effects enabled");
+	}
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverb", true}).success,
+		"Enabling reverb must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelay", true}).success,
+		"Enabling delay must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("low_pass")}).success,
+		"Setting a known filter must succeed");
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxFilter", std::string("bandpass")}).success,
+		"An unknown filter name must be rejected, not silently ignored");
+
+	// Clamping. Runaway feedback is the dangerous one.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelayDecay", 5.0F}).success,
+		"An out-of-range decay is clamped, not rejected");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxDelaySeconds", 0.0F}).success,
+		"An out-of-range delay time is clamped");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxCutoffHz", 999999.0F}).success,
+		"An out-of-range cutoff is clamped");
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr, "Entity must still exist");
+		TEST_ASSERT(e->audioSource.effects.delayDecay <= 0.99F,
+			"Delay feedback must be clamped below 1.0 or the echo never decays");
+		TEST_ASSERT(e->audioSource.effects.delaySeconds >= 0.01F, "Delay time must be clamped above zero");
+		TEST_ASSERT(e->audioSource.effects.cutoffHz <= 20000.0F, "Cutoff must be clamped to audible range");
+	}
+
+	// A non-finite value must be refused outright rather than clamped to a
+	// bound, because NaN compares false against every bound.
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbWet", std::nanf("")}).success,
+		"A non-finite effect value must be rejected");
+
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fxReverbRoomSize", 0.8F}).success,
+		"Setting room size must succeed");
+
+	// Fades live on the source, not in AudioEffects - they ramp the voice's own
+	// volume and need no node graph, so anyEnabled() must stay false for them.
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", 1.5F}).success,
+		"Setting fade in must succeed");
+	TEST_ASSERT(bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeOutSeconds", 99.0F}).success,
+		"An over-long fade is clamped, not rejected");
+	TEST_ASSERT(!bus.execute(SetPropertyCommand{"Speaker", "AudioSource", "fadeInSeconds", std::nanf("")}).success,
+		"A non-finite fade must be rejected");
+	{
+		const SceneEntity* e = scene.findEntity("Speaker");
+		TEST_ASSERT(e != nullptr, "Entity must exist");
+		TEST_ASSERT(std::abs(e->audioSource.fadeInSeconds - 1.5F) < 0.001F, "Fade in must be stored");
+		TEST_ASSERT(e->audioSource.fadeOutSeconds <= 30.0F, "Fade out must be clamped");
+	}
+
+	TEST_ASSERT(saveScene(sceneFile, scene.entities()).success, "Saving must succeed");
+	const SceneLoadResult loaded = loadScene(sceneFile);
+	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "Loading must succeed");
+	const AudioEffects& fx = loaded.entities[0].audioSource.effects;
+	TEST_ASSERT(fx.reverb, "reverb flag must round-trip");
+	TEST_ASSERT(fx.delay, "delay flag must round-trip");
+	TEST_ASSERT(fx.filter == AudioEffects::Filter::LowPass, "filter must round-trip by NAME");
+	TEST_ASSERT(std::abs(fx.reverbRoomSize - 0.8F) < 0.001F, "reverb room size must round-trip");
+	TEST_ASSERT(fx.delayDecay <= 0.99F, "clamped decay must persist clamped");
+	TEST_ASSERT(std::abs(loaded.entities[0].audioSource.fadeInSeconds - 1.5F) < 0.001F,
+		"fade in must round-trip");
+	TEST_ASSERT(loaded.entities[0].audioSource.fadeOutSeconds <= 30.0F, "fade out must round-trip clamped");
+
+	// A scene written before effects existed has no "effects" key at all and
+	// must load dry rather than failing.
+	{
+		std::ofstream out(sceneFile);
+		out << R"({"format":"GameForgerScene","version":8,"entities":[)"
+			<< R"({"name":"Old","hasAudioSource":true,"audioSource":{"clipAssetPath":"Game/Audio/a.wav"}}]})";
+	}
+	const SceneLoadResult legacy = loadScene(sceneFile);
+	TEST_ASSERT(legacy.success && legacy.entities.size() == 1, "A pre-effects scene must still load");
+	TEST_ASSERT(!legacy.entities[0].audioSource.effects.anyEnabled(),
+		"A pre-effects scene must load with effects off");
+	TEST_ASSERT(legacy.entities[0].audioSource.fadeInSeconds == 0.0F &&
+			legacy.entities[0].audioSource.fadeOutSeconds == 0.0F,
+		"A pre-fade scene must load with no fades, i.e. instant start and stop");
+
+	std::filesystem::remove(sceneFile);
+	std::filesystem::remove(sceneFile.string() + ".bak");
+}
+
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -520,10 +1874,30 @@ int main()
 	RUN_TEST(testSceneSerialization);
 	RUN_TEST(testEditorScene);
 	RUN_TEST(testScriptRuntimeSandboxing);
+	RUN_TEST(testGetRightMatchesFpsCamera);
 	RUN_TEST(testGameObjectComponentModel);
 	RUN_TEST(testAssetDatabase);
 	RUN_TEST(testMaterialSerialization);
 	RUN_TEST(testScriptPropertyReflection);
+	RUN_TEST(testColliderPrimitiveBlocksWhenChecked);
+	RUN_TEST(testImportedMeshColliderUsesTrianglesNotScaleBox);
+	RUN_TEST(testParentColliderSolidsChildren);
+	RUN_TEST(testColliderBoxMeshConvexTypes);
+	RUN_TEST(testChatResponseBothProtocols);
+	RUN_TEST(testResolveProjectFileConfinement);
+	RUN_TEST(testJsonPrettyPrinter);
+	RUN_TEST(testProjectSettingsAndBus);
+	RUN_TEST(testBootSequence);
+	RUN_TEST(testAudioSourceAndHooks);
+	RUN_TEST(testStoryboardSerialization);
+	RUN_TEST(testAudioCueOrdering);
+	RUN_TEST(testManagerRegistryAndOnEnd);
+	RUN_TEST(testAudioHookLoopRoundTrip);
+	RUN_TEST(testAllShippedScriptsLoad);
+	RUN_TEST(testFrameProfilerReport);
+	RUN_TEST(testAudioQueryAndScopedStop);
+	RUN_TEST(testAudioEffectsRoundTripAndClamping);
+	RUN_TEST(testAudioSourceEffectsConversion);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

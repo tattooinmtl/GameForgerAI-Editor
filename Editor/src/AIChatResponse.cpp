@@ -35,6 +35,43 @@ namespace gameforger::editor
 			return content->stringValue;
 		}
 
+		// Anthropic Messages success body:
+		//   { "content": [ { "type": "text", "text": "..." }, ... ], ... }
+		// Note the top-level "content" here is an ARRAY of blocks, not a
+		// string - a response can interleave text with thinking/tool_use
+		// blocks, so concatenate every text block and skip the rest.
+		std::optional<std::string> contentFromBlocks(const json::Value& root)
+		{
+			const json::Value* content = root.find("content");
+			if (content == nullptr || content->type != json::Value::Type::Array)
+			{
+				return std::nullopt;
+			}
+			std::string combined;
+			for (const json::Value& block : content->arrayValue)
+			{
+				if (block.type != json::Value::Type::Object)
+				{
+					continue;
+				}
+				const json::Value* type = block.find("type");
+				if (type == nullptr || type->type != json::Value::Type::String || type->stringValue != "text")
+				{
+					continue;
+				}
+				const json::Value* text = block.find("text");
+				if (text != nullptr && text->type == json::Value::Type::String)
+				{
+					combined += text->stringValue;
+				}
+			}
+			if (combined.empty())
+			{
+				return std::nullopt;
+			}
+			return combined;
+		}
+
 		std::optional<std::string> errorMessage(const json::Value& root)
 		{
 			const json::Value* error = root.find("error");
@@ -66,7 +103,15 @@ namespace gameforger::editor
 		{
 			return std::nullopt;
 		}
-		return contentFromChoices(*root);
+		// Dispatch on response SHAPE rather than on the configured protocol:
+		// the two are unambiguous (OpenAI has choices[], Anthropic has a
+		// content[] array), and this keeps every caller free of provider
+		// plumbing it would otherwise have to thread through.
+		if (std::optional<std::string> fromChoices = contentFromChoices(*root))
+		{
+			return fromChoices;
+		}
+		return contentFromBlocks(*root);
 	}
 
 	std::string extractErrorMessage(const std::string& jsonBody)

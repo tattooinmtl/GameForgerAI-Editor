@@ -41,6 +41,19 @@ function FpsController:on_start()
     -- third-person view (and back).
     self.camera_mode = "fps"
     self.camera:setMode(self.camera_mode)
+    -- Claim the cursor while this controller is driving the player. This used
+    -- to be a per-entity "Lock Cursor" checkbox in the Inspector; it belongs
+    -- to whatever is actually controlling the camera.
+    self.gameManager:setCursorLock(true)
+    self.managers:register("fps_controller")
+end
+
+-- Runs when Play stops or this script is detached. Releasing the registration
+-- is what lets the engine know nothing is driving the player any more, so the
+-- cursor is not left captured.
+function FpsController:on_end()
+    self.managers:unregister("fps_controller")
+    self.gameManager:setCursorLock(false)
 end
 
 -- 0..1, ready to feed a HUD sprint bar once one exists.
@@ -74,6 +87,12 @@ function FpsController:on_update(delta_time)
     -- mid-aim would be disorienting and isn't how the real interaction is
     -- meant to work.
     local operating_catapult = self.world:isAimingCatapult()
+    -- DO NOT CHANGE this WASD mapping or the getRight usage below.
+    -- Verified in Play: W/S = getAxis("W","S"), A/D = getAxis("D","A"),
+    -- move += forward * forward_axis + right * strafe_axis, with
+    -- entity:getRight() = cross(forward, +Y) (FPS camera screen-right).
+    -- Swapping A/D, negating strafe, or "fixing" getRight to cross(+Y, forward)
+    -- inverts left/right in the Game view.
     local forward_axis = operating_catapult and 0.0 or self.input:getAxis("W", "S")
     local strafe_axis = operating_catapult and 0.0 or self.input:getAxis("D", "A")
     local is_moving = forward_axis ~= 0.0 or strafe_axis ~= 0.0
@@ -86,7 +105,7 @@ function FpsController:on_update(delta_time)
     local speed = self.walk_speed * (sprinting and self.sprint_multiplier or 1.0)
 
     local forward = self.entity:getForward()
-    local right = self.entity:getRight()
+    local right = self.entity:getRight() -- do not negate; see WASD note above
     local move_x = forward.x * forward_axis + right.x * strafe_axis
     local move_z = forward.z * forward_axis + right.z * strafe_axis
     if is_moving then

@@ -21,3 +21,39 @@ Game/AI/Providers.local.json
 # Local backups / IDE session state - not source
 *.zip
 GameForgerEditorLayout.ini
+vc140.pdb
+
+# Scratch asset dump at the repo root (~610 MB of .glb). NOT the editor's asset
+# root - every code path reads Game/Models (see Editor/src/main.cpp's
+# modelsDirectory), and nothing references this directory. Ignored so a routine
+# `git add -A` can't commit it into a history that already carries 331 MB of
+# binary assets with no LFS.
+/models/
+
+# Performance panel exports (Reports/performance-<timestamp>.md). Diagnostic
+# output about a particular run on a particular machine - useful to share by
+# hand, not to version.
+/Reports/
+
+# Game assets are NOT versioned. Models and textures are the actual weight -
+# 376 MB and 46 MB respectively - and they cannot be diffed or merged. Demo
+# content is published as a download from the website instead.
+Game/Models/
+Game/Textures/
+Game/Cutscenes/
+Game/Saves/
+
+# Audio and animation binaries, but keep the .keep placeholders so the folders
+# survive a fresh clone - the editor and Project.json expect them to exist.
+Game/Audio/*
+!Game/Audio/.keep
+Game/Animations/*
+!Game/Animations/.keep
+
+# Deliberately still tracked, despite sitting under Game/:
+#   Game/Scenes/*.gfprod|.gfai  - text JSON, ~760 KB for all four, and
+#     Project.json's startupScene points at Castle.gfai. Ignoring these would
+#     save 0.2% of the repo and leave a fresh clone unable to open a project.
+#   Game/Characters/*.skeleton.json - 1 KB, referenced by Project.json.
+#   Game/Branding/logo.jpg + engine.png - editor splash and Runtime boot
+#     image; without them a fresh clone launches with a missing splash.

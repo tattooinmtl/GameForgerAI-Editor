@@ -63,7 +63,14 @@ FetchContent_Declare(
     imguizmo
     GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
     GIT_TAG 5ab7676402ace03cdf930b2d972f59c7d03c6fa8
-    GIT_SHALLOW TRUE
+    # NOT shallow, unlike every other dependency here. GIT_SHALLOW does
+    # `git clone --depth 1 --branch <ref>`, which can only resolve a branch or
+    # a tag - this is the one dependency pinned to a raw commit SHA, and a
+    # shallow clone of it fails with "fatal: unable to read tree". It went
+    # unnoticed because an existing out/_deps already had the commit; a truly
+    # fresh clone (CI, or a new machine) could not configure the project at
+    # all. ImGuizmo is small, so the full clone costs little.
+    GIT_SHALLOW FALSE
 )
 
 FetchContent_Declare(
@@ -96,7 +103,22 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui imguizmo lua assimp)
+# Single-header audio backend (WAV/MP3/FLAC). No CMakeLists in the repo, so
+# MakeAvailable only populates the source dir; we wrap it as an INTERFACE
+# include below. Public-domain / MIT-0, same class of vendoring as stb_*.
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.22
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad imgui imguizmo lua assimp miniaudio)
+
+if(NOT TARGET miniaudio)
+    add_library(miniaudio INTERFACE)
+    target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
+endif()
 
 # Upstream ImGuizmo's own "imguizmo" target compiles GraphEditor.cpp/ImCurveEdit.cpp/ImGradient.cpp
 # without an imgui include path (it only adds one under IMGUIZMO_BUILD_EXAMPLE, which we don't set).

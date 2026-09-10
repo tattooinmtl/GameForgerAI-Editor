@@ -8,8 +8,12 @@ on:
 
 jobs:
   build-and-test:
-    name: Windows x64 MSVC Build & CTest
+    name: Windows x64 MSVC ${{ matrix.config }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
 
     steps:
       - name: Checkout repository
@@ -22,17 +26,50 @@ jobs:
         with:
           arch: x64
 
+      # This step used ashley-taylor/setup-ninja, whose repository has since
+      # been removed from GitHub - every run then failed at "Set up job" in
+      # about three seconds, without compiling anything. Rather than swap in
+      # another third-party action (the obvious candidate is archived, i.e.
+      # the same failure waiting to happen), resolve Ninja from what the
+      # runner already has and fall back to Chocolatey, which is preinstalled
+      # on GitHub's Windows images. No external action to rot.
       - name: Setup Ninja
-        uses: ashley-taylor/setup-ninja@v1.0.0
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            Write-Host "Ninja already on PATH: $((Get-Command ninja).Source)"
+          } else {
+            Write-Host "Ninja not found; installing via Chocolatey."
+            choco install ninja -y --no-progress
+          }
+          ninja --version
 
+      # glad2 does not ship a pre-generated loader - it runs its Python
+      # generator during the BUILD step, and that generator imports jinja2.
+      # GitHub's Windows image has Python but not jinja2, so the build died
+      # with ModuleNotFoundError while producing glad/gl.h. Local machines
+      # tend to have it already, which is why this only shows up in CI.
+      - name: Install glad's Python dependency
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade jinja2
+          python -c "import jinja2; print('jinja2', jinja2.__version__)"
+
+      # Pin CMake to the SAME interpreter the step above installed jinja2
+      # into. The runner ships several Pythons; `python` on PATH was 3.12
+      # while find_package(Python) independently picked 3.14, so glad's
+      # generator ran under an interpreter that had never seen jinja2.
       - name: Configure CMake
+        shell: pwsh
         run: |
-          cmake --preset windows-x64
+          $py = (Get-Command python).Source
+          Write-Host "Pinning CMake to $py"
+          cmake --preset windows-x64 "-DPython_EXECUTABLE=$py" "-DPython3_EXECUTABLE=$py"
 
-      - name: Build All Targets (Debug)
+      - name: Build All Targets
         run: |
-          cmake --build out/build/windows-x64 --config Debug
+          cmake --build out/build/windows-x64 --config ${{ matrix.config }}
 
       - name: Run Automated CTest Suite
         run: |
-          ctest --test-dir out/build/windows-x64 -C Debug --output-on-failure
+          ctest --test-dir out/build/windows-x64 -C ${{ matrix.config }} --output-on-failure

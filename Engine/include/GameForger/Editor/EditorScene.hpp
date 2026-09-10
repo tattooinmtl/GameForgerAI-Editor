@@ -26,14 +26,10 @@ namespace gameforger::editor
 		// Rotates the third-person camera around the entity, away from
 		// directly-behind - e.g. for an over-the-shoulder angle.
 		float thirdPersonYawOffsetDegrees = 0.0F;
-		// While Play is running and this entity has claimed the Game view
-		// camera (either mode), hide+capture the OS cursor for continuous
-		// mouse-look instead of requiring Right Mouse held - see
-		// drawGameViewPanel (main.cpp). Per-entity/authored (Inspector's
-		// Camera Rig section) and saved with the scene, unlike a Play-
-		// session-only UI preference, so a controller keeps its own
-		// intended behavior across sessions.
-		bool lockCursor = false;
+		// lockCursor used to live here as a per-entity authored flag. Cursor
+		// ownership is session state, not a property of a crate, so it moved
+		// to GameplayState::cursorLockDesired, driven by whichever script
+		// calls self.gameManager:setCursorLock(). See game_manager.lua.
 	};
 
 	// One paintable ground material - mirrors Unity's TerrainLayer asset:
@@ -132,12 +128,67 @@ namespace gameforger::editor
 		std::string iconPath;
 	};
 
+	// Additive audio source, same shape as the unused AudioSourceComponent
+	// stub. Playback goes through core::AudioEngine; this is the authored
+	// data that round-trips through the scene file.
+	// Per-source DSP. "Echo" is not a separate effect - it is delay with
+	// feedback, so one delay node covers both and the panel labels it that way
+	// rather than shipping two controls that do the same thing.
+	struct AudioEffects
+	{
+		bool reverb = false;
+		float reverbRoomSize = 0.5F;   // 0..1
+		float reverbDamping = 0.5F;    // 0..1
+		float reverbWet = 0.3F;        // 0..1
+		float reverbDry = 0.7F;        // 0..1
+
+		bool delay = false;
+		float delaySeconds = 0.25F;    // 0.01..2
+		float delayDecay = 0.4F;       // 0..0.99 - feedback; this is what makes it an echo
+		float delayWet = 0.35F;        // 0..1
+		float delayDry = 1.0F;         // 0..1
+
+		enum class Filter
+		{
+			None,
+			LowPass,   // muffled / behind a wall
+			HighPass   // thin / telephone
+		};
+		Filter filter = Filter::None;
+		float cutoffHz = 1000.0F;      // 20..20000
+
+		[[nodiscard]] bool anyEnabled() const noexcept
+		{
+			return reverb || delay || filter != Filter::None;
+		}
+	};
+
+	[[nodiscard]] const char* audioFilterName(AudioEffects::Filter filter) noexcept;
+	[[nodiscard]] bool audioFilterFromName(const std::string& name, AudioEffects::Filter& outFilter) noexcept;
+
+	struct AudioSourceData
+	{
+		std::string clipAssetPath;
+		float volume = 1.0F;
+		float pitch = 1.0F;
+		bool loop = false;
+		bool playOnAwake = true;
+		bool is3D = true;
+		float minDistance = 1.0F;
+		float maxDistance = 50.0F;
+		// Fades are a property of the sound itself, not a DSP node - miniaudio
+		// ramps the voice's own volume - so they live here beside volume and
+		// pitch rather than in AudioEffects. Putting them in AudioEffects would
+		// also make anyEnabled() true and build a node graph for nothing.
+		// 0 means no fade: start at full volume, stop instantly.
+		float fadeInSeconds = 0.0F;
+		float fadeOutSeconds = 0.0F;
+		AudioEffects effects;
+	};
+
 	// Data for an entity with isCastle=true (see below) - additive, like
-	// hasCollider/isPickupItem. The entity's own world-space AABB
-	// (position +/- scale, same convention as the collider) is what
-	// projectile hit-testing checks against, so this is normally placed on
-	// one deliberately large "hitbox" entity rather than every decorative
-	// piece of a castle - see tickProjectiles (GameplayLoop.cpp).
+	// hasCollider/isPickupItem. Projectile hit-testing uses colliderWorldAabb
+	// (mesh bounds for imported models, otherwise position +/- scale).
 	struct CastleData
 	{
 		float hp = 100.0F;
@@ -160,6 +211,42 @@ namespace gameforger::editor
 		float maxPitchDegrees = 70.0F;
 		float launchSpeed = 22.0F;
 	};
+
+	// Unity-style collider shapes, used only when hasCollider is true.
+	// Box = solid AABB, Mesh = triangle mesh (hollow), Convex = solid hull.
+	enum class ColliderType
+	{
+		Box,
+		Mesh,
+		Convex
+	};
+
+	[[nodiscard]] inline const char* colliderTypeToString(const ColliderType type)
+	{
+		switch (type)
+		{
+			case ColliderType::Mesh:
+				return "mesh";
+			case ColliderType::Convex:
+				return "convex";
+			case ColliderType::Box:
+			default:
+				return "box";
+		}
+	}
+
+	[[nodiscard]] inline ColliderType colliderTypeFromString(const std::string& text)
+	{
+		if (text == "mesh")
+		{
+			return ColliderType::Mesh;
+		}
+		if (text == "convex")
+		{
+			return ColliderType::Convex;
+		}
+		return ColliderType::Box;
+	}
 
 	struct SceneEntity
 	{
@@ -194,20 +281,25 @@ namespace gameforger::editor
 		std::vector<std::string> scripts;
 		EntityAnimation animation;
 		EntityCameraRig cameraRig;
-		// Whether self.physics:resolve() (see ScriptRuntime) treats this
-		// entity as solid. The collider is this entity's world-space AABB -
-		// its primitive's local [-1,1] box scaled by `scale`, ignoring
-		// rotation and pivotOffset - a deliberate simplification, not a
-		// rotation-aware physics shape.
+		// Whether self.physics:resolve() (see Collision.hpp / ScriptRuntime)
+		// treats this entity as solid. Checking this on a parent also makes
+		// descendant meshes solid. Shape is `colliderType` (Unity-style Box /
+		// Mesh / Convex) - the Inspector only shows those after this flag.
 		bool hasCollider = false;
+		// Box: solid AABB (primitive scale box, or imported mesh bounds).
+		// Mesh: triangle mesh (hollow rooms/walls). Convex: solid convex hull.
+		// Imported models default to Mesh (CreateImportedMeshCommand).
+		ColliderType colliderType = ColliderType::Box;
 		// Whether this entity can be picked up (see PickupItemData above,
 		// and tickPickupInteraction/main.cpp for the actual interaction) -
 		// additive, like hasCollider, not a shape replacement.
 		bool isPickupItem = false;
 		PickupItemData pickupItem;
+		bool hasAudioSource = false;
+		AudioSourceData audioSource;
 		// Whether this entity is a destructible castle (see CastleData
 		// above) - additive, like hasCollider. Normally paired with
-		// hasCollider=true, since the collider AABB is what a gravity
+		// hasCollider=true, since colliderWorldAabb is what a gravity
 		// projectile's hit test uses.
 		bool isCastle = false;
 		CastleData castle;
@@ -288,6 +380,8 @@ namespace gameforger::editor
 	{
 	public:
 		explicit EditorScene(std::filesystem::path projectRoot);
+
+		[[nodiscard]] const std::filesystem::path& projectRoot() const noexcept { return projectRoot_; }
 
 		[[nodiscard]] AICommandResult execute(const AIEditorCommand& command);
 		[[nodiscard]] const std::vector<SceneEntity>& entities() const noexcept;

@@ -197,6 +197,15 @@ namespace gameforger::editor
 				entity.importedMesh.sourcePath =
 					readString(*importedMesh, "sourcePath", entity.importedMesh.sourcePath);
 			}
+			if (obj.find("colliderType") != nullptr)
+			{
+				entity.colliderType = colliderTypeFromString(readString(obj, "colliderType", "box"));
+			}
+			else
+			{
+				// Pre-type scenes: imported colliders were triangle meshes.
+				entity.colliderType = entity.isImportedMesh ? ColliderType::Mesh : ColliderType::Box;
+			}
 			if (const json::Value* textMesh = obj.find("textMesh"))
 			{
 				entity.textMesh.content = readString(*textMesh, "content", entity.textMesh.content);
@@ -210,6 +219,44 @@ namespace gameforger::editor
 			{
 				entity.pickupItem.itemName = readString(*pickupItem, "itemName", entity.pickupItem.itemName);
 				entity.pickupItem.iconPath = readString(*pickupItem, "iconPath", entity.pickupItem.iconPath);
+			}
+
+			entity.hasAudioSource = readBool(obj, "hasAudioSource", false);
+			if (const json::Value* audioSource = obj.find("audioSource"))
+			{
+				entity.audioSource.clipAssetPath =
+					readString(*audioSource, "clipAssetPath", entity.audioSource.clipAssetPath);
+				entity.audioSource.volume = readFloat(*audioSource, "volume", entity.audioSource.volume);
+				entity.audioSource.pitch = readFloat(*audioSource, "pitch", entity.audioSource.pitch);
+				entity.audioSource.loop = readBool(*audioSource, "loop", entity.audioSource.loop);
+				entity.audioSource.playOnAwake = readBool(*audioSource, "playOnAwake", entity.audioSource.playOnAwake);
+				entity.audioSource.is3D = readBool(*audioSource, "is3D", entity.audioSource.is3D);
+				entity.audioSource.minDistance = readFloat(*audioSource, "minDistance", entity.audioSource.minDistance);
+				entity.audioSource.maxDistance = readFloat(*audioSource, "maxDistance", entity.audioSource.maxDistance);
+				entity.audioSource.fadeInSeconds =
+					readFloat(*audioSource, "fadeInSeconds", entity.audioSource.fadeInSeconds);
+				entity.audioSource.fadeOutSeconds =
+					readFloat(*audioSource, "fadeOutSeconds", entity.audioSource.fadeOutSeconds);
+				// Absent in scenes written before effects existed, so every field
+				// falls back to its default and an old scene loads dry.
+				if (const json::Value* fx = audioSource->find("effects"))
+				{
+					AudioEffects& effects = entity.audioSource.effects;
+					effects.reverb = readBool(*fx, "reverb", effects.reverb);
+					effects.reverbRoomSize = readFloat(*fx, "reverbRoomSize", effects.reverbRoomSize);
+					effects.reverbDamping = readFloat(*fx, "reverbDamping", effects.reverbDamping);
+					effects.reverbWet = readFloat(*fx, "reverbWet", effects.reverbWet);
+					effects.reverbDry = readFloat(*fx, "reverbDry", effects.reverbDry);
+					effects.delay = readBool(*fx, "delay", effects.delay);
+					effects.delaySeconds = readFloat(*fx, "delaySeconds", effects.delaySeconds);
+					effects.delayDecay = readFloat(*fx, "delayDecay", effects.delayDecay);
+					effects.delayWet = readFloat(*fx, "delayWet", effects.delayWet);
+					effects.delayDry = readFloat(*fx, "delayDry", effects.delayDry);
+					// An unrecognised filter name means a newer editor wrote this;
+					// keep the default rather than guessing at it.
+					(void)audioFilterFromName(readString(*fx, "filter", "none"), effects.filter);
+					effects.cutoffHz = readFloat(*fx, "cutoffHz", effects.cutoffHz);
+				}
 			}
 
 			entity.isCastle = readBool(obj, "isCastle", false);
@@ -245,7 +292,6 @@ namespace gameforger::editor
 					readFloat(*cameraRig, "thirdPersonAimHeight", entity.cameraRig.thirdPersonAimHeight);
 				entity.cameraRig.thirdPersonYawOffsetDegrees = readFloat(
 					*cameraRig, "thirdPersonYawOffsetDegrees", entity.cameraRig.thirdPersonYawOffsetDegrees);
-				entity.cameraRig.lockCursor = readBool(*cameraRig, "lockCursor", entity.cameraRig.lockCursor);
 			}
 
 			if (const json::Value* scripts = obj.find("scripts"))
@@ -386,11 +432,57 @@ namespace gameforger::editor
 			}
 			json += entity.materialLayers.empty() ? "],\n" : ("\n" + indent + "  ],\n");
 			json += indent + "  \"hasCollider\": " + std::string(entity.hasCollider ? "true" : "false") + ",\n";
+			json += indent + "  \"colliderType\": \"" + std::string(colliderTypeToString(entity.colliderType)) + "\",\n";
 			json += indent + "  \"isPickupItem\": " + std::string(entity.isPickupItem ? "true" : "false") + ",\n";
 			json += indent + "  \"pickupItem\": {\n";
 			json += indent + "    \"itemName\": \"" + escapeJson(entity.pickupItem.itemName) + "\",\n";
 			json += indent + "    \"iconPath\": \"" + escapeJson(entity.pickupItem.iconPath) + "\"\n";
 			json += indent + "  },\n";
+			json += indent + "  \"hasAudioSource\": " + std::string(entity.hasAudioSource ? "true" : "false") + ",\n";
+			{
+				std::array<char, 32> audioScalar{};
+				json += indent + "  \"audioSource\": {\n";
+				json += indent + "    \"clipAssetPath\": \"" + escapeJson(entity.audioSource.clipAssetPath) + "\",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.volume);
+				json += indent + "    \"volume\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.pitch);
+				json += indent + "    \"pitch\": " + audioScalar.data() + ",\n";
+				json += indent + "    \"loop\": " + std::string(entity.audioSource.loop ? "true" : "false") + ",\n";
+				json += indent + "    \"playOnAwake\": " +
+					std::string(entity.audioSource.playOnAwake ? "true" : "false") + ",\n";
+				json += indent + "    \"is3D\": " + std::string(entity.audioSource.is3D ? "true" : "false") + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.minDistance);
+				json += indent + "    \"minDistance\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.maxDistance);
+				json += indent + "    \"maxDistance\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.fadeInSeconds);
+				json += indent + "    \"fadeInSeconds\": " + audioScalar.data() + ",\n";
+				std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", entity.audioSource.fadeOutSeconds);
+				json += indent + "    \"fadeOutSeconds\": " + audioScalar.data() + ",\n";
+				{
+					const AudioEffects& fx = entity.audioSource.effects;
+					const auto scalar = [&audioScalar](const float value)
+					{
+						std::snprintf(audioScalar.data(), audioScalar.size(), "%.6f", static_cast<double>(value));
+						return std::string(audioScalar.data());
+					};
+					json += indent + "    \"effects\": {\n";
+					json += indent + "      \"reverb\": " + std::string(fx.reverb ? "true" : "false") + ",\n";
+					json += indent + "      \"reverbRoomSize\": " + scalar(fx.reverbRoomSize) + ",\n";
+					json += indent + "      \"reverbDamping\": " + scalar(fx.reverbDamping) + ",\n";
+					json += indent + "      \"reverbWet\": " + scalar(fx.reverbWet) + ",\n";
+					json += indent + "      \"reverbDry\": " + scalar(fx.reverbDry) + ",\n";
+					json += indent + "      \"delay\": " + std::string(fx.delay ? "true" : "false") + ",\n";
+					json += indent + "      \"delaySeconds\": " + scalar(fx.delaySeconds) + ",\n";
+					json += indent + "      \"delayDecay\": " + scalar(fx.delayDecay) + ",\n";
+					json += indent + "      \"delayWet\": " + scalar(fx.delayWet) + ",\n";
+					json += indent + "      \"delayDry\": " + scalar(fx.delayDry) + ",\n";
+					json += indent + "      \"filter\": \"" + std::string(audioFilterName(fx.filter)) + "\",\n";
+					json += indent + "      \"cutoffHz\": " + scalar(fx.cutoffHz) + "\n";
+					json += indent + "    }\n";
+				}
+				json += indent + "  },\n";
+			}
 			json += indent + "  \"isCastle\": " + std::string(entity.isCastle ? "true" : "false") + ",\n";
 			{
 				std::array<char, 32> castleScalarBuffer{};
@@ -501,9 +593,9 @@ namespace gameforger::editor
 			json += indent + "    \"thirdPersonDistance\": " + thirdPersonDistanceBuffer.data() + ",\n";
 			json += indent + "    \"thirdPersonHeight\": " + thirdPersonHeightBuffer.data() + ",\n";
 			json += indent + "    \"thirdPersonAimHeight\": " + thirdPersonAimHeightBuffer.data() + ",\n";
-			json += indent + "    \"thirdPersonYawOffsetDegrees\": " + thirdPersonYawOffsetBuffer.data() + ",\n";
-			json += indent + "    \"lockCursor\": " + std::string(entity.cameraRig.lockCursor ? "true" : "false") +
-				"\n";
+			// Last field in cameraRig now that lockCursor is gone - no trailing
+			// comma, which this project's own parser rejects outright.
+			json += indent + "    \"thirdPersonYawOffsetDegrees\": " + thirdPersonYawOffsetBuffer.data() + "\n";
 			json += indent + "  },\n";
 
 			json += indent + "  \"scripts\": [";
@@ -530,7 +622,110 @@ namespace gameforger::editor
 		}
 	}
 
-	SceneSaveResult saveScene(const std::filesystem::path& filePath, const std::vector<SceneEntity>& entities)
+	namespace
+	{
+		// Storyboard shots ride along in the scene file: a shot references the
+		// scene's own cine cameras, so the list is meaningless without the
+		// scene it was recorded against. Absent from files written before this
+		// existed, which load as an empty storyboard rather than failing.
+		void appendShot(std::string& json, const CineShot& shot, const std::string& indent)
+		{
+			json += indent + "{\n";
+			json += indent + "  \"name\": \"" + escapeJson(shot.name) + "\",\n";
+			json += indent + "  \"looping\": " +
+				std::string(shot.cameraPath.looping ? "true" : "false") + ",\n";
+			json += indent + "  \"keyframes\": [";
+			for (std::size_t index = 0; index < shot.cameraPath.keyframes.size(); ++index)
+			{
+				json += (index == 0 ? "\n" : ",\n");
+				appendKeyframe(json, shot.cameraPath.keyframes[index], indent + "    ");
+			}
+			json += shot.cameraPath.keyframes.empty() ? "],\n" : ("\n" + indent + "  ],\n");
+			json += indent + "  \"audioCues\": [";
+			for (std::size_t index = 0; index < shot.audioCues.size(); ++index)
+			{
+				const AudioCue& cue = shot.audioCues[index];
+				std::array<char, 32> timeBuffer{};
+				std::array<char, 32> volumeBuffer{};
+				std::snprintf(timeBuffer.data(), timeBuffer.size(), "%.4f", static_cast<double>(cue.time));
+				std::snprintf(volumeBuffer.data(), volumeBuffer.size(), "%.4f", static_cast<double>(cue.volume));
+				json += (index == 0 ? "\n" : ",\n");
+				json += indent + "    {\"time\": " + timeBuffer.data() +
+					", \"clipPath\": \"" + escapeJson(cue.clipPath) +
+					"\", \"volume\": " + volumeBuffer.data() + "}";
+			}
+			json += shot.audioCues.empty() ? "]\n" : ("\n" + indent + "  ]\n");
+			json += indent + "}";
+		}
+
+		// Mirrors appendShot. A malformed shot is skipped rather than failing
+		// the whole scene load - losing one storyboard entry beats refusing to
+		// open the scene it belongs to.
+		std::vector<CineShot> parseStoryboard(const json::Value& root)
+		{
+			std::vector<CineShot> shots;
+			const json::Value* array = root.find("storyboard");
+			if (array == nullptr || array->type != json::Value::Type::Array)
+			{
+				return shots;
+			}
+			for (const json::Value& shotValue : array->arrayValue)
+			{
+				if (shotValue.type != json::Value::Type::Object)
+				{
+					continue;
+				}
+				CineShot shot;
+				shot.name = readString(shotValue, "name");
+				shot.cameraPath.enabled = true;
+				shot.cameraPath.looping = readBool(shotValue, "looping", false);
+				if (const json::Value* keyframes = shotValue.find("keyframes");
+					keyframes != nullptr && keyframes->type == json::Value::Type::Array)
+				{
+					for (const json::Value& keyframeValue : keyframes->arrayValue)
+					{
+						if (keyframeValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						TransformKeyframe keyframe;
+						keyframe.time = readFloat(keyframeValue, "time", 0.0F);
+						keyframe.position = readVec3(keyframeValue, "position", glm::vec3(0.0F));
+						keyframe.rotationEuler = readVec3(keyframeValue, "rotation", glm::vec3(0.0F));
+						keyframe.scale = readVec3(keyframeValue, "scale", glm::vec3(1.0F));
+						shot.cameraPath.keyframes.push_back(keyframe);
+					}
+				}
+				if (const json::Value* cues = shotValue.find("audioCues");
+					cues != nullptr && cues->type == json::Value::Type::Array)
+				{
+					for (const json::Value& cueValue : cues->arrayValue)
+					{
+						if (cueValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						AudioCue cue;
+						cue.time = readFloat(cueValue, "time", 0.0F);
+						cue.clipPath = readString(cueValue, "clipPath");
+						cue.volume = readFloat(cueValue, "volume", 1.0F);
+						if (!cue.clipPath.empty())
+						{
+							(void)insertAudioCueSorted(shot.audioCues, std::move(cue));
+						}
+					}
+				}
+				shots.push_back(std::move(shot));
+			}
+			return shots;
+		}
+	}
+
+
+	SceneSaveResult saveScene(
+		const std::filesystem::path& filePath,
+		const std::vector<SceneEntity>& entities,
+		const std::vector<CineShot>& shots)
 	{
 		if (filePath.has_parent_path() && !filePath.parent_path().empty())
 		{
@@ -551,7 +746,14 @@ namespace gameforger::editor
 			json += (index == 0 ? "\n" : ",\n");
 			appendEntity(json, entities[index], "    ");
 		}
-		json += entities.empty() ? "]\n" : "\n  ]\n";
+		json += entities.empty() ? "],\n" : "\n  ],\n";
+		json += "  \"storyboard\": [";
+		for (std::size_t index = 0; index < shots.size(); ++index)
+		{
+			json += (index == 0 ? "\n" : ",\n");
+			appendShot(json, shots[index], "    ");
+		}
+		json += shots.empty() ? "]\n" : "\n  ]\n";
 		json += "}\n";
 
 		// Atomic write: serialize into a sibling temp file, flush + close,
@@ -679,6 +881,11 @@ namespace gameforger::editor
 		{
 			message += " (" + std::to_string(skipped) + " skipped)";
 		}
-		return {true, message, std::move(entities)};
+		std::vector<CineShot> shots = parseStoryboard(*parsed);
+		if (!shots.empty())
+		{
+			message += ", " + std::to_string(shots.size()) + " storyboard shot(s)";
+		}
+		return {true, message, std::move(entities), std::move(shots)};
 	}
 }

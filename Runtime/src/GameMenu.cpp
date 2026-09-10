@@ -424,11 +424,17 @@ void main()
 					continue;
 				}
 				stbtt_aligned_quad measureQuad{};
+				// The last argument is opengl_fillrule (0 or 1), NOT a scale.
+				// textScale was being passed here, which silently became the
+				// int 1 and left the glyphs at baked size while the layout
+				// below reserved room for 3x text.
 				stbtt_GetBakedQuad(
 					bakedChars_.data(), kAtlasWidth, kAtlasHeight, character - kFirstChar, &measureX, &measureY,
-					&measureQuad, textScale);
+					&measureQuad, 1);
 			}
-			textWidth = measureX;
+			// stbtt advances the pen at baked size, so the scale has to be
+			// applied here for the plate and centering to match what is drawn.
+			textWidth = measureX * textScale;
 		}
 
 		// Background plate: a translucent dark band behind the text so it
@@ -456,7 +462,9 @@ void main()
 			glUniform1i(atlasLocation_, 0);
 			const float cursorXStart = (static_cast<float>(windowWidth) - textWidth) * 0.5F;
 			float cursorX = cursorXStart;
-			float cursorY = (static_cast<float>(windowHeight) - textHeight) * 0.5F;
+			float cursorY = (static_cast<float>(windowHeight) - textHeight) * 0.5F + charHeight;
+			// Fixed origin for the scaling above; cursorX/Y themselves advance.
+			const float cursorYStart = cursorY;
 			for (const char character : text)
 			{
 				if (character < kFirstChar || character >= kFirstChar + kNumChars)
@@ -464,11 +472,19 @@ void main()
 					continue;
 				}
 				stbtt_aligned_quad quad{};
+				// opengl_fillrule, not a scale - see the measure loop above.
 				stbtt_GetBakedQuad(
 					bakedChars_.data(), kAtlasWidth, kAtlasHeight, character - kFirstChar, &cursorX, &cursorY,
-					&quad, textScale);
+					&quad, 1);
+				// The pen walks at baked size, so scale each glyph about the
+				// start of the line rather than about its own corner - scaling
+				// in place would leave the letters overlapping at 1x spacing.
+				const float scaledX0 = cursorXStart + (quad.x0 - cursorXStart) * textScale;
+				const float scaledX1 = cursorXStart + (quad.x1 - cursorXStart) * textScale;
+				const float scaledY0 = cursorYStart + (quad.y0 - cursorYStart) * textScale;
+				const float scaledY1 = cursorYStart + (quad.y1 - cursorYStart) * textScale;
 				uploadQuad(
-					vertexArray_, vertexBuffer_, quad.x0, quad.y0, quad.x1 - quad.x0, quad.y1 - quad.y0,
+					vertexArray_, vertexBuffer_, scaledX0, scaledY0, scaledX1 - scaledX0, scaledY1 - scaledY0,
 					quad.s0, quad.t0, quad.s1, quad.t1);
 			}
 		}

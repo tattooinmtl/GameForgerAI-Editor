@@ -3,6 +3,17 @@ add_library(GameForgerEngine STATIC
     src/Core/ProjectPaths.cpp
     src/Core/AssetDatabase.cpp
     src/Core/Material.cpp
+    src/Core/AudioEngine.cpp
+    # Reverb is NOT in miniaudio.h - it ships in the repo's extras/nodes, with
+    # verblib.h bundled beside it. Compiled straight from the pinned
+    # dependency rather than vendored, so it can never drift from the
+    # miniaudio version. If a future bump moves or drops this node, THIS line
+    # is what fails to configure.
+    ${miniaudio_SOURCE_DIR}/extras/nodes/ma_reverb_node/ma_reverb_node.c
+    # Per-frame CPU timing split into named zones, with the worst frames kept
+    # so a dip can be inspected after the fact. In Engine so Runtime can use
+    # the same instrumentation later.
+    src/Core/FrameProfiler.cpp
     src/Animation/Skeleton.cpp
     src/Animation/AnimationClip.cpp
     # Scene data model + serialization + mesh generation - shared between
@@ -15,13 +26,24 @@ add_library(GameForgerEngine STATIC
     # whole codebase for a cosmetic change.
     src/Editor/Json.cpp
     src/Editor/AICommandBus.cpp
+    # Typed view of Game/Project.json + Game/Settings.json, plus the command
+    # bus that is the only writer to it. Lives in Engine (not Editor) because
+    # GameForgerRuntime reads the same settings - notably the boot sequence,
+    # which must play identically standalone and in the Editor's Play mode.
+    src/Editor/ProjectSettings.cpp
+    src/Editor/ProjectSettingsBus.cpp
     src/Editor/EditorScene.cpp
+    src/Editor/AudioSourceEffects.cpp
     src/Editor/SceneSerializer.cpp
+    # CineShot + AudioCue, lifted out of main.cpp so shots can be serialised
+    # into the scene file instead of being lost when the editor closes.
+    src/Editor/Storyboard.cpp
     src/Editor/Transform.cpp
     src/Editor/PrimitiveMeshes.cpp
     src/Editor/Terrain.cpp
     src/Editor/TextMesh.cpp
     src/Editor/ModelImport.cpp
+    src/Editor/Collision.cpp
     src/Editor/TerrainTexture.cpp
     src/Editor/StbImageImpl.cpp
     src/Editor/StbTrueTypeImpl.cpp
@@ -61,6 +83,8 @@ add_library(GameForgerEngine STATIC
 add_library(GameForger::Engine ALIAS GameForgerEngine)
 
 target_include_directories(GameForgerEngine
+    PRIVATE
+        ${miniaudio_SOURCE_DIR}/extras/nodes/ma_reverb_node
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
@@ -91,7 +115,13 @@ target_link_libraries(GameForgerEngine
         # PRIVATE since no public header of this library exposes lua_State
         # or any other Lua type.
         GameForgerLua
+        miniaudio
 )
+
+if(WIN32)
+    # miniaudio WASAPI / COM on Windows.
+    target_link_libraries(GameForgerEngine PRIVATE ole32)
+endif()
 
 target_compile_features(GameForgerEngine PUBLIC cxx_std_20)
 
@@ -105,11 +135,21 @@ set_target_properties(GameForgerEngine PROPERTIES FOLDER "GameForger")
 
 add_executable(GameForgerTests
     tests/TestMain.cpp
+    # Provider response parsing lives in the Editor target, which is an
+    # executable and so cannot be linked. Its only dependency is Engine's
+    # Json.hpp, so compile the one translation unit straight into the test
+    # binary rather than restructuring Editor into a library for it.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Editor/src/AIChatResponse.cpp
 )
 
 target_link_libraries(GameForgerTests
     PRIVATE
         GameForgerEngine
+)
+
+target_include_directories(GameForgerTests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../Editor/include
 )
 
 target_compile_features(GameForgerTests PRIVATE cxx_std_20)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -11,7 +12,7 @@
 #include <glm/trigonometric.hpp>
 
 #include "GameForger/Core/ProjectPaths.hpp"
-#include "GameForger/Editor/Terrain.hpp"
+#include "GameForger/Editor/Collision.hpp"
 
 extern "C"
 {
@@ -37,6 +38,15 @@ namespace gameforger::editor
 		ScriptRuntime* runtimeFrom(lua_State* L)
 		{
 			return *static_cast<ScriptRuntime**>(lua_getextraspace(L));
+		}
+
+		void executeOrLog(ScriptRuntime* runtime, const AIEditorCommand& command)
+		{
+			const AICommandResult result = runtime->commandBus().execute(command);
+			if (!result.success)
+			{
+				runtime->log(true, "Script command failed: " + result.message);
+			}
 		}
 	}
 
@@ -73,6 +83,43 @@ namespace gameforger::editor
 	void ScriptRuntime::resetBudget()
 	{
 		instructionsRemaining_.store(kInstructionBudget);
+	}
+
+	void* ScriptRuntime::luaAlloc(void* userData, void* pointer, std::size_t oldSize, std::size_t newSize)
+	{
+		auto* runtime = static_cast<ScriptRuntime*>(userData);
+		if (runtime == nullptr)
+		{
+			if (newSize == 0)
+			{
+				std::free(pointer);
+				return nullptr;
+			}
+			return std::realloc(pointer, newSize);
+		}
+		if (newSize == 0)
+		{
+			if (pointer != nullptr)
+			{
+				const std::size_t used = runtime->luaBytesUsed_.load();
+				runtime->luaBytesUsed_.store(used >= oldSize ? used - oldSize : 0);
+				std::free(pointer);
+			}
+			return nullptr;
+		}
+		const std::size_t accountedOld = pointer != nullptr ? oldSize : 0;
+		const std::size_t used = runtime->luaBytesUsed_.load();
+		const std::size_t next = used - accountedOld + newSize;
+		if (next > kLuaMemoryBudgetBytes)
+		{
+			return nullptr;
+		}
+		void* resized = std::realloc(pointer, newSize);
+		if (resized != nullptr)
+		{
+			runtime->luaBytesUsed_.store(next);
+		}
+		return resized;
 	}
 
 	namespace
@@ -125,7 +172,7 @@ namespace gameforger::editor
 			const int entityId = entityIdFromUpvalue(L);
 			if (const SceneEntity* entity = runtime->scene().findEntity(entityId))
 			{
-				runtime->commandBus().execute(SetPropertyCommand{entity->name, "Transform", "position", value});
+				executeOrLog(runtime, SetPropertyCommand{entity->name, "Transform", "position", value});
 			}
 			else
 			{
@@ -154,7 +201,7 @@ namespace gameforger::editor
 			const int entityId = entityIdFromUpvalue(L);
 			if (const SceneEntity* entity = runtime->scene().findEntity(entityId))
 			{
-				runtime->commandBus().execute(SetPropertyCommand{entity->name, "Transform", "rotation", value});
+				executeOrLog(runtime, SetPropertyCommand{entity->name, "Transform", "rotation", value});
 			}
 			else
 			{
@@ -185,11 +232,11 @@ namespace gameforger::editor
 			ScriptRuntime* runtime = runtimeFrom(L);
 			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
 			const float yawRadians = glm::radians(entity != nullptr ? entity->rotationEuler.y : 0.0F);
-			// Y up, Z forward (right-handed): right = +X = cross(+Y, forward).
-			// The previous cross(forward, +Y) returned -X, so D pressed while
-			// facing +Z strafed the player in the wrong direction.
+			// DO NOT CHANGE to cross(+Y, forward). That is world +X at yaw 0
+			// but GLM lookAtRH screen-right is cross(forward, +Y) = -X, which
+			// fps_controller.lua uses for D. Locked in by testGetRightMatchesFpsCamera.
 			const glm::vec3 forward(std::sin(yawRadians), 0.0F, std::cos(yawRadians));
-			pushVec3(L, glm::normalize(glm::cross(glm::vec3(0.0F, 1.0F, 0.0F), forward)));
+			pushVec3(L, glm::normalize(glm::cross(forward, glm::vec3(0.0F, 1.0F, 0.0F))));
 			return 1;
 		}
 
@@ -247,154 +294,14 @@ namespace gameforger::editor
 			addMethod("getMode", luaCameraGetMode);
 		}
 
-		struct BoxCollisionResult
-		{
-			glm::vec3 position;
-			bool grounded = false;
-		};
-
-		// Treats the moving entity as an axis-aligned box (halfWidth in X/Z,
-		// height in Y, `position` is its feet/base per this project's
-		// convention) and pushes it out of any overlapping Collider-enabled
-		// entity's world-space AABB, along whichever axis has the least
-		// penetration. A push along Y means "resting on top" (grounded) or
-		// "bumped a ceiling"; a push along X or Z means a wall/object blocked
-		// movement. This is a deliberately simple approximation - no rotation-
-		// aware colliders, no swept collision - not a general physics engine.
-		BoxCollisionResult resolveBoxCollision(
-			const EditorScene& scene,
-			const int selfEntityId,
-			const glm::vec3& startPosition,
-			const float halfWidth,
-			const float height)
-		{
-			BoxCollisionResult result{startPosition, false};
-
-			// A few passes so resolving one collider doesn't reintroduce an
-			// overlap with another that was already resolved this frame.
-			for (int pass = 0; pass < 3; ++pass)
-			{
-				bool resolvedAny = false;
-				for (const SceneEntity& other : scene.entities())
-				{
-					if (other.id == selfEntityId || !other.hasCollider)
-					{
-						continue;
-					}
-
-					if (other.isTerrain)
-					{
-						// A terrain's real footprint/shape comes from
-						// worldSize/heightScale/heights, not the generic
-						// Transform position+/-scale box every other
-						// collider below uses - scale is usually left at
-						// its default (1,1,1) for a Terrain entity, which
-						// would otherwise collapse the whole heightmap down
-						// to a practically useless 2x2x2 box centered on the
-						// terrain's origin. Sample the actual heightmap at
-						// the mover's XZ instead (rotation-blind, like every
-						// other collider here - see the class doc comment)
-						// so the mover rests on hills/canyons at their real
-						// height, not just wherever the terrain entity
-						// happens to sit near world Y=0.
-						const float half = other.terrain.worldSize * 0.5F;
-						const float localX = result.position.x - other.position.x;
-						const float localZ = result.position.z - other.position.z;
-						if (localX < -half || localX > half || localZ < -half || localZ > half)
-						{
-							continue;
-						}
-						const float groundY = other.position.y +
-							sampleTerrainHeight(
-								other.terrain.resolution,
-								other.terrain.worldSize,
-								other.terrain.heightScale,
-								other.terrain.heights,
-								localX,
-								localZ);
-						if (result.position.y <= groundY)
-						{
-							result.position.y = groundY;
-							result.grounded = true;
-							resolvedAny = true;
-						}
-						continue;
-					}
-
-					const glm::vec3 otherMin = other.position - other.scale;
-					const glm::vec3 otherMax = other.position + other.scale;
-					const glm::vec3 selfMin(
-						result.position.x - halfWidth, result.position.y, result.position.z - halfWidth);
-					const glm::vec3 selfMax(
-						result.position.x + halfWidth,
-						result.position.y + height,
-						result.position.z + halfWidth);
-
-					const float overlapX = std::min(selfMax.x, otherMax.x) - std::max(selfMin.x, otherMin.x);
-					const float overlapY = std::min(selfMax.y, otherMax.y) - std::max(selfMin.y, otherMin.y);
-					const float overlapZ = std::min(selfMax.z, otherMax.z) - std::max(selfMin.z, otherMin.z);
-					if (overlapX <= 0.0F || overlapY <= 0.0F || overlapZ <= 0.0F)
-					{
-						continue;
-					}
-
-					resolvedAny = true;
-					const float selfCenterY = result.position.y + height * 0.5F;
-					// If the mover's entire X/Z footprint sits inside the
-					// other collider's footprint, this can only be a vertical
-					// overlap (a wall could only ever clip one edge, never
-					// fully surround it) - so prefer resolving Y even when
-					// its raw overlap isn't the smallest. Without this, a wide
-					// or thick platform (e.g. a default-scaled cube used as
-					// ground, not yet flattened) reads as having a smaller
-					// horizontal overlap than vertical purely because the
-					// horizontal overlap is capped at the mover's own width,
-					// so it gets shoved sideways every frame instead of
-					// standing on top - grounded never becomes true, gravity
-					// piles up unbounded, and both movement and jumping look
-					// like they've stopped working entirely.
-					const bool fullyContainedHorizontally =
-						overlapX >= (2.0F * halfWidth - 0.001F) && overlapZ >= (2.0F * halfWidth - 0.001F);
-					if (fullyContainedHorizontally || (overlapY <= overlapX && overlapY <= overlapZ))
-					{
-						if (selfCenterY > other.position.y)
-						{
-							result.position.y = otherMax.y;
-							result.grounded = true;
-						}
-						else
-						{
-							result.position.y = otherMin.y - height;
-						}
-					}
-					else if (overlapX <= overlapZ)
-					{
-						result.position.x =
-							result.position.x > other.position.x ? otherMax.x + halfWidth : otherMin.x - halfWidth;
-					}
-					else
-					{
-						result.position.z =
-							result.position.z > other.position.z ? otherMax.z + halfWidth : otherMin.z - halfWidth;
-					}
-				}
-				if (!resolvedAny)
-				{
-					break;
-				}
-			}
-
-			return result;
-		}
-
 		int luaPhysicsResolve(lua_State* L)
 		{
 			ScriptRuntime* runtime = runtimeFrom(L);
 			const glm::vec3 position = checkVec3(L, 2);
 			const float halfWidth = static_cast<float>(luaL_checknumber(L, 3));
 			const float height = static_cast<float>(luaL_checknumber(L, 4));
-			const BoxCollisionResult result =
-				resolveBoxCollision(runtime->scene(), entityIdFromUpvalue(L), position, halfWidth, height);
+			const BoxCollisionResult result = resolveBoxCollision(
+				runtime->scene(), entityIdFromUpvalue(L), position, halfWidth, height);
 			pushVec3(L, result.position);
 			lua_pushboolean(L, result.grounded);
 			return 2;
@@ -557,11 +464,11 @@ namespace gameforger::editor
 			}
 			if (entity->parentName.empty())
 			{
-				runtime->commandBus().execute(SetPropertyCommand{entity->name, "Transform", "rotation", rotation});
+				executeOrLog(runtime, SetPropertyCommand{entity->name, "Transform", "rotation", rotation});
 			}
 			else
 			{
-				runtime->commandBus().execute(SetPropertyCommand{entity->name, "Parent", "localRotation", rotation});
+				executeOrLog(runtime, SetPropertyCommand{entity->name, "Parent", "localRotation", rotation});
 			}
 			return 0;
 		}
@@ -583,6 +490,133 @@ namespace gameforger::editor
 			const std::string hitTag = luaL_checkstring(L, 5);
 			runtime->spawnGravityProjectile(from, direction, speed, hitTag);
 			return 0;
+		}
+
+		// --- self.gameManager ------------------------------------------------
+		int luaGameManagerSetCursorLock(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->setCursorLock(lua_toboolean(L, 2) != 0);
+			return 0;
+		}
+
+		void pushGameManagerProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaGameManagerSetCursorLock);
+			lua_setfield(L, -2, "setCursorLock");
+		}
+
+		// --- self.managers ---------------------------------------------------
+		// The registry answers "is anything actually driving the player right
+		// now?" without the host having to track script lifetimes itself -
+		// which is what replaces the per-entity lockCursor checkbox.
+		int luaManagersRegister(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->registerManager(luaL_checkstring(L, 2));
+			return 0;
+		}
+
+		int luaManagersUnregister(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->unregisterManager(luaL_checkstring(L, 2));
+			return 0;
+		}
+
+		int luaManagersHas(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushboolean(L, runtime->hasManager(luaL_checkstring(L, 2)) ? 1 : 0);
+			return 1;
+		}
+
+		int luaManagersList(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::vector<std::string>& names = runtime->listManagers();
+			lua_newtable(L);
+			for (std::size_t i = 0; i < names.size(); ++i)
+			{
+				lua_pushstring(L, names[i].c_str());
+				lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1)); // Lua is 1-based
+			}
+			return 1;
+		}
+
+		// --- self.audio ------------------------------------------------------
+		// Attached to every script, not just audio_manager.lua, so any script
+		// can fire a sound without routing through a manager.
+		int luaAudioPlay(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string clip = luaL_checkstring(L, 2);
+			const float volume = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+			const bool loop = lua_isnoneornil(L, 4) ? false : (lua_toboolean(L, 4) != 0);
+			runtime->playAudio(clip, volume, loop);
+			return 0;
+		}
+
+		// stop() with no argument stops everything, stop(clip) stops just that
+		// clip. The no-argument form used to be the ONLY form, so a music
+		// manager stopping its track silenced every other sound in the game.
+		int luaAudioStop(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			if (lua_isnoneornil(L, 2))
+			{
+				runtime->stopAllAudio();
+			}
+			else
+			{
+				runtime->stopAudioClip(luaL_checkstring(L, 2));
+			}
+			return 0;
+		}
+
+		int luaAudioSetMasterVolume(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			runtime->setAudioMasterVolume(static_cast<float>(luaL_checknumber(L, 2)));
+			return 0;
+		}
+
+		// isPlaying() -> is ANY sound playing; isPlaying(clip) -> is that clip
+		// playing. Previously hardcoded to false, so any script branching on it
+		// silently took the wrong path.
+		int luaAudioIsPlaying(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string clip = lua_isnoneornil(L, 2) ? std::string{} : luaL_checkstring(L, 2);
+			lua_pushboolean(L, runtime->isAudioPlaying(clip) ? 1 : 0);
+			return 1;
+		}
+
+		void pushAudioProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaAudioPlay);
+			lua_setfield(L, -2, "play");
+			lua_pushcfunction(L, luaAudioStop);
+			lua_setfield(L, -2, "stop");
+			lua_pushcfunction(L, luaAudioSetMasterVolume);
+			lua_setfield(L, -2, "setMasterVolume");
+			lua_pushcfunction(L, luaAudioIsPlaying);
+			lua_setfield(L, -2, "isPlaying");
+		}
+
+		void pushManagersProxy(lua_State* L)
+		{
+			lua_newtable(L);
+			lua_pushcfunction(L, luaManagersRegister);
+			lua_setfield(L, -2, "register");
+			lua_pushcfunction(L, luaManagersUnregister);
+			lua_setfield(L, -2, "unregister");
+			lua_pushcfunction(L, luaManagersHas);
+			lua_setfield(L, -2, "has");
+			lua_pushcfunction(L, luaManagersList);
+			lua_setfield(L, -2, "list");
 		}
 
 		void pushWorldProxy(lua_State* L, const int entityId)
@@ -678,23 +712,21 @@ namespace gameforger::editor
 	}
 
 	void ScriptRuntime::initialize(
-		EditorScene& scene, AICommandBus& commandBus, InputSource& inputSource, LogCallback logCallback,
-		ProjectileSpawnCallback projectileSpawnCallback, BoolQueryCallback heldItemQueryCallback,
-		BoolQueryCallback aimingCatapultQueryCallback, BoolSetCallback operatingCatapultSetCallback,
-		GravityProjectileSpawnCallback gravityProjectileSpawnCallback)
+		EditorScene& scene, AICommandBus& commandBus, InputSource& inputSource, Config config)
 	{
 		shutdown();
 
-		state_ = luaL_newstate();
+		luaBytesUsed_.store(0);
+		state_ = lua_newstate(&ScriptRuntime::luaAlloc, this);
+		if (state_ == nullptr)
+		{
+			return;
+		}
 		scene_ = &scene;
 		commandBus_ = &commandBus;
 		inputSource_ = &inputSource;
-		logCallback_ = std::move(logCallback);
-		projectileSpawnCallback_ = std::move(projectileSpawnCallback);
-		heldItemQueryCallback_ = std::move(heldItemQueryCallback);
-		aimingCatapultQueryCallback_ = std::move(aimingCatapultQueryCallback);
-		operatingCatapultSetCallback_ = std::move(operatingCatapultSetCallback);
-		gravityProjectileSpawnCallback_ = std::move(gravityProjectileSpawnCallback);
+		config_ = std::move(config);
+		registeredManagers_.clear();
 		*static_cast<ScriptRuntime**>(lua_getextraspace(state_)) = this;
 
 		luaL_requiref(state_, LUA_GNAME, luaopen_base, 1);
@@ -743,21 +775,24 @@ namespace gameforger::editor
 	{
 		if (state_ != nullptr)
 		{
+			// on_end() before the VM dies, so a script can release whatever it
+			// took (cursor lock, manager registration, a music track). After
+			// lua_close there is nothing left to call it on.
+			dispatchOnEndForAll();
 			lua_close(state_);
 			state_ = nullptr;
 		}
+		luaBytesUsed_.store(0);
 		instancesByEntity_.clear();
+		registeredManagers_.clear();
 		activeCameraEntityId_ = -1;
 		activeCameraMode_ = "fps";
 		scene_ = nullptr;
 		commandBus_ = nullptr;
 		inputSource_ = nullptr;
-		logCallback_ = nullptr;
-		projectileSpawnCallback_ = nullptr;
-		heldItemQueryCallback_ = nullptr;
-		aimingCatapultQueryCallback_ = nullptr;
-		operatingCatapultSetCallback_ = nullptr;
-		gravityProjectileSpawnCallback_ = nullptr;
+		// One assignment instead of nulling each callback by hand - the old
+		// form silently kept any field someone forgot to add to the list.
+		config_ = Config{};
 	}
 
 	bool ScriptRuntime::isRunning() const noexcept
@@ -828,6 +863,15 @@ namespace gameforger::editor
 		lua_setfield(state_, -2, "physics");
 		pushWorldProxy(state_, entityId);
 		lua_setfield(state_, -2, "world");
+
+		pushGameManagerProxy(state_);
+		lua_setfield(state_, -2, "gameManager");
+
+		pushManagersProxy(state_);
+		lua_setfield(state_, -2, "managers");
+
+		pushAudioProxy(state_);
+		lua_setfield(state_, -2, "audio");
 
 		lua_getfield(state_, -1, "on_start");
 		if (lua_isfunction(state_, -1))
@@ -915,6 +959,118 @@ namespace gameforger::editor
 		instances = std::move(stillRunning);
 	}
 
+	void ScriptRuntime::playAudio(const std::string& clipPath, const float volume, const bool loop)
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::Play, clipPath, volume, loop);
+		}
+	}
+
+	void ScriptRuntime::stopAudioClip(const std::string& clipPath)
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::Stop, clipPath, 0.0F, false);
+		}
+	}
+
+	void ScriptRuntime::stopAllAudio()
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::StopAll, std::string{}, 0.0F, false);
+		}
+	}
+
+	void ScriptRuntime::setAudioMasterVolume(const float volume)
+	{
+		if (config_.audioCommandCallback)
+		{
+			config_.audioCommandCallback(AudioCommand::SetMasterVolume, std::string{}, volume, false);
+		}
+	}
+
+	bool ScriptRuntime::isAudioPlaying(const std::string& clipPath) const
+	{
+		// No host query wired means "cannot know" - report false rather than
+		// guessing, but the host normally supplies one.
+		return config_.audioQueryCallback ? config_.audioQueryCallback(clipPath) : false;
+	}
+
+	void ScriptRuntime::setCursorLock(const bool locked)
+	{
+		if (config_.cursorLockSetCallback)
+		{
+			config_.cursorLockSetCallback(locked);
+		}
+	}
+
+	void ScriptRuntime::registerManager(const std::string& name)
+	{
+		if (name.empty())
+		{
+			return;
+		}
+		// Idempotent: a controller that re-registers after a scene reload must
+		// not appear twice, or unregistering once would leave a phantom entry
+		// and wantsCursorLock would stay true forever.
+		if (std::find(registeredManagers_.begin(), registeredManagers_.end(), name) == registeredManagers_.end())
+		{
+			registeredManagers_.push_back(name);
+		}
+	}
+
+	void ScriptRuntime::unregisterManager(const std::string& name)
+	{
+		registeredManagers_.erase(
+			std::remove(registeredManagers_.begin(), registeredManagers_.end(), name),
+			registeredManagers_.end());
+	}
+
+	bool ScriptRuntime::hasManager(const std::string& name) const
+	{
+		return std::find(registeredManagers_.begin(), registeredManagers_.end(), name) != registeredManagers_.end();
+	}
+
+	// Calls on_end() on one instance if it defines one. Errors are logged and
+	// swallowed: this runs during teardown, where there is nothing useful left
+	// to abort, and a throwing script must not prevent the VM from closing.
+	void ScriptRuntime::dispatchOnEnd(const ScriptInstance& instance)
+	{
+		if (state_ == nullptr)
+		{
+			return;
+		}
+		lua_rawgeti(state_, LUA_REGISTRYINDEX, instance.ref);
+		lua_getfield(state_, -1, "on_end");
+		if (!lua_isfunction(state_, -1))
+		{
+			lua_pop(state_, 2);
+			return;
+		}
+		lua_pushvalue(state_, -2);
+		resetBudget();
+		if (lua_pcall(state_, 1, 0, 0) != LUA_OK)
+		{
+			log(true, "Error in on_end() of " + instance.scriptPath + ": " + std::string(lua_tostring(state_, -1)));
+			lua_pop(state_, 1);
+		}
+		lua_pop(state_, 1);
+	}
+
+	void ScriptRuntime::dispatchOnEndForAll()
+	{
+		for (const auto& [entityId, instances] : instancesByEntity_)
+		{
+			(void)entityId;
+			for (const ScriptInstance& instance : instances)
+			{
+				dispatchOnEnd(instance);
+			}
+		}
+	}
+
 	void ScriptRuntime::stopScript(const int entityId, const std::string& scriptPath)
 	{
 		if (state_ == nullptr)
@@ -934,6 +1090,10 @@ namespace gameforger::editor
 		{
 			if (instance.scriptPath == scriptPath)
 			{
+				// on_end() first, while the instance table is still alive - it
+				// is where a controller unregisters itself and releases the
+				// cursor. Unreffing first would leave nothing to call.
+				dispatchOnEnd(instance);
 				luaL_unref(state_, LUA_REGISTRYINDEX, instance.ref);
 				log(false, "Stopped " + scriptPath + " on entity " + std::to_string(entityId) + ".");
 			}
@@ -1159,45 +1319,45 @@ namespace gameforger::editor
 
 	void ScriptRuntime::log(const bool isError, const std::string& message) const
 	{
-		if (logCallback_)
+		if (config_.logCallback)
 		{
-			logCallback_(isError, message);
+			config_.logCallback(isError, message);
 		}
 	}
 
 	void ScriptRuntime::spawnProjectile(
 		const glm::vec3& fromPosition, const glm::vec3& toPosition, const float speed, const std::string& hitTag) const
 	{
-		if (projectileSpawnCallback_)
+		if (config_.projectileSpawnCallback)
 		{
-			projectileSpawnCallback_(fromPosition, toPosition, speed, hitTag);
+			config_.projectileSpawnCallback(fromPosition, toPosition, speed, hitTag);
 		}
 	}
 
 	void ScriptRuntime::spawnGravityProjectile(
 		const glm::vec3& fromPosition, const glm::vec3& direction, const float speed, const std::string& hitTag) const
 	{
-		if (gravityProjectileSpawnCallback_)
+		if (config_.gravityProjectileSpawnCallback)
 		{
-			gravityProjectileSpawnCallback_(fromPosition, direction, speed, hitTag);
+			config_.gravityProjectileSpawnCallback(fromPosition, direction, speed, hitTag);
 		}
 	}
 
 	bool ScriptRuntime::isHoldingItem() const
 	{
-		return heldItemQueryCallback_ ? heldItemQueryCallback_() : false;
+		return config_.heldItemQueryCallback ? config_.heldItemQueryCallback() : false;
 	}
 
 	bool ScriptRuntime::isAimingCatapult() const
 	{
-		return aimingCatapultQueryCallback_ ? aimingCatapultQueryCallback_() : false;
+		return config_.aimingCatapultQueryCallback ? config_.aimingCatapultQueryCallback() : false;
 	}
 
 	void ScriptRuntime::setOperatingCatapult(const bool value) const
 	{
-		if (operatingCatapultSetCallback_)
+		if (config_.operatingCatapultSetCallback)
 		{
-			operatingCatapultSetCallback_(value);
+			config_.operatingCatapultSetCallback(value);
 		}
 	}
 }

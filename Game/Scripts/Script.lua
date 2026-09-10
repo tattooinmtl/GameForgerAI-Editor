@@ -1,44 +1,50 @@
--- create projectile on left mouse click, apply gravity, add crosshair at screen center
+-- Fires a gravity-arced projectile forward on E.
+--
+-- Rewritten 2026-09-06. The previous version had three faults that stopped it
+-- working at all:
+--   * self.camera:setCrosshair(true) - no such method. This threw on the very
+--     first frame of on_start, so nothing below it ever ran.
+--   * self.input:isKeyPressed("LeftMouse") - mouse buttons are not bridged to
+--     Lua. self.input exposes getAxis, isKeyDown, isKeyPressed,
+--     getMouseDeltaX and getMouseDeltaY only, over KEY names.
+--   * It simulated projectiles as plain Lua tables that were never drawn, with
+--     a comment conceding "optionally create visual sphere entity here".
+--
+-- The engine already owns projectiles: self.world:fireGravityProjectile
+-- spawns a real one that moves, collides and despawns without the script
+-- tracking it. That replaces the whole hand-rolled table simulation.
 local Capsule = {}
+
 function Capsule:on_start()
-    self.projectiles = {}
-    self.projectile_speed = 25
-    self.gravity = 9.8
-    self.crosshair = true
-    self.camera:setCrosshair(true)  -- enable center crosshair
+    self.projectile_speed = 25.0
+    -- Which tag counts as a hit. Entities carrying it are what the engine
+    -- tests the projectile against.
+    self.hit_tag = "Enemy"
 end
 
-function Capsule:on_update(dt)
-    -- shoot projectile
-    if self.input:isKeyPressed("LeftMouse") then
-        self:launchProjectile()
+function Capsule:on_update(delta_time)
+    -- Discrete, one shot per press, so delta_time is deliberately unused.
+    local _ = delta_time
+
+    if not self.input:isKeyPressed("E") then
+        return
     end
 
-    -- update projectiles with gravity
-    for i = #self.projectiles, 1, -1 do
-        local p = self.projectiles[i]
-        p.velocity.y = p.velocity.y - self.gravity * dt
-        p.position.y = p.position.y + p.velocity.y * dt
-        if p.position.y < 0 then
-            table.remove(self.projectiles, i)  -- remove when hits ground
-        end
-    end
-end
-
-function Capsule:launchProjectile()
-    local pos = self.entity:getPosition()
+    local position = self.entity:getPosition()
     local forward = self.entity:getForward()
-    local spawn = {x = pos.x + forward.x * 0.5, y = pos.y + 0.5, z = pos.z + forward.z * 0.5}
-    local proj = {
-        position = spawn,
-        velocity = {
-            x = forward.x * self.projectile_speed,
-            y = 0,
-            z = forward.z * self.projectile_speed
-        }
+
+    -- Spawn just in front of and above the muzzle so the projectile does not
+    -- immediately collide with the entity that fired it.
+    local origin = {
+        x = position.x + forward.x * 0.5,
+        y = position.y + 0.5,
+        z = position.z + forward.z * 0.5,
     }
-    table.insert(self.projectiles, proj)
-    -- optionally create visual sphere entity here
+
+    -- Slight upward bias gives the arc its lob; the engine applies gravity.
+    local direction = { x = forward.x, y = 0.25, z = forward.z }
+
+    self.world:fireGravityProjectile(origin, direction, self.projectile_speed, self.hit_tag)
 end
 
 return Capsule

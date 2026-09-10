@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -42,15 +43,24 @@
 #include <glm/matrix.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
+#include "GameForger/Core/FrameProfiler.hpp"
 #include "GameForger/Core/Engine.hpp"
 #include "GameForger/Editor/AIAnimationGenerator.hpp"
+#include "GameForger/Editor/AudioPanel.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/AICommandPlanner.hpp"
+#include "GameForger/Editor/AICockpit.hpp"
 #include "GameForger/Editor/AIProviderClient.hpp"
 #include "GameForger/Editor/Animation.hpp"
+#include "GameForger/Editor/BlenderClient.hpp"
+#include "GameForger/Editor/BlenderLauncher.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
+#include "GameForger/Editor/PerformancePanel.hpp"
+#include "GameForger/Editor/ProjectSettingsPanel.hpp"
+#include "GameForger/Editor/TimelinePanel.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/ScriptGenerator.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
@@ -71,10 +81,16 @@ namespace
     using gameforger::editor::AIAnimationResult;
     using gameforger::editor::AIEditorCommand;
     using gameforger::editor::AIPlanResult;
+    using gameforger::editor::AIModelInfo;
     using gameforger::editor::AIProviderClient;
     using gameforger::editor::AIProviderRequest;
     using gameforger::editor::AIProviderResponse;
     using gameforger::editor::AnimatedPose;
+    using gameforger::editor::AICockpitState;
+    using gameforger::editor::BlenderClient;
+    using gameforger::editor::BlenderLauncher;
+    using gameforger::editor::CockpitChatMessage;
+    using gameforger::editor::AIActionEntry;
     using gameforger::editor::AddTagCommand;
     using gameforger::editor::AttachScriptCommand;
     using gameforger::editor::CreateEntityCommand;
@@ -83,10 +99,28 @@ namespace
     using gameforger::editor::DetachScriptCommand;
     using gameforger::editor::DuplicateEntityCommand;
     using gameforger::editor::applyParentConstraints;
+    using gameforger::editor::bootSequenceBlocksInput;
+    using gameforger::editor::resetBootSequence;
+    using gameforger::editor::tickBootSequence;
     using gameforger::editor::cameraLookingAt;
     using gameforger::editor::describeCommand;
     using gameforger::editor::EditorScene;
     using gameforger::editor::EntityAnimation;
+    using gameforger::editor::CineShot;
+    using gameforger::editor::AudioCue;
+    using gameforger::editor::insertAudioCueSorted;
+    using gameforger::editor::resortAudioCues;
+    using gameforger::editor::ProjectSettingsBus;
+    using gameforger::editor::ProjectSettingsPanelState;
+    using gameforger::editor::AudioHook;
+    using gameforger::editor::TimelinePanelState;
+    using gameforger::editor::drawTimelinePanel;
+    using gameforger::editor::PerformancePanelState;
+    using gameforger::editor::drawPerformancePanel;
+    using gameforger::editor::AudioPanelState;
+    using gameforger::editor::drawAudioPanel;
+    using gameforger::editor::drawProjectSettingsPanel;
+    using gameforger::editor::fireAudioHooks;
     using gameforger::editor::GameCameraState;
     using gameforger::editor::GameplayState;
     using gameforger::editor::generateAnimation;
@@ -108,6 +142,7 @@ namespace
     using gameforger::editor::CreateTerrainCommand;
     using gameforger::editor::CreateTextMeshCommand;
     using gameforger::editor::EntityCameraRig;
+    using gameforger::editor::ColliderType;
     using gameforger::editor::SceneEntity;
     using gameforger::editor::SceneLoadResult;
     using gameforger::editor::SceneSaveResult;
@@ -205,6 +240,18 @@ namespace
             console.entries.erase(console.entries.begin(), console.entries.begin() +
                 static_cast<std::ptrdiff_t>(console.entries.size() - maxEntries));
         }
+    }
+
+    AICommandResult executeLogged(AICommandBus& commandBus, const AIEditorCommand& command)
+    {
+        AICommandBus* const bus = &commandBus;
+        const AICommandResult result = bus->execute(command);
+        if (!result.success)
+        {
+            std::fprintf(stderr, "Editor command failed: %s\n",
+                result.message.empty() ? "unknown error" : result.message.c_str());
+        }
+        return result;
     }
 
     struct EditorCameraState
@@ -448,6 +495,16 @@ namespace
         // (saved pre-Play snapshots, the Editor's own separate Play-mode
         // viewport camera, etc).
         GameplayState gameplay;
+
+        // Editor-only: true after serviceBootSequenceHost has started the
+        // Storyboard preview for the current play_cutscene step. Cleared
+        // when that step finishes (or Play stops) so a later cutscene step
+        // can arm a different shot.
+        bool bootHostCutsceneArmed = false;
+        bool bootHostAudioArmed = false;
+        float bootHostAudioElapsedSeconds = 0.0F;
+        float bootHostAudioDurationSeconds = 0.0F;
+        bool audioPickupThisFrame = false;
     };
 
     // Height sculpting for a selected isTerrain entity - while active,
@@ -484,11 +541,10 @@ namespace
     // a full scene snapshot) - see StoryboardState below and the Storyboard
     // panel, which lists these by number and can play them back in sequence
     // as "the movie".
-    struct CineShot
-    {
-        std::string name;
-        EntityAnimation cameraPath;
-    };
+    // CineShot/AudioCue now live in Engine (GameForger/Editor/Storyboard.hpp)
+    // so SceneSerializer can persist them - shots used to be session-only and
+    // vanished on restart. StoryboardState below stays here: it is playback
+    // and window bookkeeping, not saved data.
 
     struct StoryboardState
     {
@@ -565,6 +621,20 @@ namespace
         glm::vec3 direction;
     };
 
+    // Phase B of integration_plan_allinone.md. The pre-B struct only
+    // carried 5 fields (id/displayName/endpoint/model/keySource) - enough
+    // for the "Calibrate provider" button but not enough for the AI Cockpit
+    // to route tool_use vs function-calling correctly, or to know whether
+    // reasoning-effort is a valid parameter to send.
+    //
+    // `protocol` is one of:
+    //   "openai-compatible" - /v1/chat/completions with {tools:[]} + tool_calls
+    //   "anthropic"         - /v1/messages with tools[]/tool_use blocks
+    //   "custom"            - user-defined, requires their own adapter later
+    //
+    // The capability flags are BEST-EFFORT hints for the UI (grey-out the
+    // reasoning-effort dropdown for providers that don't support it, etc.).
+    // Phase B.3's runtime capability scan will refine these per model.
     struct AIProvider
     {
         const char* id;
@@ -572,8 +642,17 @@ namespace
         const char* endpoint;
         const char* model;
         const char* keySource;
+        const char* protocol;
+        bool supportsTools;
+        bool supportsThinking;
+        bool supportsReasoningEffort;
     };
 
+    // Phase B: extended with capability-aware fields. The pre-B struct only
+    // carried endpoint/model/tested state; the Cockpit (Phase C) also needs
+    // reasoning-effort so that OpenAI-family reasoning models don't get
+    // silently ignored. Not persisted yet - lives per-editor-session; wiring
+    // to Providers.json comes in the B follow-up increment noted in the plan.
     struct AISetupState
     {
         int selectedProvider = 0;
@@ -587,6 +666,41 @@ namespace
         bool tested = false;
         bool testSucceeded = false;
         std::string testMessage;
+        // 0=minimal, 1=low, 2=medium, 3=high. Only sent for providers whose
+        // supportsReasoningEffort flag is true; ignored otherwise.
+        int reasoningEffort = 2;
+        // Phase B.3: last-discovered model list for the currently-selected
+        // provider. Populated by clicking "Discover Models" - empty means
+        // "user hasn't discovered yet, fall back to the free-text Model input".
+        std::vector<gameforger::editor::AIModelInfo> discoveredModels;
+        std::string discoverStatus;
+        // Phase B.2: staging fields for the "Add Custom Provider" popup.
+        bool showCustomProviderPopup = false;
+        std::array<char, 128> customProviderId{};
+        std::array<char, 128> customProviderDisplayName{};
+        std::array<char, 256> customProviderEndpoint{};
+        std::array<char, 128> customProviderModel{};
+        std::array<char, 128> customProviderEnvVar{};
+    };
+
+    // Phase A.3 of integration_plan_allinone.md. Sits alongside BlenderLauncher
+    // and BlenderClient in main() and drives the "Blender" top-menu + dockable
+    // panel. Kept intentionally small - the AI Cockpit (Phase C) drives the
+    // meaty tool-routing UI; this panel is the plumbing/health surface.
+    struct BlenderPanelState
+    {
+        bool panelOpen = false;
+        // Cached tools/list result; refreshed by pressing Refresh Tools or
+        // whenever a fresh connect succeeds.
+        std::vector<BlenderClient::ToolInfo> tools;
+        // Latest ping outcome. Human-readable state text shown in the panel.
+        std::string statusText = "Not connected";
+        std::string lastError;
+        long lastPingLatencyMs = -1;
+        bool connected = false;
+        // execute_python scratchpad textbox.
+        std::array<char, 2048> pythonScratch{};
+        std::string scratchLastResult;
     };
 
     enum class ThemeChoice
@@ -626,19 +740,76 @@ namespace
         AIPlanResult planResult;
     };
 
-    constexpr std::array<AIProvider, 2> providers{
+    // Phase B.1: 8 preset providers seeded into the editor. Ordering here
+    // is the display order in the Provider dropdown (also the default
+    // priority when no explicit priority is set in Providers.json).
+    // Endpoints deliberately point to the /chat/completions leaf so the
+    // existing `parseProvider()` (which splits on the first path segment)
+    // keeps working without upgrade. `apiKeyEnvironmentVariable` values
+    // map to Providers.local.json entries (and fall back to real OS env
+    // vars); users set their key by editing that file OR via Settings > AI.
+    //
+    // Antigravity's public endpoint has not been confirmed at plan time -
+    // the entry is included as a placeholder using an OpenAI-compatible
+    // default; users can override the endpoint in Settings until the
+    // upstream endpoint is nailed down.
+    constexpr std::array<AIProvider, 8> providers{
+        AIProvider{
+            "anthropic",
+            "Anthropic Claude",
+            "https://api.anthropic.com/v1/messages",
+            "claude-opus-4-7",
+            "ANTHROPIC_API_KEY",
+            "anthropic", true, true, false},
+        AIProvider{
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1/chat/completions",
+            "gpt-4o",
+            "OPENAI_API_KEY",
+            "openai-compatible", true, false, true},
         AIProvider{
             "nvidia",
             "NVIDIA NIM",
             "https://integrate.api.nvidia.com/v1/chat/completions",
             "nvidia/nemotron-3-nano-30b-a3b",
-            "NVIDIA_API_KEY"},
+            "NVIDIA_API_KEY",
+            "openai-compatible", true, false, false},
+        AIProvider{
+            "openrouter",
+            "OpenRouter",
+            "https://openrouter.ai/api/v1/chat/completions",
+            "anthropic/claude-opus-4-7",
+            "OPENROUTER_API_KEY",
+            "openai-compatible", true, true, true},
+        AIProvider{
+            "moonshot",
+            "Moonshot (Kimi)",
+            "https://api.moonshot.cn/v1/chat/completions",
+            "moonshot-v1-32k",
+            "MOONSHOT_API_KEY",
+            "openai-compatible", true, false, false},
+        AIProvider{
+            "minimax",
+            "MiniMax",
+            "https://api.minimax.chat/v1/text/chatcompletion_v2",
+            "MiniMax-M1",
+            "MINIMAX_API_KEY",
+            "openai-compatible", true, false, false},
+        AIProvider{
+            "antigravity",
+            "Antigravity",
+            "https://api.antigravity.ai/v1/chat/completions",
+            "antigravity-default",
+            "ANTIGRAVITY_API_KEY",
+            "openai-compatible", true, false, false},
         AIProvider{
             "agnes-ai",
             "Agnes-AI",
             "https://apihub.agnes-ai.com/v1/chat/completions",
             "agnes-2.0-flash",
-            "AGNES_AI_API_KEY"}};
+            "AGNES_AI_API_KEY",
+            "openai-compatible", true, false, false}};
 
     const char* primitiveTypeName(const PrimitiveType type)
     {
@@ -710,7 +881,7 @@ namespace
         CreateEntityCommand command;
         command.primitive = primitive;
         command.name = makeMenuEntityName(scene, baseName);
-        const AICommandResult result = commandBus.execute(command);
+        const AICommandResult result = executeLogged(commandBus,command);
         if (result.success)
         {
             if (const SceneEntity* created = scene.findEntity(command.name))
@@ -735,12 +906,12 @@ namespace
         CreateEntityCommand command;
         command.primitive = primitive;
         command.name = makeMenuEntityName(scene, baseName);
-        const AICommandResult result = commandBus.execute(command);
+        const AICommandResult result = executeLogged(commandBus,command);
         if (!result.success)
         {
             return;
         }
-        commandBus.execute(SetPropertyCommand{command.name, "Parent", "parentName", parentName});
+        executeLogged(commandBus,SetPropertyCommand{command.name, "Parent", "parentName", parentName});
         if (const SceneEntity* created = scene.findEntity(command.name))
         {
             selectOnly(selection, created->id);
@@ -758,7 +929,7 @@ namespace
         {
             return;
         }
-        const AICommandResult result = commandBus.execute(DuplicateEntityCommand{entity->name});
+        const AICommandResult result = executeLogged(commandBus,DuplicateEntityCommand{entity->name});
         if (result.success && !scene.entities().empty())
         {
             // DuplicateEntityCommand always appends the new entity at the end.
@@ -783,7 +954,7 @@ namespace
             createCommand.primitive = source.primitive;
             createCommand.name = makeMenuEntityName(scene, source.name);
             createCommand.position = source.position + glm::vec3(0.5F, 0.0F, 0.5F);
-            const AICommandResult result = commandBus.execute(createCommand);
+            const AICommandResult result = executeLogged(commandBus,createCommand);
             if (!result.success || scene.entities().empty())
             {
                 continue;
@@ -878,9 +1049,16 @@ namespace
         return true;
     }
 
-    void saveSceneAndLog(const EditorScene& scene, const std::filesystem::path& scenePath, ConsoleState& console)
+    // Storyboard shots are saved with the scene they were recorded against -
+    // a shot's camera path is meaningless without it. Before this they were
+    // session-only and lost on every restart.
+    void saveSceneAndLog(
+        const EditorScene& scene,
+        const std::filesystem::path& scenePath,
+        const StoryboardState& storyboard,
+        ConsoleState& console)
     {
-        const SceneSaveResult result = saveScene(scenePath, scene.entities());
+        const SceneSaveResult result = saveScene(scenePath, scene.entities(), storyboard.shots);
         logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
     }
 
@@ -892,6 +1070,7 @@ namespace
         const std::filesystem::path& filePath,
         SelectionState& selection,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         ConsoleState& console)
     {
         SceneLoadResult result = loadScene(filePath);
@@ -901,6 +1080,15 @@ namespace
             return false;
         }
         scene.loadEntities(std::move(result.entities));
+        // Replace rather than merge: the incoming shots belong to the scene
+        // being opened, and keeping the outgoing scene's would leave shots
+        // pointing at cine cameras that no longer exist. Playback state is
+        // reset for the same reason.
+        storyboard.shots = std::move(result.shots);
+        storyboard.isPlaying = false;
+        storyboard.playingMovie = false;
+        storyboard.previewShotIndex = -1;
+        storyboard.movieShotIndex = -1;
         clearSelection(selection);
         history.undoStack.clear();
         history.redoStack.clear();
@@ -992,6 +1180,30 @@ namespace
         dialog.hwndOwner = owner;
         dialog.lpstrFilter =
             L"Images (*.png;*.jpg;*.jpeg;*.bmp;*.tga)\0*.png;*.jpg;*.jpeg;*.bmp;*.tga\0All Files (*.*)\0*.*\0";
+        dialog.lpstrFile = fileBuffer.data();
+        dialog.nMaxFile = static_cast<DWORD>(fileBuffer.size());
+        dialog.lpstrInitialDir = initialDirectoryWide.c_str();
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameW(&dialog) == FALSE)
+        {
+            return std::nullopt;
+        }
+        return std::filesystem::path(fileBuffer.data());
+    }
+
+    // Native picker for a sound file, mirroring showOpenImageDialog. Formats
+    // are the three miniaudio decodes without extra dependencies (Ogg Vorbis
+    // would need stb_vorbis, so it is deliberately not offered).
+    std::optional<std::filesystem::path> showOpenAudioDialog(
+        const HWND owner, const std::filesystem::path& initialDirectory)
+    {
+        std::array<wchar_t, MAX_PATH> fileBuffer{};
+        const std::wstring initialDirectoryWide = initialDirectory.wstring();
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = owner;
+        dialog.lpstrFilter =
+            L"Audio (*.wav;*.mp3;*.flac)\0*.wav;*.mp3;*.flac\0All Files (*.*)\0*.*\0";
         dialog.lpstrFile = fileBuffer.data();
         dialog.nMaxFile = static_cast<DWORD>(fileBuffer.size());
         dialog.lpstrInitialDir = initialDirectoryWide.c_str();
@@ -1194,13 +1406,13 @@ namespace
         CreateImportedMeshCommand command;
         command.name = makeMenuEntityName(scene, picked->stem().string());
         command.sourcePath = *imported;
-        const AICommandResult result = commandBus.execute(command);
+        const AICommandResult result = executeLogged(commandBus,command);
         logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
         if (!result.success)
         {
             return;
         }
-        commandBus.execute(SetPropertyCommand{command.name, "Parent", "parentName", parentName});
+        executeLogged(commandBus,SetPropertyCommand{command.name, "Parent", "parentName", parentName});
         if (const SceneEntity* created = scene.findEntity(command.name))
         {
             selectOnly(selection, created->id);
@@ -1308,6 +1520,55 @@ namespace
         return relative.generic_string();
     }
 
+    // Copies a chosen sound into Game/Audio and returns its project-relative
+    // path. Mirrors importIconIntoProject, except a name clash gets a " (n)"
+    // suffix rather than silently reusing the existing file: two different
+    // sounds can easily share a name like "hit.wav", and quietly keeping the
+    // old one would look like the import simply did nothing.
+    std::optional<std::string> importAudioIntoProject(
+        const std::filesystem::path& sourceAudioPath, const std::filesystem::path& projectRoot)
+    {
+        const std::filesystem::path audioDirectory = projectRoot / "Game" / "Audio";
+        std::error_code directoryError;
+        std::filesystem::create_directories(audioDirectory, directoryError);
+        if (directoryError)
+        {
+            return std::nullopt;
+        }
+
+        std::filesystem::path destination = audioDirectory / sourceAudioPath.filename();
+        if (std::filesystem::exists(destination))
+        {
+            const std::string stem = sourceAudioPath.stem().string();
+            const std::string extension = sourceAudioPath.extension().string();
+            for (int suffix = 1; suffix < 1000; ++suffix)
+            {
+                const std::filesystem::path candidate =
+                    audioDirectory / (stem + " (" + std::to_string(suffix) + ")" + extension);
+                if (!std::filesystem::exists(candidate))
+                {
+                    destination = candidate;
+                    break;
+                }
+            }
+        }
+
+        std::error_code copyError;
+        std::filesystem::copy_file(sourceAudioPath, destination, copyError);
+        if (copyError)
+        {
+            return std::nullopt;
+        }
+
+        std::error_code relativeError;
+        const std::filesystem::path relative = std::filesystem::relative(destination, projectRoot, relativeError);
+        if (relativeError)
+        {
+            return std::nullopt;
+        }
+        return relative.generic_string();
+    }
+
     // Loads (once per distinct path, cached in a function-local static -
     // there are only ever a few dozen distinct icons in play at once, so
     // this simple persistent cache is enough) and uploads an icon image as
@@ -1353,7 +1614,7 @@ namespace
         {
             return;
         }
-        commandBus.execute(DeleteEntityCommand{entity->name});
+        executeLogged(commandBus,DeleteEntityCommand{entity->name});
         clearSelection(selection);
     }
 
@@ -1400,21 +1661,501 @@ namespace
             nullptr);
     }
 
+    // Phase A.3 helpers. Kept in this translation unit rather than a new file
+    // so the panel state, the launcher, and the client all live together with
+    // the rest of the editor's ImGui frame code (matches drawInspector,
+    // drawGameViewPanel, etc. below).
+
+    void syncBlenderConnectionState(
+        BlenderClient& client,
+        BlenderPanelState& panel,
+        ConsoleState& console)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        const BlenderClient::Response response = client.ping();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        panel.lastPingLatencyMs = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+        if (response.ok)
+        {
+            panel.connected = true;
+            panel.lastError.clear();
+            panel.statusText = "Connected";
+            // Refresh tools cache too - cheap and lets the panel show them
+            // immediately without a second button press.
+            std::vector<BlenderClient::ToolInfo> tools;
+            const BlenderClient::Response listResponse = client.listTools(tools);
+            if (listResponse.ok)
+            {
+                panel.tools = std::move(tools);
+            }
+            else
+            {
+                panel.lastError = listResponse.error;
+            }
+            logMessage(console, LogLevel::Info,
+                "Blender MCP connected (" + std::to_string(panel.lastPingLatencyMs) + " ms, " +
+                std::to_string(panel.tools.size()) + " tools).");
+        }
+        else
+        {
+            panel.connected = false;
+            panel.lastError = response.error;
+            panel.statusText = "Not connected";
+        }
+    }
+
+    void drawBlenderMenu(
+        BlenderLauncher& launcher,
+        BlenderClient& client,
+        BlenderPanelState& panel,
+        ConsoleState& console)
+    {
+        if (!ImGui::BeginMenu("Blender"))
+        {
+            return;
+        }
+        const bool blenderInstalled = launcher.isBlenderInstalled();
+        const bool blenderRunning = launcher.isRunning();
+
+        if (!blenderInstalled)
+        {
+            ImGui::TextDisabled("blender.exe not on PATH / Program Files.");
+            ImGui::TextDisabled("Install Blender and enable the MCP addon yourself,");
+            ImGui::TextDisabled("start its server, then Connect below.");
+            if (ImGui::MenuItem("Refresh Detection"))
+            {
+                launcher.refreshDetection();
+            }
+        }
+        else
+        {
+            if (blenderRunning)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::MenuItem("Start Blender (with MCP server)"))
+            {
+                BlenderLauncher::LaunchOptions options;
+                options.port = client.config().port;
+                options.authToken = client.config().bearerToken;
+                std::string error;
+                if (launcher.start(options, error))
+                {
+                    logMessage(console, LogLevel::Info,
+                        "Launched Blender. MCP server will listen on port " + std::to_string(options.port) + ".");
+                }
+                else
+                {
+                    logMessage(console, LogLevel::Error, "Failed to launch Blender: " + error);
+                }
+            }
+            if (blenderRunning)
+            {
+                ImGui::EndDisabled();
+            }
+
+            if (!blenderRunning)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::MenuItem("Stop Blender (editor-launched only)"))
+            {
+                launcher.terminate();
+                panel.connected = false;
+                panel.statusText = "Not connected";
+                panel.tools.clear();
+                logMessage(console, LogLevel::Info, "Terminated the launched Blender process.");
+            }
+            if (!blenderRunning)
+            {
+                ImGui::EndDisabled();
+            }
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Connect to MCP (127.0.0.1:8765)"))
+        {
+            syncBlenderConnectionState(client, panel, console);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open Blender Panel", nullptr, panel.panelOpen))
+        {
+            panel.panelOpen = !panel.panelOpen;
+        }
+        ImGui::EndMenu();
+    }
+
+    void drawBlenderPanel(
+        BlenderLauncher& launcher,
+        BlenderClient& client,
+        BlenderPanelState& panel,
+        ConsoleState& console)
+    {
+        if (!panel.panelOpen)
+        {
+            return;
+        }
+        ImGui::SetNextWindowSize(ImVec2(520, 620), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Blender MCP", &panel.panelOpen))
+        {
+            ImGui::End();
+            return;
+        }
+
+        const bool blenderInstalled = launcher.isBlenderInstalled();
+        const bool blenderRunning = launcher.isRunning();
+
+        ImGui::TextUnformatted("Detection:");
+        ImGui::SameLine();
+        if (blenderInstalled)
+        {
+            const std::optional<std::filesystem::path> detected = launcher.detectBlenderExe();
+            ImGui::TextColored(ImVec4(0.30F, 0.85F, 0.35F, 1.0F), "%s",
+                detected ? detected->string().c_str() : "found");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.90F, 0.50F, 0.40F, 1.0F), "%s", "blender.exe not found");
+        }
+
+        ImGui::TextUnformatted("Editor-launched process:");
+        ImGui::SameLine();
+        ImGui::TextColored(
+            blenderRunning ? ImVec4(0.30F, 0.85F, 0.35F, 1.0F) : ImVec4(0.75F, 0.75F, 0.75F, 1.0F),
+            "%s", blenderRunning ? "running" : "none (Connect still works if you started Blender yourself)");
+
+        ImGui::TextUnformatted("MCP:");
+        ImGui::SameLine();
+        ImGui::TextColored(
+            panel.connected ? ImVec4(0.30F, 0.85F, 0.35F, 1.0F) : ImVec4(0.75F, 0.75F, 0.75F, 1.0F),
+            "%s", panel.statusText.c_str());
+        if (panel.lastPingLatencyMs >= 0)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%ld ms)", panel.lastPingLatencyMs);
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Endpoint: http://%s:%d%s",
+            client.config().host.c_str(), client.config().port, client.config().path.c_str());
+
+        ImGui::Separator();
+        if (ImGui::Button("Connect / Refresh MCP"))
+        {
+            syncBlenderConnectionState(client, panel, console);
+        }
+        if (blenderInstalled && !blenderRunning)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Start Blender"))
+            {
+                BlenderLauncher::LaunchOptions options;
+                options.port = client.config().port;
+                options.authToken = client.config().bearerToken;
+                std::string error;
+                if (!launcher.start(options, error))
+                {
+                    logMessage(console, LogLevel::Error, "Failed to launch Blender: " + error);
+                }
+            }
+        }
+        if (blenderRunning)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Stop editor-launched Blender"))
+            {
+                launcher.terminate();
+                panel.connected = false;
+                panel.statusText = "Not connected";
+                panel.tools.clear();
+            }
+        }
+        if (!blenderInstalled)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Refresh Detection"))
+            {
+                launcher.refreshDetection();
+            }
+        }
+
+        if (!panel.lastError.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.90F, 0.55F, 0.45F, 1.0F), "Last error:");
+            ImGui::TextWrapped("%s", panel.lastError.c_str());
+        }
+
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader(("Tools (" + std::to_string(panel.tools.size()) + ")").c_str()))
+        {
+            if (panel.tools.empty())
+            {
+                ImGui::TextDisabled("No tools discovered yet. Connect once Blender is up.");
+            }
+            for (const BlenderClient::ToolInfo& tool : panel.tools)
+            {
+                if (ImGui::TreeNode(tool.name.c_str()))
+                {
+                    if (!tool.description.empty())
+                    {
+                        ImGui::TextWrapped("%s", tool.description.c_str());
+                    }
+                    ImGui::TreePop();
+                }
+            }
+        }
+
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Execute Python (scratchpad)"))
+        {
+            ImGui::TextDisabled("Sent as: code.execute_python { \"code\": \"...\" }");
+            ImGui::InputTextMultiline(
+                "##pythonScratch",
+                panel.pythonScratch.data(),
+                panel.pythonScratch.size(),
+                ImVec2(-1, 120));
+            const bool canSend = panel.connected;
+            if (!canSend)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Send"))
+            {
+                // Build an escaped JSON arguments object. Reuses the same
+                // escape policy as BlenderClient's own escapeJsonString.
+                std::string code = panel.pythonScratch.data();
+                std::string escaped;
+                escaped.reserve(code.size() + 16);
+                for (const char c : code)
+                {
+                    switch (c)
+                    {
+                        case '\\': escaped += "\\\\"; break;
+                        case '"':  escaped += "\\\""; break;
+                        case '\n': escaped += "\\n"; break;
+                        case '\r': escaped += "\\r"; break;
+                        case '\t': escaped += "\\t"; break;
+                        default:
+                            if (static_cast<unsigned char>(c) < 0x20)
+                            {
+                                char buf[8];
+                                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned int>(c) & 0xFFu);
+                                escaped += buf;
+                            }
+                            else
+                            {
+                                escaped += c;
+                            }
+                            break;
+                    }
+                }
+                const std::string args = std::string(R"({"code":")") + escaped + R"("})";
+                const BlenderClient::Response response =
+                    client.callTool("code.execute_python", args);
+                if (response.ok)
+                {
+                    panel.scratchLastResult = "OK (no return value shown here yet)";
+                    logMessage(console, LogLevel::Info, "code.execute_python -> ok");
+                }
+                else
+                {
+                    panel.scratchLastResult = "ERROR: " + response.error;
+                    logMessage(console, LogLevel::Error, "code.execute_python -> " + response.error);
+                }
+            }
+            if (!canSend)
+            {
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("(connect first)");
+            }
+            if (!panel.scratchLastResult.empty())
+            {
+                ImGui::TextWrapped("%s", panel.scratchLastResult.c_str());
+            }
+        }
+
+        ImGui::End();
+    }
+
+    void drawCockpitPanel(
+        AICockpitState& cockpit,
+        ProjectSettingsBus& projectSettingsBus,
+        AIProviderClient& providerClient,
+        AISetupState& aiSetup,
+        BlenderClient& blenderClient,
+        EditorScene& scene,
+        AICommandBus& commandBus)
+    {
+        if (!cockpit.panelOpen) return;
+
+        ImGui::SetNextWindowSize(ImVec2(700, 720), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("AI Cockpit", &cockpit.panelOpen))
+        {
+            ImGui::End();
+            return;
+        }
+
+        const AIProvider& provider = providers[static_cast<std::size_t>(aiSetup.selectedProvider)];
+        ImGui::Text("Provider: %s   Model: %s", provider.displayName, aiSetup.model.data());
+        ImGui::TextDisabled("Protocol: %s", provider.protocol);
+        ImGui::Checkbox("Autonomous mode", &cockpit.autonomousMode);
+        ImGui::SameLine();
+        if (!cockpit.autonomousMode) ImGui::BeginDisabled();
+        // Autonomous mode alone auto-runs only the editor's own known-safe,
+        // undoable scene.* tools (see isAutoApprovableTool). This checkbox
+        // extends that to everything else - including every tool discovered
+        // from the Blender MCP server, whose names we do not control.
+        // execute_python stays gated regardless.
+        ImGui::Checkbox("Also auto-approve unrecognised + destructive tools (never execute_python)",
+            &cockpit.approveDestructiveAutomatically);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Off: only the editor's own safe scene tools run unattended;\n"
+                "anything else - including Blender MCP tools - asks first.\n"
+                "On: everything except execute_python runs unattended.");
+        }
+        if (!cockpit.autonomousMode) ImGui::EndDisabled();
+
+        if (!cockpit.statusText.empty())
+        {
+            ImGui::TextColored(ImVec4(0.65F, 0.85F, 1.0F, 1.0F), "%s", cockpit.statusText.c_str());
+        }
+        if (!cockpit.lastError.empty())
+        {
+            ImGui::TextColored(ImVec4(0.90F, 0.55F, 0.45F, 1.0F), "Last error: %s", cockpit.lastError.c_str());
+        }
+
+        ImGui::Separator();
+
+        // Chat log + tool trace, scrollable.
+        if (ImGui::BeginChild("cockpit_log", ImVec2(0, -160), true))
+        {
+            for (const CockpitChatMessage& m : cockpit.messages)
+            {
+                ImVec4 colour(0.9F, 0.9F, 0.9F, 1.0F);
+                std::string prefix;
+                if (m.role == "user")           { prefix = "You:   "; colour = ImVec4(0.60F, 0.85F, 0.60F, 1.0F); }
+                else if (m.role == "assistant") { prefix = "AI:    "; colour = ImVec4(0.65F, 0.75F, 1.00F, 1.0F); }
+                else if (m.role == "tool")      { prefix = "[" + m.toolName + "] "; colour = m.isDestructive ? ImVec4(1.0F, 0.6F, 0.3F, 1.0F) : ImVec4(0.75F, 0.75F, 0.55F, 1.0F); }
+                else                             { prefix = "*      "; colour = ImVec4(0.75F, 0.75F, 0.75F, 1.0F); }
+                ImGui::PushStyleColor(ImGuiCol_Text, colour);
+                ImGui::TextWrapped("%s%s", prefix.c_str(), m.content.c_str());
+                ImGui::PopStyleColor();
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0F)
+            {
+                ImGui::SetScrollHereY(1.0F);
+            }
+        }
+        ImGui::EndChild();
+
+        // Approval bar.
+        {
+            std::lock_guard lock(cockpit.approvalMutex);
+            if (cockpit.pendingApproval.has_value())
+            {
+                ImGui::TextColored(ImVec4(1.0F, 0.7F, 0.3F, 1.0F),
+                    "Approve tool: %s", cockpit.pendingApproval->toolName.c_str());
+                ImGui::TextWrapped("Args: %s", cockpit.pendingApproval->argsJson.c_str());
+                if (ImGui::Button("Approve"))
+                {
+                    gameforger::editor::approveDestructive(cockpit);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Reject"))
+                {
+                    gameforger::editor::rejectDestructive(cockpit);
+                }
+                ImGui::Separator();
+            }
+        }
+
+        // Undo ring.
+        ImGui::Text("AI undo: %zu / %zu",
+            cockpit.undoRing.size(),
+            gameforger::editor::AIActionRing::kCapacity);
+        ImGui::SameLine();
+        if (cockpit.undoRing.size() == 0) ImGui::BeginDisabled();
+        if (ImGui::Button("Undo last AI action"))
+        {
+            cockpit.undoRing.undoLast();
+        }
+        if (cockpit.undoRing.size() == 0) ImGui::EndDisabled();
+
+        ImGui::Separator();
+
+        // Prompt input + Send/Stop.
+        ImGui::InputTextMultiline("##cockpitPrompt",
+            cockpit.promptInput.data(),
+            cockpit.promptInput.size(),
+            ImVec2(-1, 80));
+        const bool canSend = !cockpit.loopRunning.load() && cockpit.promptInput[0] != '\0';
+        if (!canSend) ImGui::BeginDisabled();
+        if (ImGui::Button("Send", ImVec2(120, 0)))
+        {
+            std::string prompt = cockpit.promptInput.data();
+            std::fill(cockpit.promptInput.begin(), cockpit.promptInput.end(), '\0');
+            const std::string reasoningEffort =
+                provider.supportsReasoningEffort ? std::to_string(aiSetup.reasoningEffort) : "-1";
+            gameforger::editor::sendCockpitPrompt(
+                cockpit,
+                providerClient,
+                provider.id,
+                provider.protocol,
+                aiSetup.model.data(),
+                provider.supportsReasoningEffort ? aiSetup.reasoningEffort : -1,
+                blenderClient,
+                scene,
+                commandBus,
+                projectSettingsBus,
+                std::move(prompt));
+        }
+        if (!canSend) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (!cockpit.loopRunning.load()) ImGui::BeginDisabled();
+        if (ImGui::Button("Stop", ImVec2(80, 0)))
+        {
+            gameforger::editor::requestCockpitStop(cockpit);
+        }
+        if (!cockpit.loopRunning.load()) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Clear log"))
+        {
+            cockpit.messages.clear();
+        }
+
+        ImGui::End();
+    }
+
+
     void drawMainMenu(
         EditorScene& scene,
+        ProjectSettingsBus& projectSettingsBus,
         AICommandBus& commandBus,
         SelectionState& selection,
         EditorCameraState& camera,
         PlayModeState& playMode,
         ScriptRuntime& scriptRuntime,
         ImGuiInputSource& imguiInputSource,
+        // Needed so a Play session's self.audio calls reach the real engine -
+        // the Play button lives in this menu.
+        gameforger::core::AudioEngine& audioEngine,
         const std::filesystem::path& projectRoot,
         ConsoleState& console,
         SettingsState& settings,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         std::filesystem::path& currentScenePath,
         const HWND nativeWindowHandle,
-        bool& resetLayout)
+        bool& resetLayout,
+        BlenderLauncher& blenderLauncher,
+        BlenderClient& blenderClient,
+        BlenderPanelState& blenderPanel,
+        AICockpitState& cockpit)
     {
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
@@ -1431,7 +2172,7 @@ namespace
             if (const std::optional<std::filesystem::path> picked =
                     showOpenSceneDialog(nativeWindowHandle, scenesDirectory))
             {
-                if (loadSceneAndLog(scene, *picked, selection, history, console))
+                if (loadSceneAndLog(scene, *picked, selection, history, storyboard, console))
                 {
                     currentScenePath = *picked;
                 }
@@ -1451,7 +2192,7 @@ namespace
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             else if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
             {
@@ -1489,14 +2230,14 @@ namespace
             }
             if (ImGui::MenuItem("Save Scene", "Ctrl+S"))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             if (ImGui::MenuItem("Save Scene As..."))
             {
                 if (const std::optional<std::filesystem::path> picked =
                         showSaveSceneDialog(nativeWindowHandle, scenesDirectory))
                 {
-                    saveSceneAndLog(scene, *picked, console);
+                    saveSceneAndLog(scene, *picked, storyboard, console);
                     currentScenePath = *picked;
                 }
             }
@@ -1512,7 +2253,7 @@ namespace
                 // new ones.
                 const std::filesystem::path builtPath =
                     currentScenePath.parent_path() / (currentScenePath.stem().string() + ".gfai");
-                saveSceneAndLog(scene, builtPath, console);
+                saveSceneAndLog(scene, builtPath, storyboard, console);
                 const std::filesystem::path relativeBuiltPath =
                     std::filesystem::relative(builtPath, projectRoot);
                 std::string relativeBuiltPathText = relativeBuiltPath.generic_string();
@@ -1629,7 +2370,7 @@ namespace
                         CreateImportedMeshCommand command;
                         command.name = makeMenuEntityName(scene, picked->stem().string());
                         command.sourcePath = *imported;
-                        const AICommandResult result = commandBus.execute(command);
+                        const AICommandResult result = executeLogged(commandBus,command);
                         logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
                         if (result.success && !scene.entities().empty())
                         {
@@ -1694,6 +2435,22 @@ namespace
             ImGui::EndMenu();
         }
 
+        // Phase A of integration_plan_allinone.md. Sits between Character and
+        // Settings because the eventual AI Cockpit (Phase C) will let the AI
+        // model in Blender and drop the result straight into the Character
+        // menu's Import Model flow - grouping them together makes that shared
+        // "external-tool -> model" mental model visible in the menu bar.
+        drawBlenderMenu(blenderLauncher, blenderClient, blenderPanel, console);
+
+        if (ImGui::BeginMenu("AI"))
+        {
+            if (ImGui::MenuItem("Open AI Cockpit", nullptr, cockpit.panelOpen))
+            {
+                cockpit.panelOpen = !cockpit.panelOpen;
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::MenuItem("Settings"))
         {
             settings.open = true;
@@ -1736,17 +2493,25 @@ namespace
                 playMode.gameplay.playerOperatingCatapult = false;
                 playMode.gameplay.enemyCatapultFireTimerSeconds = 8.0F;
                 playMode.gameplay.gameOverMessage.clear();
+                // Arms the authored startup sequence (Project Settings >
+                // Startup Sequence). With no steps this is a no-op and the
+                // player has control from the first frame, exactly as before.
+                resetBootSequence(playMode.gameplay, projectSettingsBus.settings().bootSequence);
+                playMode.bootHostCutsceneArmed = false;
+                playMode.bootHostAudioArmed = false;
+                playMode.bootHostAudioElapsedSeconds = 0.0F;
+                playMode.bootHostAudioDurationSeconds = 0.0F;
+                playMode.audioPickupThisFrame = false;
                 playMode.isPlaying = true;
                 clearSelection(selection);
 
-                scriptRuntime.initialize(
-                    scene,
-                    commandBus,
-                    imguiInputSource,
+                ScriptRuntime::Config scriptConfig;
+                scriptConfig.logCallback =
                     [&console](const bool isError, const std::string& message)
                     {
                         logMessage(console, isError ? LogLevel::Error : LogLevel::Info, message);
-                    },
+                    };
+                scriptConfig.projectileSpawnCallback =
                     [&playMode](
                         const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
                     {
@@ -1755,10 +2520,15 @@ namespace
                         const glm::vec3 velocity =
                             distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
                         playMode.gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
-                    },
-                    [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); },
-                    [&playMode]() { return playMode.gameplay.playerOperatingCatapult; },
-                    [&playMode](const bool value) { playMode.gameplay.playerOperatingCatapult = value; },
+                        ++playMode.gameplay.projectilesFiredThisTick;
+                    };
+                scriptConfig.heldItemQueryCallback =
+                    [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); };
+                scriptConfig.aimingCatapultQueryCallback =
+                    [&playMode]() { return playMode.gameplay.playerOperatingCatapult; };
+                scriptConfig.operatingCatapultSetCallback =
+                    [&playMode](const bool value) { playMode.gameplay.playerOperatingCatapult = value; };
+                scriptConfig.gravityProjectileSpawnCallback =
                     [&playMode](
                         const glm::vec3& from, const glm::vec3& direction, const float speed,
                         const std::string& hitTag)
@@ -1768,7 +2538,41 @@ namespace
                             length > 0.0001F ? (direction / length) * speed : glm::vec3(0.0F, 0.0F, speed);
                         playMode.gameplay.projectiles.push_back(
                             GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
-                    });
+                        ++playMode.gameplay.projectilesFiredThisTick;
+                    };
+                // Cursor lock now comes from whichever script calls
+                // self.gameManager:setCursorLock(), not a per-entity checkbox.
+                scriptConfig.cursorLockSetCallback =
+                    [&playMode](const bool locked) { playMode.gameplay.cursorLockDesired = locked; };
+            scriptConfig.audioCommandCallback =
+                [&audioEngine, &projectRoot](
+                        const ScriptRuntime::AudioCommand command,
+                        const std::string& clipPath,
+                        const float value,
+                        const bool loop)
+                {
+                        switch (command)
+                        {
+                            case ScriptRuntime::AudioCommand::Play:
+                                    (void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
+                                    break;
+                            case ScriptRuntime::AudioCommand::Stop:
+                                    audioEngine.stop(clipPath);
+                                    break;
+                            case ScriptRuntime::AudioCommand::StopAll:
+                                    audioEngine.stopAll();
+                                    break;
+                            case ScriptRuntime::AudioCommand::SetMasterVolume:
+                                    audioEngine.setMasterVolume(value);
+                                    break;
+                        }
+                };
+            scriptConfig.audioQueryCallback =
+                [&audioEngine](const std::string& clipPath)
+                {
+                        return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
+                };
+                scriptRuntime.initialize(scene, commandBus, imguiInputSource, std::move(scriptConfig));
                 for (const SceneEntity& entity : scene.entities())
                 {
                     for (const std::string& scriptPath : entity.scripts)
@@ -1865,9 +2669,188 @@ namespace
         }
 
         ImGui::InputText("Endpoint", state.endpoint.data(), state.endpoint.size());
-        ImGui::InputText("Model", state.model.data(), state.model.size());
+
+        // Phase B.3: replace the free-text Model input with a dropdown backed
+        // by discovered models. If nothing has been discovered yet, the
+        // dropdown falls back to a single "current value" option so the field
+        // still works. Users who want a bleeding-edge model not yet in the
+        // list can click "Type custom..." to switch back to free text.
+        if (!state.discoveredModels.empty())
+        {
+            const std::string currentModel = state.model.data();
+            if (ImGui::BeginCombo("Model", currentModel.c_str()))
+            {
+                for (const AIModelInfo& m : state.discoveredModels)
+                {
+                    const bool selected = (m.id == currentModel);
+                    std::string label = m.id;
+                    if (m.relevanceRank > 0)
+                    {
+                        label += "  (rank " + std::to_string(m.relevanceRank) + ")";
+                    }
+                    if (ImGui::Selectable(label.c_str(), selected))
+                    {
+                        std::fill(state.model.begin(), state.model.end(), '\0');
+                        std::snprintf(state.model.data(), state.model.size(), "%s", m.id.c_str());
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        else
+        {
+            ImGui::InputText("Model", state.model.data(), state.model.size());
+        }
+
+        if (ImGui::SmallButton("Discover Models"))
+        {
+            const std::string providerId =
+                providers[static_cast<std::size_t>(state.selectedProvider)].id;
+            const AIProviderClient::DiscoverResult discovery = providerClient.discoverModels(providerId);
+            state.discoveredModels = discovery.models;
+            if (!state.discoveredModels.empty())
+            {
+                gameforger::editor::rankModelsByRelevance(state.discoveredModels);
+                state.discoverStatus = "Discovered " + std::to_string(state.discoveredModels.size()) + " models.";
+                logMessage(console, LogLevel::Info,
+                    "AI provider '" + providerId + "': " + state.discoverStatus);
+            }
+            else
+            {
+                state.discoverStatus = discovery.error.empty()
+                    ? "No models returned."
+                    : "Discover failed: " + discovery.error;
+                logMessage(console, LogLevel::Warning,
+                    "AI provider '" + providerId + "': " + state.discoverStatus);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear Discovery"))
+        {
+            state.discoveredModels.clear();
+            state.discoverStatus.clear();
+        }
+        if (!state.discoverStatus.empty())
+        {
+            ImGui::TextDisabled("%s", state.discoverStatus.c_str());
+        }
+
         ImGui::Text("API key source: %s", providers[static_cast<std::size_t>(state.selectedProvider)].keySource);
         ImGui::TextUnformatted("Secrets: Game/AI/Providers.local.json");
+
+        // Phase B.2: staging card for adding a new provider. Persistence
+        // to Providers.json is deferred (the C++ provider array is
+        // constexpr for now); the popup writes a JSON snippet to the
+        // Console so the user can paste it into Game/AI/Providers.json.
+        if (ImGui::SmallButton("Add Custom Provider..."))
+        {
+            state.showCustomProviderPopup = true;
+            std::fill(state.customProviderId.begin(),          state.customProviderId.end(),          '\0');
+            std::fill(state.customProviderDisplayName.begin(), state.customProviderDisplayName.end(), '\0');
+            std::fill(state.customProviderEndpoint.begin(),    state.customProviderEndpoint.end(),    '\0');
+            std::fill(state.customProviderModel.begin(),       state.customProviderModel.end(),       '\0');
+            std::fill(state.customProviderEnvVar.begin(),      state.customProviderEnvVar.end(),      '\0');
+        }
+        if (state.showCustomProviderPopup)
+        {
+            ImGui::OpenPopup("Add Custom Provider");
+            state.showCustomProviderPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Add Custom Provider", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextUnformatted("Fill in the provider details.");
+            ImGui::TextDisabled("Persistence: this popup emits a Providers.json snippet.");
+            ImGui::Separator();
+            ImGui::InputText("Id (unique)",         state.customProviderId.data(),          state.customProviderId.size());
+            ImGui::InputText("Display name",        state.customProviderDisplayName.data(), state.customProviderDisplayName.size());
+            ImGui::InputText("Endpoint (URL)",      state.customProviderEndpoint.data(),    state.customProviderEndpoint.size());
+            ImGui::InputText("Default model",       state.customProviderModel.data(),       state.customProviderModel.size());
+            ImGui::InputText("API key env var",     state.customProviderEnvVar.data(),      state.customProviderEnvVar.size());
+            ImGui::Separator();
+            const bool haveAll =
+                state.customProviderId[0] != '\0' &&
+                state.customProviderEndpoint[0] != '\0' &&
+                state.customProviderEnvVar[0] != '\0';
+            if (!haveAll)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Emit JSON snippet"))
+            {
+                // Built through json::Value + json::serialize rather than
+                // string concatenation. These five fields are free text: a
+                // single " or \ typed into any of them produced a snippet that
+                // was invalid the moment it was pasted into Providers.json,
+                // with nothing to explain why the file had stopped loading.
+                const char* displayName = state.customProviderDisplayName[0] != '\0'
+                    ? state.customProviderDisplayName.data()
+                    : state.customProviderId.data();
+                const std::string snippet = gameforger::editor::json::serialize(
+                    gameforger::editor::json::makeObject({
+                        {"id",          gameforger::editor::json::makeString(state.customProviderId.data())},
+                        {"displayName", gameforger::editor::json::makeString(displayName)},
+                        {"enabled",     gameforger::editor::json::makeBool(true)},
+                        {"priority",    gameforger::editor::json::makeNumber(999)},
+                        {"protocol",    gameforger::editor::json::makeString("openai-compatible")},
+                        {"endpoint",    gameforger::editor::json::makeString(state.customProviderEndpoint.data())},
+                        {"model",       gameforger::editor::json::makeString(state.customProviderModel.data())},
+                        {"apiKeyEnvironmentVariable",
+                                        gameforger::editor::json::makeString(state.customProviderEnvVar.data())},
+                        {"timeoutSeconds", gameforger::editor::json::makeNumber(120)},
+                        {"capabilities", gameforger::editor::json::makeArray({
+                            gameforger::editor::json::makeString("chat"),
+                            gameforger::editor::json::makeString("tool-calling"),
+                        })},
+                    }));
+                logMessage(console, LogLevel::Info,
+                    "Paste this into Game/AI/Providers.json's \"providers\" array:\n" + snippet);
+                ImGui::CloseCurrentPopup();
+            }
+            if (!haveAll)
+            {
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // Phase B: capability chips + reasoning-effort selector. These are
+        // driven by the per-provider metadata in the `providers` array. The
+        // Cockpit (Phase C) reads state.reasoningEffort to decide whether
+        // to send `reasoning_effort` on each request.
+        const AIProvider& activeProvider = providers[static_cast<std::size_t>(state.selectedProvider)];
+        ImGui::TextUnformatted("Protocol:");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.65F, 0.85F, 1.0F, 1.0F), "%s", activeProvider.protocol);
+        ImGui::TextUnformatted("Capabilities:");
+        ImGui::SameLine();
+        const auto capabilityChip = [](const char* label, bool enabled)
+        {
+            const ImVec4 colour = enabled
+                ? ImVec4(0.30F, 0.75F, 0.35F, 1.0F)
+                : ImVec4(0.50F, 0.50F, 0.50F, 1.0F);
+            ImGui::TextColored(colour, "%s", label);
+            ImGui::SameLine();
+        };
+        capabilityChip("tools",     activeProvider.supportsTools);
+        capabilityChip("thinking",  activeProvider.supportsThinking);
+        capabilityChip("reasoning-effort", activeProvider.supportsReasoningEffort);
+        ImGui::NewLine();
+        if (activeProvider.supportsReasoningEffort)
+        {
+            static const char* const kReasoningLabels[] = { "minimal", "low", "medium", "high" };
+            ImGui::Combo("Reasoning effort",
+                &state.reasoningEffort,
+                kReasoningLabels, IM_ARRAYSIZE(kReasoningLabels));
+        }
 
         // The Calibrate / Test provider button used to flip a flag without
         // sending anything - the user saw "Configuration ready" while the
@@ -2147,7 +3130,10 @@ namespace
     // Real Game/ file listing (Unity calls this the "Project" window), rather
     // than the previous hardcoded bullet list.
     void drawProjectBrowser(
-        ProjectBrowserState& browser, const std::filesystem::path& projectRoot, ScriptEditorState& scriptEditor)
+        ProjectBrowserState& browser,
+        const std::filesystem::path& projectRoot,
+        ScriptEditorState& scriptEditor,
+        ProjectSettingsPanelState& projectSettingsPanel)
     {
         const std::filesystem::path gameRoot = projectRoot / "Game";
         if (browser.currentDirectory.empty())
@@ -2230,6 +3216,15 @@ namespace
                     scriptEditor.scriptPath = toProjectRootError ? name : relativeToRoot.generic_string();
                     scriptEditor.status.clear();
                     scriptEditor.requestOpen = true;
+                }
+                else if (name == "Project.json" || name == "Settings.json")
+                {
+                    // These two have a typed inspector; raw-text editing them
+                    // is how a project gets a startupScene that doesn't exist.
+                    // Anything else with a .json extension (skeleton profiles,
+                    // provider config) still has no viewer - deliberately, for
+                    // now, rather than shipping a half-generic tree editor.
+                    projectSettingsPanel.focusRequested = true;
                 }
             }
         }
@@ -2496,9 +3491,12 @@ namespace
             // icons - and re-applies automatically the moment it closes,
             // since this is recomputed fresh every frame rather than a
             // one-shot toggle.
+            // A script asked for it AND something is actually registered as
+            // driving the player - so a stale request from a torn-down scene
+            // cannot leave the cursor captured with nothing controlling it.
             const bool wantsCursorLock = playMode.isPlaying && followedEntity != nullptr &&
-                followedEntity->cameraRig.lockCursor && !playMode.cursorLockSuppressed &&
-                !playMode.inventoryWindowOpen;
+                playMode.gameplay.cursorLockDesired && !scriptRuntime.listManagers().empty() &&
+                !playMode.cursorLockSuppressed && !playMode.inventoryWindowOpen;
             if (wantsCursorLock && !playMode.gameplay.cursorCurrentlyLocked)
             {
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -2560,7 +3558,7 @@ namespace
                             followedEntity->rotationEuler.x,
                             followedEntity->rotationEuler.y - mouseDelta.x * mouseLookSensitivity,
                             followedEntity->rotationEuler.z);
-                        commandBus.execute(
+                        executeLogged(commandBus,
                             SetPropertyCommand{followedEntity->name, "Transform", "rotation", newRotation});
                     }
                 }
@@ -2602,13 +3600,13 @@ namespace
                         if (ImGui::IsKeyPressed(ImGuiKey_F))
                         {
                             const std::string itemName = holdCandidate->name;
-                            commandBus.execute(
+                            executeLogged(commandBus,
                                 SetPropertyCommand{itemName, "Parent", "parentName", followedEntity->name});
-                            commandBus.execute(SetPropertyCommand{
+                            executeLogged(commandBus,SetPropertyCommand{
                                 itemName, "Parent", "localPosition", glm::vec3(0.35F, -0.2F, 0.55F)});
-                            commandBus.execute(SetPropertyCommand{
+                            executeLogged(commandBus,SetPropertyCommand{
                                 itemName, "Parent", "localRotation", glm::vec3(0.0F, 0.0F, -80.0F)});
-                            commandBus.execute(SetPropertyCommand{itemName, "Collider", "enabled", false});
+                            executeLogged(commandBus,SetPropertyCommand{itemName, "Collider", "enabled", false});
                             playMode.gameplay.heldItemEntityName = itemName;
                         }
                     }
@@ -2627,14 +3625,14 @@ namespace
                     {
                         const std::string itemName = playMode.gameplay.heldItemEntityName;
                         const glm::vec3 dropForward = yawPitchForward(followedEntity->rotationEuler.y, 0.0F);
-                        commandBus.execute(SetPropertyCommand{itemName, "Parent", "parentName", std::string()});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{itemName, "Parent", "parentName", std::string()});
+                        executeLogged(commandBus,SetPropertyCommand{
                             itemName, "Transform", "position",
                             followedEntity->position + dropForward * 1.5F});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             itemName, "Transform", "rotation",
                             glm::vec3(0.0F, followedEntity->rotationEuler.y, 0.0F)});
-                        commandBus.execute(SetPropertyCommand{itemName, "Collider", "enabled", true});
+                        executeLogged(commandBus,SetPropertyCommand{itemName, "Collider", "enabled", true});
                         playMode.gameplay.heldItemEntityName.clear();
                     }
                 }
@@ -2682,7 +3680,8 @@ namespace
                         const glm::vec3 itemMaterialBlendWeight = candidate->materialBlendWeight;
                         const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
                         const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
-                        commandBus.execute(DeleteEntityCommand{candidate->name});
+                        executeLogged(commandBus,DeleteEntityCommand{candidate->name});
+                        playMode.audioPickupThisFrame = true;
                         const auto existing = std::find_if(
                             playMode.gameplay.inventoryItems.begin(),
                             playMode.gameplay.inventoryItems.end(),
@@ -3085,12 +4084,12 @@ namespace
             const glm::vec3 dropPosition = followedEntity->position + dropForward * 2.0F;
 
             const std::string spawnedName = makeMenuEntityName(scene, item.itemName);
-            commandBus.execute(CreateEntityCommand{spawnedName, PrimitiveType::Cube, dropPosition});
-            commandBus.execute(SetPropertyCommand{spawnedName, "Transform", "scale", item.scale});
-            commandBus.execute(SetPropertyCommand{spawnedName, "Renderer", "color", item.color});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "enabled", true});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "itemName", item.itemName});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "iconPath", item.iconPath});
+            executeLogged(commandBus,CreateEntityCommand{spawnedName, PrimitiveType::Cube, dropPosition});
+            executeLogged(commandBus,SetPropertyCommand{spawnedName, "Transform", "scale", item.scale});
+            executeLogged(commandBus,SetPropertyCommand{spawnedName, "Renderer", "color", item.color});
+            executeLogged(commandBus,SetPropertyCommand{spawnedName, "PickupItem", "enabled", true});
+            executeLogged(commandBus,SetPropertyCommand{spawnedName, "PickupItem", "itemName", item.itemName});
+            executeLogged(commandBus,SetPropertyCommand{spawnedName, "PickupItem", "iconPath", item.iconPath});
             // materialBlendWeight/materialLayers/materialUvScale (the
             // Appearance section's texture mix) have no SetPropertyCommand
             // - the Inspector itself mutates them directly via
@@ -3120,6 +4119,108 @@ namespace
     // defined earlier in the file for proximity to drawGameViewPanel.
     void tickCineAnimatedEntities(
         EditorScene& scene, AICommandBus& commandBus, float elapsedTime, int excludeEntityId);
+
+    // Consumes play_cutscene / play_audio requests from tickBootSequence.
+    // Those steps wait on hostStepFinished; without this they deadlock and
+    // the player never gets control back. play_audio has no engine yet, so
+    // it completes immediately rather than hanging Play.
+    void serviceBootSequenceHost(
+        PlayModeState& playMode,
+        StoryboardState& storyboard,
+        ConsoleState& console,
+        gameforger::core::AudioEngine& audio,
+        const std::filesystem::path& projectRoot,
+        const std::vector<AudioHook>& audioHooks,
+        const float deltaTime)
+    {
+        if (!playMode.isPlaying)
+        {
+            playMode.bootHostCutsceneArmed = false;
+            playMode.bootHostAudioArmed = false;
+            return;
+        }
+
+        GameplayState::BootSequenceState& boot = playMode.gameplay.bootSequence;
+        if (!boot.running || boot.hostStepFinished)
+        {
+            return;
+        }
+
+        if (!boot.requestedAudioClip.empty())
+        {
+            if (!playMode.bootHostAudioArmed)
+            {
+                fireAudioHooks(audio, projectRoot, audioHooks, AudioHook::Event::OnBootStep);
+                if (!audio.play(projectRoot, boot.requestedAudioClip))
+                {
+                    logMessage(console, LogLevel::Warning,
+                        "Boot sequence play_audio: could not play '" + boot.requestedAudioClip + "'.");
+                    boot.hostStepFinished = true;
+                    return;
+                }
+                playMode.bootHostAudioDurationSeconds = audio.clipDurationSeconds(projectRoot, boot.requestedAudioClip);
+                playMode.bootHostAudioElapsedSeconds = 0.0F;
+                playMode.bootHostAudioArmed = true;
+                if (playMode.bootHostAudioDurationSeconds <= 0.0F)
+                {
+                    boot.hostStepFinished = true;
+                    playMode.bootHostAudioArmed = false;
+                }
+                return;
+            }
+            playMode.bootHostAudioElapsedSeconds += deltaTime;
+            if (playMode.bootHostAudioElapsedSeconds >= playMode.bootHostAudioDurationSeconds)
+            {
+                boot.hostStepFinished = true;
+                playMode.bootHostAudioArmed = false;
+            }
+            return;
+        }
+
+        if (boot.requestedCutsceneShot.empty())
+        {
+            return;
+        }
+
+        int shotIndex = -1;
+        for (int i = 0; i < static_cast<int>(storyboard.shots.size()); ++i)
+        {
+            if (storyboard.shots[static_cast<std::size_t>(i)].name == boot.requestedCutsceneShot)
+            {
+                shotIndex = i;
+                break;
+            }
+        }
+        if (shotIndex < 0)
+        {
+            logMessage(console, LogLevel::Warning,
+                "Boot sequence play_cutscene: no Storyboard shot named '" + boot.requestedCutsceneShot + "'.");
+            boot.hostStepFinished = true;
+            playMode.bootHostCutsceneArmed = false;
+            return;
+        }
+
+        const CineShot& shot = storyboard.shots[static_cast<std::size_t>(shotIndex)];
+        if (!playMode.bootHostCutsceneArmed)
+        {
+            storyboard.windowOpen = true;
+            storyboard.playingMovie = false;
+            storyboard.movieShotIndex = -1;
+            storyboard.previewShotIndex = shotIndex;
+            storyboard.isPlaying = true;
+            storyboard.playTime = 0.0F;
+            playMode.bootHostCutsceneArmed = true;
+            return;
+        }
+
+        const float duration = shot.cameraPath.keyframes.empty() ? 0.0F : shot.cameraPath.keyframes.back().time;
+        if (!storyboard.isPlaying || storyboard.playTime >= duration)
+        {
+            storyboard.isPlaying = false;
+            boot.hostStepFinished = true;
+            playMode.bootHostCutsceneArmed = false;
+        }
+    }
 
     // A separate camera from the player/Game view camera, for cutscenes only.
     // Only appears once StoryboardState::windowOpen is set (from the Toolbox
@@ -3465,11 +4566,11 @@ namespace
             CreateEntityCommand command;
             command.primitive = PrimitiveType::Cube; // ignored for rendering - draws as a wireframe icon.
             command.name = makeMenuEntityName(scene, "CineCamera");
-            const AICommandResult result = commandBus.execute(command);
+            const AICommandResult result = executeLogged(commandBus,command);
             logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
             if (result.success)
             {
-                commandBus.execute(SetPropertyCommand{command.name, "CineCamera", "enabled", true});
+                executeLogged(commandBus,SetPropertyCommand{command.name, "CineCamera", "enabled", true});
                 if (SceneEntity* created = scene.findEntityMutable(scene.entities().back().id))
                 {
                     created->animation.enabled = true;
@@ -3486,7 +4587,7 @@ namespace
         {
             CreateTerrainCommand command;
             command.name = makeMenuEntityName(scene, "Terrain");
-            const AICommandResult result = commandBus.execute(command);
+            const AICommandResult result = executeLogged(commandBus,command);
             logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
             if (result.success && !scene.entities().empty())
             {
@@ -3548,7 +4649,7 @@ namespace
                 command.fontPath = textMeshTool.fontRelativePath;
                 command.fontSize = textMeshTool.fontSize;
                 command.depth = textMeshTool.depth;
-                const AICommandResult result = commandBus.execute(command);
+                const AICommandResult result = executeLogged(commandBus,command);
                 textMeshTool.status = result.message;
                 textMeshTool.statusSuccess = result.success;
                 logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
@@ -3615,12 +4716,12 @@ namespace
         float scale[3];
         ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(localMatrix), translation, rotation, scale);
 
-        commandBus.execute(SetPropertyCommand{draggedName, "Parent", "parentName", newParentName});
-        commandBus.execute(SetPropertyCommand{
+        executeLogged(commandBus,SetPropertyCommand{draggedName, "Parent", "parentName", newParentName});
+        executeLogged(commandBus,SetPropertyCommand{
             draggedName, "Parent", "localPosition", glm::vec3(translation[0], translation[1], translation[2])});
-        commandBus.execute(SetPropertyCommand{
+        executeLogged(commandBus,SetPropertyCommand{
             draggedName, "Parent", "localRotation", glm::vec3(rotation[0], rotation[1], rotation[2])});
-        commandBus.execute(
+        executeLogged(commandBus,
             SetPropertyCommand{draggedName, "Parent", "localScale", glm::vec3(scale[0], scale[1], scale[2])});
     }
 
@@ -3804,7 +4905,7 @@ namespace
                 if (ImGui::MenuItem("Duplicate"))
                 {
                     pendingHierarchyAction = [&commandBus, name = entity.name]()
-                    { commandBus.execute(DuplicateEntityCommand{name}); };
+                    { executeLogged(commandBus,DuplicateEntityCommand{name}); };
                 }
                 if (ImGui::BeginMenu("Add Child"))
                 {
@@ -3865,7 +4966,7 @@ namespace
                 {
                     pendingHierarchyAction = [&commandBus, &selection, name = entity.name, id = entity.id]()
                     {
-                        commandBus.execute(DeleteEntityCommand{name});
+                        executeLogged(commandBus,DeleteEntityCommand{name});
                         const auto it =
                             std::find(selection.multiSelectedIds.begin(), selection.multiSelectedIds.end(), id);
                         if (it != selection.multiSelectedIds.end())
@@ -3905,7 +5006,7 @@ namespace
                     const int draggedId = *static_cast<const int*>(payload->Data);
                     if (const SceneEntity* draggedEntity = scene.findEntity(draggedId))
                     {
-                        commandBus.execute(
+                        executeLogged(commandBus,
                             SetPropertyCommand{draggedEntity->name, "Parent", "parentName", std::string()});
                     }
                 }
@@ -3953,7 +5054,7 @@ namespace
             {
                 if (const SceneEntity* entity = scene.findEntity(renameState.entityId))
                 {
-                    commandBus.execute(RenameEntityCommand{entity->name, renameState.buffer.data()});
+                    executeLogged(commandBus,RenameEntityCommand{entity->name, renameState.buffer.data()});
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -4045,7 +5146,7 @@ namespace
         ImGui::InputText("##EntityName", nameBuffer.data(), nameBuffer.size());
         if (ImGui::IsItemDeactivatedAfterEdit())
         {
-            commandBus.execute(RenameEntityCommand{entity.name, nameBuffer.data()});
+            executeLogged(commandBus,RenameEntityCommand{entity.name, nameBuffer.data()});
         }
 
         ImGui::TextUnformatted("Tags");
@@ -4088,7 +5189,7 @@ namespace
             }
             if (tagIndexToRemove >= 0)
             {
-                commandBus.execute(RemoveTagCommand{
+                executeLogged(commandBus,RemoveTagCommand{
                     entity.name, entity.tags[static_cast<std::size_t>(tagIndexToRemove)]});
             }
             if (entity.tags.empty())
@@ -4106,7 +5207,7 @@ namespace
             {
                 if (ImGui::Selectable(preset))
                 {
-                    commandBus.execute(AddTagCommand{entity.name, std::string(preset)});
+                    executeLogged(commandBus,AddTagCommand{entity.name, std::string(preset)});
                 }
             }
             ImGui::EndCombo();
@@ -4118,7 +5219,7 @@ namespace
         ImGui::SameLine();
         if ((ImGui::Button("Add Tag") || customTagSubmitted) && customTagBuffer[0] != '\0')
         {
-            commandBus.execute(AddTagCommand{entity.name, std::string(customTagBuffer.data())});
+            executeLogged(commandBus,AddTagCommand{entity.name, std::string(customTagBuffer.data())});
             customTagBuffer.fill('\0');
         }
 
@@ -4128,21 +5229,21 @@ namespace
         std::array<float, 3> position{entity.position.x, entity.position.y, entity.position.z};
         if (ImGui::DragFloat3("Position", position.data(), 0.05F))
         {
-            commandBus.execute(SetPropertyCommand{
+            executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Transform", "position", glm::vec3(position[0], position[1], position[2])});
         }
 
         std::array<float, 3> rotation{entity.rotationEuler.x, entity.rotationEuler.y, entity.rotationEuler.z};
         if (ImGui::DragFloat3("Rotation", rotation.data(), 1.0F))
         {
-            commandBus.execute(SetPropertyCommand{
+            executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Transform", "rotation", glm::vec3(rotation[0], rotation[1], rotation[2])});
         }
 
         std::array<float, 3> scale{entity.scale.x, entity.scale.y, entity.scale.z};
         if (ImGui::DragFloat3("Scale", scale.data(), 0.05F, 0.01F, 100.0F))
         {
-            commandBus.execute(SetPropertyCommand{
+            executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Transform", "scale", glm::vec3(scale[0], scale[1], scale[2])});
         }
 
@@ -4163,7 +5264,7 @@ namespace
                 "Content", textContentBuffer.data(), textContentBuffer.size(), ImVec2(0.0F, 60.0F));
             if (ImGui::IsItemDeactivatedAfterEdit())
             {
-                commandBus.execute(
+                executeLogged(commandBus,
                     SetPropertyCommand{entity.name, "TextMesh", "content", std::string(textContentBuffer.data())});
             }
 
@@ -4177,7 +5278,7 @@ namespace
                 {
                     if (const std::optional<std::string> imported = importFontIntoProject(*picked, projectRoot))
                     {
-                        commandBus.execute(SetPropertyCommand{entity.name, "TextMesh", "fontPath", *imported});
+                        executeLogged(commandBus,SetPropertyCommand{entity.name, "TextMesh", "fontPath", *imported});
                     }
                 }
             }
@@ -4185,13 +5286,13 @@ namespace
             float textFontSize = entity.textMesh.fontSize;
             if (ImGui::DragFloat("Font Size", &textFontSize, 0.02F, 0.05F, 20.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "TextMesh", "fontSize", textFontSize});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "TextMesh", "fontSize", textFontSize});
             }
 
             float textDepth = entity.textMesh.depth;
             if (ImGui::DragFloat("Extrusion Depth", &textDepth, 0.01F, 0.01F, 5.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "TextMesh", "depth", textDepth});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "TextMesh", "depth", textDepth});
             }
         }
 
@@ -4202,7 +5303,7 @@ namespace
         std::array<float, 3> pivot{entity.pivotOffset.x, entity.pivotOffset.y, entity.pivotOffset.z};
         if (ImGui::DragFloat3("Pivot Offset", pivot.data(), 0.05F, -1.0F, 1.0F))
         {
-            commandBus.execute(SetPropertyCommand{
+            executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Transform", "pivot", glm::vec3(pivot[0], pivot[1], pivot[2])});
         }
 
@@ -4221,7 +5322,7 @@ namespace
                 ImGui::PushID(index);
                 if (ImGui::Button(pivotPresets[static_cast<std::size_t>(index)].first, ImVec2(32.0F, 22.0F)))
                 {
-                    commandBus.execute(SetPropertyCommand{
+                    executeLogged(commandBus,SetPropertyCommand{
                         entity.name, "Transform", "pivot", pivotPresets[static_cast<std::size_t>(index)].second});
                 }
                 ImGui::PopID();
@@ -4412,7 +5513,7 @@ namespace
         std::array<float, 3> color{entity.color.r, entity.color.g, entity.color.b};
         if (ImGui::ColorEdit3("Color", color.data()))
         {
-            commandBus.execute(SetPropertyCommand{
+            executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Renderer", "color", glm::vec3(color[0], color[1], color[2])});
         }
         ImGui::TextDisabled("The flat color above is used wherever the mask weight below is 0 for all 3 slots.");
@@ -4498,11 +5599,36 @@ namespace
         bool hasCollider = entity.hasCollider;
         if (ImGui::Checkbox("Solid (blocks scripted physics)", &hasCollider))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "Collider", "enabled", hasCollider});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "Collider", "enabled", hasCollider});
         }
         ImGui::TextDisabled(
             "Ground/walls/platforms a self.physics:resolve() script (FPS/Third-Person/Rigidbody presets) "
-            "collides with. Tagging an object \"Ground\" turns this on automatically.");
+            "collides with. Tagging an object \"Ground\" turns this on automatically. Checking this on a "
+            "parent also solids its children.");
+        if (entity.hasCollider)
+        {
+            ImGui::Indent();
+            ImGui::TextUnformatted("Type");
+            bool isBox = entity.colliderType == ColliderType::Box;
+            bool isMesh = entity.colliderType == ColliderType::Mesh;
+            bool isConvex = entity.colliderType == ColliderType::Convex;
+            if (ImGui::Checkbox("Box (simple AABB)", &isBox) && isBox)
+            {
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Collider", "type", std::string("box")});
+            }
+            ImGui::TextDisabled("Solid bounds - cheap, fills the interior (Unity Box Collider).");
+            if (ImGui::Checkbox("Mesh (complex)", &isMesh) && isMesh)
+            {
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Collider", "type", std::string("mesh")});
+            }
+            ImGui::TextDisabled("Uses the visual triangles - walls block, rooms stay walkable (Unity Mesh Collider).");
+            if (ImGui::Checkbox("Convex", &isConvex) && isConvex)
+            {
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Collider", "type", std::string("convex")});
+            }
+            ImGui::TextDisabled("Solid convex hull of the mesh - no holes, follows the shape better than Box.");
+            ImGui::Unindent();
+        }
 
         ImGui::Separator();
         ImGui::TextUnformatted("Parent");
@@ -4518,7 +5644,7 @@ namespace
             {
                 if (ImGui::Selectable("(None)", entity.parentName.empty()))
                 {
-                    commandBus.execute(SetPropertyCommand{entity.name, "Parent", "parentName", std::string()});
+                    executeLogged(commandBus,SetPropertyCommand{entity.name, "Parent", "parentName", std::string()});
                 }
                 for (const SceneEntity& other : scene.entities())
                 {
@@ -4530,7 +5656,7 @@ namespace
                     const bool isSelected = other.name == entity.parentName;
                     if (ImGui::Selectable(other.name.c_str(), isSelected))
                     {
-                        commandBus.execute(SetPropertyCommand{entity.name, "Parent", "parentName", other.name});
+                        executeLogged(commandBus,SetPropertyCommand{entity.name, "Parent", "parentName", other.name});
                     }
                     ImGui::PopID();
                 }
@@ -4542,7 +5668,7 @@ namespace
                     entity.localPosition.x, entity.localPosition.y, entity.localPosition.z};
                 if (ImGui::DragFloat3("Local Position", localPosition.data(), 0.05F))
                 {
-                    commandBus.execute(SetPropertyCommand{
+                    executeLogged(commandBus,SetPropertyCommand{
                         entity.name, "Parent", "localPosition",
                         glm::vec3(localPosition[0], localPosition[1], localPosition[2])});
                 }
@@ -4550,14 +5676,14 @@ namespace
                     entity.localRotationEuler.x, entity.localRotationEuler.y, entity.localRotationEuler.z};
                 if (ImGui::DragFloat3("Local Rotation", localRotation.data(), 0.5F))
                 {
-                    commandBus.execute(SetPropertyCommand{
+                    executeLogged(commandBus,SetPropertyCommand{
                         entity.name, "Parent", "localRotation",
                         glm::vec3(localRotation[0], localRotation[1], localRotation[2])});
                 }
                 std::array<float, 3> localScale{entity.localScale.x, entity.localScale.y, entity.localScale.z};
                 if (ImGui::DragFloat3("Local Scale", localScale.data(), 0.05F, 0.01F, 100.0F))
                 {
-                    commandBus.execute(SetPropertyCommand{
+                    executeLogged(commandBus,SetPropertyCommand{
                         entity.name, "Parent", "localScale",
                         glm::vec3(localScale[0], localScale[1], localScale[2])});
                 }
@@ -4569,7 +5695,7 @@ namespace
         bool isPickupItem = entity.isPickupItem;
         if (ImGui::Checkbox("Is Pickup Item", &isPickupItem))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "PickupItem", "enabled", isPickupItem});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "PickupItem", "enabled", isPickupItem});
         }
         if (entity.isPickupItem)
         {
@@ -4582,14 +5708,96 @@ namespace
             std::snprintf(itemNameBuffer.data(), itemNameBuffer.size(), "%s", entity.pickupItem.itemName.c_str());
             if (ImGui::InputText("Item Name", itemNameBuffer.data(), itemNameBuffer.size()))
             {
-                commandBus.execute(
+                executeLogged(commandBus,
                     SetPropertyCommand{entity.name, "PickupItem", "itemName", std::string(itemNameBuffer.data())});
             }
 
             drawIconPicker(
                 entity.pickupItem.iconPath,
                 [&](const std::string& v)
-                { commandBus.execute(SetPropertyCommand{entity.name, "PickupItem", "iconPath", v}); });
+                { executeLogged(commandBus,SetPropertyCommand{entity.name, "PickupItem", "iconPath", v}); });
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Audio Source");
+        bool hasAudioSource = entity.hasAudioSource;
+        if (ImGui::Checkbox("Has Audio Source", &hasAudioSource))
+        {
+            executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "enabled", hasAudioSource});
+        }
+        if (entity.hasAudioSource)
+        {
+            std::array<char, 256> clipBuffer{};
+            std::snprintf(
+                clipBuffer.data(), clipBuffer.size(), "%s", entity.audioSource.clipAssetPath.c_str());
+            ImGui::TextDisabled("Clip path under Game/Audio");
+            if (ImGui::InputText("##AudioClip", clipBuffer.data(), clipBuffer.size()))
+            {
+                executeLogged(commandBus,
+                    SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", std::string(clipBuffer.data())});
+            }
+            // Same Upload/Link pair the Audio panel has. Typing the path by
+            // hand was the only option here, which is how a clip ends up
+            // pointing at a file that does not exist.
+            if (ImGui::SmallButton("Upload..."))
+            {
+                if (const std::optional<std::filesystem::path> picked =
+                        showOpenAudioDialog(nativeWindowHandle, projectRoot / "Game" / "Audio"))
+                {
+                    if (const std::optional<std::string> imported = importAudioIntoProject(*picked, projectRoot))
+                    {
+                        executeLogged(commandBus,
+                            SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", *imported});
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Link..."))
+            {
+                ImGui::OpenPopup("InspectorLinkClip");
+            }
+            if (ImGui::BeginPopup("InspectorLinkClip"))
+            {
+                const std::vector<std::string> clips = gameforger::editor::listAudioClips(projectRoot);
+                if (clips.empty())
+                {
+                    ImGui::TextDisabled("No clips in Game/Audio yet - use Upload.");
+                }
+                for (const std::string& clip : clips)
+                {
+                    if (ImGui::Selectable(clip.c_str(), clip == entity.audioSource.clipAssetPath))
+                    {
+                        executeLogged(commandBus,
+                            SetPropertyCommand{entity.name, "AudioSource", "clipAssetPath", clip});
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            float volume = entity.audioSource.volume;
+            if (ImGui::SliderFloat("Volume", &volume, 0.0F, 1.0F, "%.2f"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "volume", volume});
+            }
+            float pitch = entity.audioSource.pitch;
+            if (ImGui::SliderFloat("Pitch", &pitch, 0.1F, 2.0F, "%.2f"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "pitch", pitch});
+            }
+            bool loop = entity.audioSource.loop;
+            if (ImGui::Checkbox("Loop", &loop))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "loop", loop});
+            }
+            bool playOnAwake = entity.audioSource.playOnAwake;
+            if (ImGui::Checkbox("Play On Awake", &playOnAwake))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "playOnAwake", playOnAwake});
+            }
+            bool is3D = entity.audioSource.is3D;
+            if (ImGui::Checkbox("3D", &is3D))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "AudioSource", "is3D", is3D});
+            }
         }
 
         ImGui::Separator();
@@ -4597,14 +5805,14 @@ namespace
         bool isCastle = entity.isCastle;
         if (ImGui::Checkbox("Is Castle", &isCastle))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "Castle", "enabled", isCastle});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "Castle", "enabled", isCastle});
         }
         if (entity.isCastle)
         {
             ImGui::TextDisabled(
                 "Takes damage from gravity-fired catapult boulders whose hitTag matches one of this "
-                "object's Tags (\"PlayerCastle\"/\"EnemyCastle\") - also needs \"Is Collider\" on above, "
-                "since the hit test is this entity's collider AABB, not its visual mesh.");
+                "object's Tags (\"PlayerCastle\"/\"EnemyCastle\") - also needs Collider on above. "
+                "Imported models use the mesh bounds as the hit box.");
             if (!entity.hasCollider)
             {
                 ImGui::TextColored(
@@ -4613,12 +5821,12 @@ namespace
             float castleHp = entity.castle.hp;
             if (ImGui::DragFloat("HP", &castleHp, 1.0F, 0.0F, entity.castle.maxHp))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "Castle", "hp", castleHp});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Castle", "hp", castleHp});
             }
             float castleMaxHp = entity.castle.maxHp;
             if (ImGui::DragFloat("Max HP", &castleMaxHp, 1.0F, 1.0F, 10000.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "Castle", "maxHp", castleMaxHp});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Castle", "maxHp", castleMaxHp});
             }
         }
 
@@ -4627,7 +5835,7 @@ namespace
         bool isCatapult = entity.isCatapult;
         if (ImGui::Checkbox("Is Catapult", &isCatapult))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "Catapult", "enabled", isCatapult});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "Catapult", "enabled", isCatapult});
         }
         if (entity.isCatapult)
         {
@@ -4644,7 +5852,7 @@ namespace
                 {
                     if (ImGui::Selectable("(None)", currentName.empty()))
                     {
-                        commandBus.execute(SetPropertyCommand{entity.name, component, property, std::string()});
+                        executeLogged(commandBus,SetPropertyCommand{entity.name, component, property, std::string()});
                     }
                     for (const SceneEntity& other : scene.entities())
                     {
@@ -4655,7 +5863,7 @@ namespace
                         ImGui::PushID(other.id);
                         if (ImGui::Selectable(other.name.c_str(), other.name == currentName))
                         {
-                            commandBus.execute(
+                            executeLogged(commandBus,
                                 SetPropertyCommand{entity.name, component, property, other.name});
                         }
                         ImGui::PopID();
@@ -4671,17 +5879,17 @@ namespace
             float minPitch = entity.catapult.minPitchDegrees;
             if (ImGui::DragFloat("Min Pitch", &minPitch, 0.5F, 0.0F, 89.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "Catapult", "minPitchDegrees", minPitch});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Catapult", "minPitchDegrees", minPitch});
             }
             float maxPitch = entity.catapult.maxPitchDegrees;
             if (ImGui::DragFloat("Max Pitch", &maxPitch, 0.5F, 0.0F, 89.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "Catapult", "maxPitchDegrees", maxPitch});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Catapult", "maxPitchDegrees", maxPitch});
             }
             float launchSpeed = entity.catapult.launchSpeed;
             if (ImGui::DragFloat("Launch Speed", &launchSpeed, 0.5F, 1.0F, 200.0F))
             {
-                commandBus.execute(SetPropertyCommand{entity.name, "Catapult", "launchSpeed", launchSpeed});
+                executeLogged(commandBus,SetPropertyCommand{entity.name, "Catapult", "launchSpeed", launchSpeed});
             }
         }
 
@@ -4690,7 +5898,7 @@ namespace
         bool isCineCamera = entity.isCineCamera;
         if (ImGui::Checkbox("Is Cine Camera", &isCineCamera))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "CineCamera", "enabled", isCineCamera});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "CineCamera", "enabled", isCineCamera});
         }
         if (entity.isCineCamera)
         {
@@ -4962,7 +6170,7 @@ namespace
             ImGui::SameLine();
             if (ImGui::SmallButton("Remove"))
             {
-                commandBus.execute(DetachScriptCommand{entity.name, scriptPath});
+                executeLogged(commandBus,DetachScriptCommand{entity.name, scriptPath});
                 if (scriptRuntime.isRunning())
                 {
                     // Detaching only edits SceneEntity::scripts; the already-
@@ -5057,41 +6265,40 @@ namespace
         float fpsEyeHeight = entity.cameraRig.fpsEyeHeight;
         if (ImGui::DragFloat("FPS Eye Height", &fpsEyeHeight, 0.02F, 0.0F, 5.0F))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "Camera", "fpsEyeHeight", fpsEyeHeight});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "Camera", "fpsEyeHeight", fpsEyeHeight});
         }
 
         float thirdPersonDistance = entity.cameraRig.thirdPersonDistance;
         if (ImGui::DragFloat("3rd-Person Distance", &thirdPersonDistance, 0.05F, 0.5F, 20.0F))
         {
-            commandBus.execute(
+            executeLogged(commandBus,
                 SetPropertyCommand{entity.name, "Camera", "thirdPersonDistance", thirdPersonDistance});
         }
 
         float thirdPersonHeight = entity.cameraRig.thirdPersonHeight;
         if (ImGui::DragFloat("3rd-Person Height", &thirdPersonHeight, 0.05F, -5.0F, 10.0F))
         {
-            commandBus.execute(SetPropertyCommand{entity.name, "Camera", "thirdPersonHeight", thirdPersonHeight});
+            executeLogged(commandBus,SetPropertyCommand{entity.name, "Camera", "thirdPersonHeight", thirdPersonHeight});
         }
 
         float thirdPersonAimHeight = entity.cameraRig.thirdPersonAimHeight;
         if (ImGui::DragFloat("3rd-Person Aim Height", &thirdPersonAimHeight, 0.05F, -5.0F, 10.0F))
         {
-            commandBus.execute(
+            executeLogged(commandBus,
                 SetPropertyCommand{entity.name, "Camera", "thirdPersonAimHeight", thirdPersonAimHeight});
         }
 
         float thirdPersonYawOffset = entity.cameraRig.thirdPersonYawOffsetDegrees;
         if (ImGui::DragFloat("3rd-Person Angle", &thirdPersonYawOffset, 1.0F, -180.0F, 180.0F, "%.0f deg"))
         {
-            commandBus.execute(
+            executeLogged(commandBus,
                 SetPropertyCommand{entity.name, "Camera", "thirdPersonYawOffsetDegrees", thirdPersonYawOffset});
         }
 
-        bool lockCursor = entity.cameraRig.lockCursor;
-        if (ImGui::Checkbox("Lock Cursor", &lockCursor))
-        {
-            commandBus.execute(SetPropertyCommand{entity.name, "Camera", "lockCursor", lockCursor});
-        }
+        // The "Lock Cursor" checkbox used to be here, on every entity. It is
+        // now owned by the Game Manager script - add the Game Manager preset
+        // to one entity, or let a controller call setCursorLock itself.
+        ImGui::TextDisabled("Cursor lock: driven by game_manager.lua / the controller scripts.");
         ImGui::TextDisabled(
             "While Play is running and this object has claimed the Game view camera (either FPS or "
             "Third-Person): hides and captures the cursor for continuous mouse-look instead of needing "
@@ -5120,7 +6327,7 @@ namespace
         ImGui::Separator();
         if (ImGui::Button("Delete Entity"))
         {
-            commandBus.execute(DeleteEntityCommand{entity.name});
+            executeLogged(commandBus,DeleteEntityCommand{entity.name});
             clearSelection(selection);
         }
 
@@ -5141,7 +6348,7 @@ namespace
             ImGui::SameLine();
             if (ImGui::Button("Attach##existing"))
             {
-                const AICommandResult result = commandBus.execute(
+                const AICommandResult result = executeLogged(commandBus,
                     AttachScriptCommand{scriptCreator.targetEntityName, scriptCreator.existingPath.data()});
                 scriptCreator.attachStatus = result.message;
                 scriptCreator.attachStatusSuccess = result.success;
@@ -5188,7 +6395,7 @@ namespace
                 const char* description;
                 PresetKind kind;
             };
-            constexpr std::array<ScriptPreset, 8> presets{{
+            constexpr std::array<ScriptPreset, 10> presets{{
                     {"FPS Controller",
                      "Game/Scripts/fps_controller.lua",
                      "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
@@ -5244,9 +6451,23 @@ namespace
                      "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
                      "speeds/power-charge-time are editable in the script itself.",
                      PresetKind::Utility},
+                    {"Game Manager",
+                     "Game/Scripts/game_manager.lua",
+                     "Session-wide state that isn't any one object's business. Owns cursor lock - which "
+                     "used to be a checkbox on every entity's Inspector - and registers itself in the "
+                     "manager list. Attach to ONE entity per scene (an empty cube is fine). Doesn't touch "
+                     "the transform, so it combines with anything.",
+                     PresetKind::Utility},
+                    {"Audio Manager",
+                     "Game/Scripts/audio_manager.lua",
+                     "Plays background music on a loop and exposes self.audio to every other script "
+                     "(play/stop/setMasterVolume/isPlaying). Set music_clip to something in Game/Audio - "
+                     "use the Audio panel's Import Sound from PC to put one there. Doesn't touch the "
+                     "transform.",
+                     PresetKind::Utility},
                 }};
 
-            static std::array<bool, 8> presetSelected{};
+            static std::array<bool, 10> presetSelected{};
 
             std::string presetsPreview;
             for (std::size_t index = 0; index < presets.size(); ++index)
@@ -5335,13 +6556,32 @@ namespace
                 scriptCreator.worker = std::thread(
                     [&scriptCreator, &aiProviderClient, entityName, description, providerId]()
                     {
-                        const ScriptGenerationResult result =
-                            generateEntityScript(aiProviderClient, providerId, entityName, description);
-                        const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                        scriptCreator.resultSuccess = result.success;
-                        scriptCreator.resultContent = result.content;
-                        scriptCreator.hasResult = true;
-                        scriptCreator.generating = false;
+                        try
+                        {
+                            const ScriptGenerationResult result =
+                                generateEntityScript(aiProviderClient, providerId, entityName, description);
+                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
+                            scriptCreator.resultSuccess = result.success;
+                            scriptCreator.resultContent = result.content;
+                            scriptCreator.hasResult = true;
+                            scriptCreator.generating = false;
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
+                            scriptCreator.resultSuccess = false;
+                            scriptCreator.resultContent = std::string("Script generation failed: ") + exception.what();
+                            scriptCreator.hasResult = true;
+                            scriptCreator.generating = false;
+                        }
+                        catch (...)
+                        {
+                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
+                            scriptCreator.resultSuccess = false;
+                            scriptCreator.resultContent = "Script generation failed.";
+                            scriptCreator.hasResult = true;
+                            scriptCreator.generating = false;
+                        }
                     });
             }
             if (isGenerating)
@@ -5394,11 +6634,11 @@ namespace
                     if (ImGui::Button("Save & Attach"))
                     {
                         const std::string path = makeUniqueScriptPath(projectRoot, scriptCreator.scriptName.data());
-                        const AICommandResult createResult = commandBus.execute(
+                        const AICommandResult createResult = executeLogged(commandBus,
                             CreateScriptCommand{path, "lua", std::string(scriptCreator.previewBuffer.data())});
                         if (createResult.success)
                         {
-                            (void)commandBus.execute(AttachScriptCommand{scriptCreator.targetEntityName, path});
+                            (void)executeLogged(commandBus,AttachScriptCommand{scriptCreator.targetEntityName, path});
                         }
                         {
                             const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
@@ -5442,17 +6682,17 @@ namespace
                         AICommandResult result{true, false, ""};
                         if (preset.kind != PresetKind::ColliderOnly)
                         {
-                            result = commandBus.execute(
+                            result = executeLogged(commandBus,
                                 AttachScriptCommand{scriptCreator.targetEntityName, preset.path});
                             if (result.success)
                             {
-                                commandBus.execute(SetPropertyCommand{
+                                executeLogged(commandBus,SetPropertyCommand{
                                     scriptCreator.targetEntityName, "Collider", "enabled", true});
                             }
                         }
                         else
                         {
-                            result = commandBus.execute(SetPropertyCommand{
+                            result = executeLogged(commandBus,SetPropertyCommand{
                                 scriptCreator.targetEntityName, "Collider", "enabled", true});
                         }
                         logMessage(
@@ -5500,7 +6740,7 @@ namespace
 
             if (ImGui::Button("Save"))
             {
-                const AICommandResult saveResult = commandBus.execute(
+                const AICommandResult saveResult = executeLogged(commandBus,
                     CreateScriptCommand{scriptEditor.scriptPath, "lua", std::string(scriptEditor.buffer.data())});
                 scriptEditor.status = saveResult.message;
                 scriptEditor.statusSuccess = saveResult.success;
@@ -5907,7 +7147,10 @@ namespace
 
         if (camera.dragMode == CameraDragMode::Orbit || camera.dragMode == CameraDragMode::Fly)
         {
-            camera.yaw -= io.MouseDelta.x * 0.01F;
+            // Was "-=" - that inverted horizontal look/orbit (dragging right
+            // turned the view left and vice versa). Confirmed backwards by
+            // the user; keep this as "+=" going forward.
+            camera.yaw += io.MouseDelta.x * 0.01F;
             camera.pitch += io.MouseDelta.y * 0.01F;
         }
         camera.pitch = std::clamp(camera.pitch, -1.45F, 1.45F);
@@ -6008,9 +7251,9 @@ namespace
 
     void applyPose(AICommandBus& commandBus, const std::string& entityName, const AnimatedPose& pose)
     {
-        commandBus.execute(SetPropertyCommand{entityName, "Transform", "position", pose.position});
-        commandBus.execute(SetPropertyCommand{entityName, "Transform", "rotation", pose.rotationEuler});
-        commandBus.execute(SetPropertyCommand{entityName, "Transform", "scale", pose.scale});
+        executeLogged(commandBus,SetPropertyCommand{entityName, "Transform", "position", pose.position});
+        executeLogged(commandBus,SetPropertyCommand{entityName, "Transform", "rotation", pose.rotationEuler});
+        executeLogged(commandBus,SetPropertyCommand{entityName, "Transform", "scale", pose.scale});
     }
 
     // Advances every OTHER animated entity (text/objects "attached" to the
@@ -6098,11 +7341,30 @@ namespace
             aiAnimation.worker = std::thread(
                 [&aiAnimation, &aiProviderClient, targets, promptText, providerId]()
                 {
-                    AIAnimationResult result = generateAnimation(aiProviderClient, providerId, targets, promptText);
-                    const std::lock_guard<std::mutex> lock(aiAnimation.resultMutex);
-                    aiAnimation.result = std::move(result);
-                    aiAnimation.hasResult = true;
-                    aiAnimation.generating = false;
+                    try
+                    {
+                        AIAnimationResult result = generateAnimation(aiProviderClient, providerId, targets, promptText);
+                        const std::lock_guard<std::mutex> lock(aiAnimation.resultMutex);
+                        aiAnimation.result = std::move(result);
+                        aiAnimation.hasResult = true;
+                        aiAnimation.generating = false;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        const std::lock_guard<std::mutex> lock(aiAnimation.resultMutex);
+                        aiAnimation.result.success = false;
+                        aiAnimation.result.message = std::string("Animation generation failed: ") + exception.what();
+                        aiAnimation.hasResult = true;
+                        aiAnimation.generating = false;
+                    }
+                    catch (...)
+                    {
+                        const std::lock_guard<std::mutex> lock(aiAnimation.resultMutex);
+                        aiAnimation.result.success = false;
+                        aiAnimation.result.message = "Animation generation failed.";
+                        aiAnimation.hasResult = true;
+                        aiAnimation.generating = false;
+                    }
                 });
         }
         if (isGenerating)
@@ -6137,7 +7399,7 @@ namespace
                 // Route through the command bus so the mutation is undoable
                 // like every other editor change - the prior direct write
                 // here left the undo stack out of sync with the visible state.
-                commandBus.execute(SetAnimationCommand{
+                executeLogged(commandBus,SetAnimationCommand{
                     generated.entityName,
                     /*enabled=*/true,
                     generated.looping,
@@ -6374,17 +7636,28 @@ namespace
         RenameState& renameState,
         ScriptCreatorState& scriptCreator,
         ScriptEditorState& scriptEditor,
-        const AIProviderClient& aiProviderClient,
+        AIProviderClient& aiProviderClient,
         const std::string& activeProviderId,
         const std::filesystem::path& projectRoot,
         AIForgeState& aiForge,
+        AICockpitState& cockpit,
+        AISetupState& aiSetup,
+        BlenderClient& blenderClient,
+        BlenderPanelState& blenderPanel,
         PlayModeState& playMode,
         ScriptRuntime& scriptRuntime,
         AnimationPanelState& animPanel,
         AIAnimationState& aiAnimation,
         ConsoleState& console,
         ProjectBrowserState& projectBrowser,
+        // Only so clicking Project.json/Settings.json in the browser can pull
+        // the inspector to the front; the panel itself is drawn from main().
+        ProjectSettingsPanelState& projectSettingsPanel,
+        // AI Forge routes prompts through the Cockpit, which needs this for
+        // the project.* tools.
+        ProjectSettingsBus& projectSettingsBus,
         EditHistoryState& history,
+        StoryboardState& storyboard,
         const std::filesystem::path& currentScenePath,
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
@@ -6393,10 +7666,17 @@ namespace
     {
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
+        playMode.gameplay.projectilesFiredThisTick = 0;
+        playMode.audioPickupThisFrame = false;
 
         applyParentConstraints(scene, commandBus);
         tickPlayModeAnimations(scene, commandBus, playMode.gameplay, advanceSim, simDt);
-        tickScripts(scene, scriptRuntime, advanceSim, simDt);
+        tickBootSequence(
+            projectSettingsBus.settings().bootSequence, scene, playMode.gameplay, advanceSim, simDt);
+        // Freezing scripts is what actually stops the player moving during an
+        // intro. Animations above still tick, so a logo or camera move plays
+        // over a stationary player.
+        tickScripts(scene, scriptRuntime, advanceSim && !bootSequenceBlocksInput(playMode.gameplay), simDt);
         tickProjectiles(scene, commandBus, playMode.gameplay, advanceSim, simDt);
 
         // Enemy catapult auto-fire - the "two-sided battle" simplification
@@ -6450,7 +7730,7 @@ namespace
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                saveSceneAndLog(scene, currentScenePath, storyboard, console);
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
@@ -6489,7 +7769,7 @@ namespace
                 {
                     if (const SceneEntity* target = scene.findEntity(*selection.selectedEntityId))
                     {
-                        commandBus.execute(AttachScriptCommand{target->name, history.clipboardScriptPath});
+                        executeLogged(commandBus,AttachScriptCommand{target->name, history.clipboardScriptPath});
                     }
                 }
                 else if (!history.clipboardHoldsScript && !history.clipboardEntities.empty())
@@ -6503,7 +7783,7 @@ namespace
                 {
                     if (const SceneEntity* scriptEntity = scene.findEntity(*history.focusedScriptEntityId))
                     {
-                        commandBus.execute(DetachScriptCommand{scriptEntity->name, history.focusedScriptPath});
+                        executeLogged(commandBus,DetachScriptCommand{scriptEntity->name, history.focusedScriptPath});
                     }
                     history.focusedScriptEntityId.reset();
                     history.focusedScriptPath.clear();
@@ -6535,21 +7815,59 @@ namespace
             terrainSculpt,
             nativeWindowHandle);
 
-        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor);
+        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel);
 
         ImGui::Begin("AI Forge");
         static std::array<char, 1024> prompt{};
         ImGui::TextWrapped(
-            "Describe what you want in plain language (e.g. \"add a red sphere named Enemy above the "
-            "cube\") and the active AI provider will plan it. Exact local commands (create_entity Name, "
-            "set_position Name x y z, create_script path content) still run instantly, no AI call needed.");
+            "Describe what you want in plain language. Local commands (create_entity Name, "
+            "set_position Name x y z) still plan instantly. Anything else goes to the AI with "
+            "scene tools plus every Blender MCP tool (Connect first).");
+
+        ImGui::TextUnformatted("Blender MCP:");
+        ImGui::SameLine();
+        if (blenderPanel.connected)
+        {
+            ImGui::TextColored(ImVec4(0.30F, 0.85F, 0.35F, 1.0F), "connected (%zu tools)",
+                blenderPanel.tools.size());
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.90F, 0.55F, 0.45F, 1.0F), "not connected");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Connect"))
+        {
+            syncBlenderConnectionState(blenderClient, blenderPanel, console);
+        }
+        if (ImGui::CollapsingHeader("Blender tools available to the AI"))
+        {
+            if (!blenderPanel.connected)
+            {
+                ImGui::TextDisabled("Start Blender, enable the MCP addon, click Connect.");
+            }
+            else if (blenderPanel.tools.empty())
+            {
+                ImGui::TextDisabled("Connected, but tools/list returned none.");
+            }
+            else
+            {
+                ImGui::BeginChild("##blenderToolList", ImVec2(0, 120), true);
+                for (const BlenderClient::ToolInfo& tool : blenderPanel.tools)
+                {
+                    ImGui::BulletText("%s", tool.name.c_str());
+                }
+                ImGui::EndChild();
+            }
+        }
+
         ImGui::InputTextMultiline(
             "##Prompt",
             prompt.data(),
             prompt.size(),
             ImVec2(-1.0F, 110.0F));
 
-        const bool isPlanning = aiForge.planning.load();
+        const bool isPlanning = aiForge.planning.load() || cockpit.loopRunning.load();
         const bool aiForgeDisabled = isPlanning || playMode.isPlaying;
         if (aiForgeDisabled)
         {
@@ -6582,31 +7900,26 @@ namespace
             }
             else
             {
-                if (aiForge.worker.joinable())
-                {
-                    aiForge.worker.join();
-                }
+                const AIProvider& provider = providers[static_cast<std::size_t>(aiSetup.selectedProvider)];
                 aiForge.pendingCommands.clear();
                 aiForge.pendingDescriptions.clear();
-                aiForge.status = "Asking the AI...";
-                aiForge.statusSuccess = false;
-                aiForge.planning = true;
-                {
-                    const std::lock_guard<std::mutex> lock(aiForge.resultMutex);
-                    aiForge.hasPlanResult = false;
-                }
-                const std::string providerId = activeProviderId;
-                const std::vector<SceneEntity> currentEntities = scene.entities();
-                aiForge.worker = std::thread(
-                    [&aiForge, &aiProviderClient, promptText, providerId, currentEntities]()
-                    {
-                        AIPlanResult result =
-                            planEditorCommands(aiProviderClient, providerId, promptText, currentEntities);
-                        const std::lock_guard<std::mutex> lock(aiForge.resultMutex);
-                        aiForge.planResult = std::move(result);
-                        aiForge.hasPlanResult = true;
-                        aiForge.planning = false;
-                    });
+                aiForge.status = blenderPanel.connected
+                    ? ("Sending to AI with " + std::to_string(blenderPanel.tools.size()) + " Blender tools...")
+                    : "Sending to AI (scene tools only — Connect Blender MCP for modelling tools).";
+                aiForge.statusSuccess = true;
+                cockpit.panelOpen = true;
+                gameforger::editor::sendCockpitPrompt(
+                    cockpit,
+                    aiProviderClient,
+                    provider.id,
+                    provider.protocol,
+                    aiSetup.model.data(),
+                    provider.supportsReasoningEffort ? aiSetup.reasoningEffort : -1,
+                    blenderClient,
+                    scene,
+                    commandBus,
+                    projectSettingsBus,
+                    promptText);
             }
         }
         if (aiForgeDisabled)
@@ -6664,7 +7977,7 @@ namespace
             std::string firstError;
             for (const AIEditorCommand& command : aiForge.pendingCommands)
             {
-                const AICommandResult result = commandBus.execute(command);
+                const AICommandResult result = executeLogged(commandBus,command);
                 if (result.success)
                 {
                     ++succeeded;
@@ -6875,13 +8188,13 @@ namespace
                         float localScale[3];
                         ImGuizmo::DecomposeMatrixToComponents(
                             glm::value_ptr(localMatrix), localTranslation, localRotation, localScale);
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Parent", "localPosition",
                             glm::vec3(localTranslation[0], localTranslation[1], localTranslation[2])});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Parent", "localRotation",
                             glm::vec3(localRotation[0], localRotation[1], localRotation[2])});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Parent", "localScale",
                             glm::vec3(localScale[0], localScale[1], localScale[2])});
                     }
@@ -6891,11 +8204,11 @@ namespace
                         float rotation[3];
                         float scale[3];
                         ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(model), translation, rotation, scale);
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Transform", "position", glm::vec3(translation[0], translation[1], translation[2])});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Transform", "rotation", glm::vec3(rotation[0], rotation[1], rotation[2])});
-                        commandBus.execute(SetPropertyCommand{
+                        executeLogged(commandBus,SetPropertyCommand{
                             entity->name, "Transform", "scale", glm::vec3(scale[0], scale[1], scale[2])});
                     }
                 }
@@ -6994,6 +8307,7 @@ namespace
             console,
             deltaTime);
     }
+
 }
 
 int main()
@@ -7143,6 +8457,15 @@ int main()
     AIProviderClient aiProviderClient(projectRoot);
     AISetupState aiSetup;
     selectProvider(aiSetup, 0);
+    // Blender MCP integration (Phase A of integration_plan_allinone.md).
+    // Both live for the app's lifetime. The launcher owns the spawned
+    // blender.exe process handle; the client owns its own worker threads
+    // and result queue. See drawBlenderMenu / drawBlenderPanel below.
+    BlenderLauncher blenderLauncher;
+    BlenderClient blenderClient;
+    BlenderPanelState blenderPanel;
+    // Phase C. Owns worker thread + message queue for the agent loop.
+    AICockpitState aiCockpit;
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
@@ -7160,6 +8483,19 @@ int main()
     ProjectBrowserState projectBrowser;
     TextMeshToolState textMeshTool;
     StoryboardState storyboard;
+    // Owns the in-memory Game/Project.json + Game/Settings.json and is the
+    // only writer to them. Loads on construction; a malformed file falls back
+    // to defaults rather than refusing to open the editor.
+    ProjectSettingsBus projectSettingsBus(projectRoot);
+    ProjectSettingsPanelState projectSettingsPanel;
+    gameforger::core::AudioEngine audioEngine;
+    audioEngine.initialize();
+    AudioPanelState audioPanel;
+    gameforger::core::FrameProfiler frameProfiler;
+    PerformancePanelState performancePanel;
+    TimelinePanelState timelinePanel;
+    bool wasPlayingAudio = false;
+    std::string previousGameOverMessage;
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
@@ -7170,12 +8506,15 @@ int main()
 
     while (glfwWindowShouldClose(window) == GLFW_FALSE)
     {
+        frameProfiler.beginFrame();
         const double currentTime = glfwGetTime();
         currentFrameTime = currentTime;
         const float deltaTime = static_cast<float>(currentTime - lastFrameTime);
         lastFrameTime = currentTime;
 
+        frameProfiler.beginZone("Input/Events");
         glfwPollEvents();
+        frameProfiler.endZone();
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -7193,11 +8532,21 @@ int main()
             ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
 
+        // Blender MCP: run completed async callbacks on the main thread
+        // before drawing anything that might read the panel's cache.
+        blenderClient.pumpMainThread();
+
+        gameforger::editor::pumpCockpit(aiCockpit);
         drawMainMenu(
-            scene, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
-            settings, history, currentScenePath, nativeWindowHandle, resetLayout);
+            scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
+            settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
+            blenderLauncher, blenderClient, blenderPanel, aiCockpit);
+        drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
+        drawCockpitPanel(
+            aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
         const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
+        frameProfiler.beginZone("Panels + Simulation");
         drawEditorPanels(
             viewportRenderer,
             camera,
@@ -7211,18 +8560,26 @@ int main()
             activeProviderId,
             projectRoot,
             aiForge,
+            aiCockpit,
+            aiSetup,
+            blenderClient,
+            blenderPanel,
             playMode,
             scriptRuntime,
             animPanel,
             aiAnimation,
             console,
             projectBrowser,
+            projectSettingsPanel,
+            projectSettingsBus,
             history,
+            storyboard,
             currentScenePath,
             gizmoOperation,
             terrainSculpt,
             deltaTime,
             nativeWindowHandle);
+        frameProfiler.endZone();
         drawToolboxPanel(
             textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
             nativeWindowHandle);
@@ -7237,10 +8594,116 @@ int main()
         }
         drawCineCameraPreviewPanel(
             cineCameraRenderer, scene, commandBus, selection, storyboard, projectRoot, deltaTime);
+        // After the preview tick so a finishing shot can release the boot
+        // sequence on the same frame it ends, rather than a frame later.
+        serviceBootSequenceHost(
+            playMode,
+            storyboard,
+            console,
+            audioEngine,
+            projectRoot,
+            projectSettingsBus.settings().audioHooks,
+            deltaTime);
         drawStoryboardPanel(scene, selection, storyboard);
+        drawProjectSettingsPanel(
+            projectSettingsBus, projectRoot, projectSettingsPanel,
+            // The panel lives in its own TU and cannot see ConsoleState, so
+            // it reports through this instead - successes as Info, rejected
+            // commands (bad scene path, out-of-range fps) as Warnings, which
+            // is where the bus's validation message actually reaches the user.
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
+        drawPerformancePanel(
+            frameProfiler, projectRoot, performancePanel,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Error, message);
+            });
+        drawAudioPanel(
+            projectSettingsBus,
+            audioEngine,
+            scene,
+            commandBus,
+            projectRoot,
+            audioPanel,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            },
+            // The Win32 picker and the copy helper live in this TU's
+            // anonymous namespace, so the panel reaches them through here.
+            [&projectRoot, nativeWindowHandle]() -> std::optional<std::string>
+            {
+                if (const std::optional<std::filesystem::path> picked =
+                        showOpenAudioDialog(nativeWindowHandle, projectRoot / "Game" / "Audio"))
+                {
+                    return importAudioIntoProject(*picked, projectRoot);
+                }
+                return std::nullopt;
+            });
+        // Edits shots in place; persistence is the scene's job (saveScene
+        // carries storyboard.shots), so nothing here writes to disk.
+        drawTimelinePanel(
+            storyboard.shots,
+            audioEngine,
+            projectRoot,
+            timelinePanel,
+            deltaTime,
+            [&console](const bool success, const std::string& message)
+            {
+                logMessage(console, success ? LogLevel::Info : LogLevel::Warning, message);
+            });
 
+        if (playMode.isPlaying && !wasPlayingAudio)
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnPlayStart);
+            // Every playOnAwake source, with its effects and fades. Shared
+            // with the standalone Runtime so pressing Play here and launching
+            // the shipped game start the scene sounding the same.
+            playSourcesOnAwake(audioEngine, projectRoot, scene);
+        }
+        if (!playMode.isPlaying && wasPlayingAudio)
+        {
+            audioEngine.stopAll();
+        }
+        wasPlayingAudio = playMode.isPlaying;
+
+        if (playMode.audioPickupThisFrame)
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnPickup);
+        }
+        if (playMode.gameplay.projectilesFiredThisTick > 0)
+        {
+            fireAudioHooks(
+                audioEngine,
+                projectRoot,
+                projectSettingsBus.settings().audioHooks,
+                AudioHook::Event::OnProjectileFire);
+        }
+        if (playMode.gameplay.projectilesHitThisTick > 0)
+        {
+            fireAudioHooks(
+                audioEngine,
+                projectRoot,
+                projectSettingsBus.settings().audioHooks,
+                AudioHook::Event::OnProjectileHit);
+        }
+        if (!playMode.gameplay.gameOverMessage.empty() && previousGameOverMessage.empty())
+        {
+            fireAudioHooks(
+                audioEngine, projectRoot, projectSettingsBus.settings().audioHooks, AudioHook::Event::OnGameOver);
+        }
+        previousGameOverMessage = playMode.gameplay.gameOverMessage;
+
+        frameProfiler.beginZone("ImGui Render");
         ImGui::Render();
+        frameProfiler.endZone();
 
+        frameProfiler.beginZone("GPU Submit");
         int width = 0;
         int height = 0;
         glfwGetFramebufferSize(window, &width, &height);
@@ -7248,10 +8711,21 @@ int main()
         glClearColor(0.055F, 0.067F, 0.09F, 1.0F);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        frameProfiler.endZone();
 
+        // Present blocks until vsync, so it is normally the largest zone by
+        // far. It is idle waiting, not work - the panel says so explicitly, or
+        // every dip would look like it was the renderer's fault.
+        frameProfiler.beginZone("Present (vsync wait)");
         glfwSwapBuffers(window);
+        frameProfiler.endZone();
+
+        frameProfiler.endFrame();
     }
 
+    aiProviderClient.requestCancel();
+    blenderClient.requestCancel();
+    gameforger::editor::joinCockpitWorker(aiCockpit);
     if (scriptCreator.worker.joinable())
     {
         scriptCreator.worker.join();
@@ -7278,6 +8752,7 @@ int main()
         DestroyIcon(iconSmall);
     }
 
+    audioEngine.shutdown();
     viewportRenderer.shutdown();
     gameViewRenderer.shutdown();
     cineCameraRenderer.shutdown();

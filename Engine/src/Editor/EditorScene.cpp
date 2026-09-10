@@ -11,6 +11,27 @@
 
 namespace gameforger::editor
 {
+	// Serialised as names, not enum ordinals - reordering the enum must never
+	// silently reinterpret a saved scene. Same rule as BootStep and AudioHook.
+	const char* audioFilterName(const AudioEffects::Filter filter) noexcept
+	{
+		switch (filter)
+		{
+			case AudioEffects::Filter::LowPass:  return "low_pass";
+			case AudioEffects::Filter::HighPass: return "high_pass";
+			case AudioEffects::Filter::None:     break;
+		}
+		return "none";
+	}
+
+	bool audioFilterFromName(const std::string& name, AudioEffects::Filter& outFilter) noexcept
+	{
+		if (name == "none")      { outFilter = AudioEffects::Filter::None;     return true; }
+		if (name == "low_pass")  { outFilter = AudioEffects::Filter::LowPass;  return true; }
+		if (name == "high_pass") { outFilter = AudioEffects::Filter::HighPass; return true; }
+		return false;
+	}
+
 	EditorScene::EditorScene(std::filesystem::path projectRoot)
 		: projectRoot_(std::filesystem::weakly_canonical(std::move(projectRoot)))
 	{
@@ -48,6 +69,15 @@ namespace gameforger::editor
 						return {false, false, "Entity was not found in the editor scene."};
 					}
 					entities_.erase(iterator);
+					// Promote former children to root. World TRS was already
+					// written by applyParentConstraints, so they stay put.
+					for (SceneEntity& child : entities_)
+					{
+						if (child.parentName == value.entityName)
+						{
+							child.parentName.clear();
+						}
+					}
 					return {true, false, "Entity deleted from the editor scene."};
 				}
 				else if constexpr (std::is_same_v<Command, RenameEntityCommand>)
@@ -66,6 +96,16 @@ namespace gameforger::editor
 						return {false, false, "Entity was not found in the editor scene."};
 					}
 					entity->name = value.newName;
+					if (value.entityName != value.newName)
+					{
+						for (SceneEntity& child : entities_)
+						{
+							if (child.parentName == value.entityName)
+							{
+								child.parentName = value.newName;
+							}
+						}
+					}
 					return {true, false, "Entity renamed."};
 				}
 				else if constexpr (std::is_same_v<Command, DuplicateEntityCommand>)
@@ -130,17 +170,37 @@ namespace gameforger::editor
 							"Script already exists at " + scriptPath->string() +
 								" - set overwrite=true to replace it."};
 					}
-					std::ofstream output(*scriptPath, std::ios::binary | std::ios::trunc);
-					if (!output)
+					const std::filesystem::path tempPath = scriptPath->string() + ".tmp";
 					{
-						return {false, false, "Could not write the script file."};
+						std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
+						if (!output)
+						{
+							return {false, false, "Could not write the script file."};
+						}
+						output << value.content;
+						if (!output)
+						{
+							return {false, false, "Failed while writing the script file."};
+						}
+						output.flush();
+						if (!output)
+						{
+							return {false, false, "Failed to flush the script file."};
+						}
 					}
-					output << value.content;
-					if (!output)
+					std::error_code writeError;
+					if (exists)
 					{
-						return {false, false, "Failed while writing the script file."};
+						const std::filesystem::path backupPath = scriptPath->string() + ".bak";
+						std::filesystem::copy(
+							*scriptPath, backupPath, std::filesystem::copy_options::overwrite_existing, writeError);
 					}
-					output.flush();
+					std::filesystem::rename(tempPath, *scriptPath, writeError);
+					if (writeError)
+					{
+						std::filesystem::remove(tempPath, writeError);
+						return {false, false, "Could not replace the script file: " + writeError.message()};
+					}
 					return {true, false, "Lua script created in the project."};
 				}
 				else if constexpr (std::is_same_v<Command, AttachScriptCommand>)
@@ -326,6 +386,7 @@ namespace gameforger::editor
 					entity.position = value.position;
 					entity.isImportedMesh = true;
 					entity.importedMesh.sourcePath = value.sourcePath;
+					entity.colliderType = ColliderType::Mesh;
 					entities_.push_back(entity);
 					return {true, false, "Model imported into the editor scene."};
 				}
@@ -444,6 +505,14 @@ namespace gameforger::editor
 							return {true, false, "Entity collider updated."};
 						}
 					}
+				else if (value.component == "Collider" && value.property == "type")
+					{
+						if (const auto* type = std::get_if<std::string>(&value.value))
+						{
+							entity->colliderType = colliderTypeFromString(*type);
+							return {true, false, "Entity collider type updated."};
+						}
+					}
 					else if (value.component == "CineCamera" && value.property == "enabled")
 					{
 						if (const auto* enabled = std::get_if<bool>(&value.value))
@@ -476,6 +545,166 @@ namespace gameforger::editor
 							{
 								entity->pickupItem.iconPath = *text;
 								return {true, false, "Pickup item icon updated."};
+							}
+						}
+					}
+					else if (value.component == "AudioSource")
+					{
+						if (value.property == "enabled")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->hasAudioSource = *enabled;
+								return {true, false, "Audio source flag updated."};
+							}
+						}
+						if (value.property == "clipAssetPath")
+						{
+							if (const auto* text = std::get_if<std::string>(&value.value))
+							{
+								entity->audioSource.clipAssetPath = *text;
+								return {true, false, "Audio clip updated."};
+							}
+						}
+						if (value.property == "volume")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								entity->audioSource.volume = *number;
+								return {true, false, "Audio volume updated."};
+							}
+						}
+						if (value.property == "pitch")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								entity->audioSource.pitch = *number;
+								return {true, false, "Audio pitch updated."};
+							}
+						}
+						if (value.property == "loop")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.loop = *enabled;
+								return {true, false, "Audio loop updated."};
+							}
+						}
+						if (value.property == "playOnAwake")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.playOnAwake = *enabled;
+								return {true, false, "Audio playOnAwake updated."};
+							}
+						}
+						if (value.property == "is3D")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.is3D = *enabled;
+								return {true, false, "Audio 3D flag updated."};
+							}
+						}
+						// --- effects -------------------------------------------
+						// Ranges are clamped here rather than trusted from the
+						// caller: the panel, the AI and a hand-edited scene file
+						// all reach this same handler, and a delay of 0 seconds
+						// or a feedback of 1.0 would hang or run away.
+						// Fades are on the source, not the effects, so they are
+						// handled here rather than in the AudioEffects table below.
+						if (value.property == "fadeInSeconds" || value.property == "fadeOutSeconds")
+						{
+							if (const auto* number = std::get_if<float>(&value.value))
+							{
+								if (!std::isfinite(*number))
+								{
+									return {false, false, value.property + " must be a finite number."};
+								}
+								// 0 means "no fade"; 30s is well past any sane
+								// ramp and stops a typo holding a voice alive.
+								const float seconds = std::clamp(*number, 0.0F, 30.0F);
+								if (value.property == "fadeInSeconds")
+								{
+									entity->audioSource.fadeInSeconds = seconds;
+								}
+								else
+								{
+									entity->audioSource.fadeOutSeconds = seconds;
+								}
+								return {true, false, value.property + " updated."};
+							}
+							return {false, false, value.property + " expects a number."};
+						}
+						if (value.property == "fxReverb")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.effects.reverb = *enabled;
+								return {true, false, "Reverb toggled."};
+							}
+						}
+						if (value.property == "fxDelay")
+						{
+							if (const auto* enabled = std::get_if<bool>(&value.value))
+							{
+								entity->audioSource.effects.delay = *enabled;
+								return {true, false, "Delay toggled."};
+							}
+						}
+						if (value.property == "fxFilter")
+						{
+							if (const auto* text = std::get_if<std::string>(&value.value))
+							{
+								AudioEffects::Filter parsed = AudioEffects::Filter::None;
+								if (!audioFilterFromName(*text, parsed))
+								{
+									return {false, false,
+										"Unknown audio filter '" + *text + "'. Use none, low_pass or high_pass."};
+								}
+								entity->audioSource.effects.filter = parsed;
+								return {true, false, "Audio filter updated."};
+							}
+						}
+						{
+							struct NumericEffect
+							{
+								const char* property;
+								float AudioEffects::*field;
+								float low;
+								float high;
+							};
+							static constexpr NumericEffect kNumericEffects[] = {
+								{"fxReverbRoomSize", &AudioEffects::reverbRoomSize, 0.0F, 1.0F},
+								{"fxReverbDamping",  &AudioEffects::reverbDamping,  0.0F, 1.0F},
+								{"fxReverbWet",      &AudioEffects::reverbWet,      0.0F, 1.0F},
+								{"fxReverbDry",      &AudioEffects::reverbDry,      0.0F, 1.0F},
+								{"fxDelaySeconds",   &AudioEffects::delaySeconds,   0.01F, 2.0F},
+								// Feedback must stay below 1.0 or the delay line
+								// never decays and the sound grows without bound.
+								{"fxDelayDecay",     &AudioEffects::delayDecay,     0.0F, 0.99F},
+								{"fxDelayWet",       &AudioEffects::delayWet,       0.0F, 1.0F},
+								{"fxDelayDry",       &AudioEffects::delayDry,       0.0F, 1.0F},
+								{"fxCutoffHz",       &AudioEffects::cutoffHz,       20.0F, 20000.0F},
+							};
+							for (const NumericEffect& effect : kNumericEffects)
+							{
+								if (value.property != effect.property)
+								{
+									continue;
+								}
+								if (const auto* number = std::get_if<float>(&value.value))
+								{
+									if (!std::isfinite(*number))
+									{
+										return {false, false,
+											std::string(effect.property) + " must be a finite number."};
+									}
+									entity->audioSource.effects.*effect.field =
+										std::clamp(*number, effect.low, effect.high);
+									return {true, false, std::string(effect.property) + " updated."};
+								}
+								return {false, false, std::string(effect.property) + " expects a number."};
 							}
 						}
 					}
@@ -587,14 +816,11 @@ namespace gameforger::editor
 								return {true, false, "Camera rig updated."};
 							}
 						}
-						if (value.property == "lockCursor")
-						{
-							if (const auto* enabled = std::get_if<bool>(&value.value))
-							{
-								entity->cameraRig.lockCursor = *enabled;
-								return {true, false, "Camera rig updated."};
-							}
-						}
+						// "lockCursor" was handled here. Cursor ownership moved to
+						// GameplayState::cursorLockDesired, set by
+						// self.gameManager:setCursorLock() - see game_manager.lua.
+						// An old scene still carrying the key just falls through
+						// to the unknown-property result below rather than failing.
 					}
 					else if (value.component == "TextMesh")
 					{

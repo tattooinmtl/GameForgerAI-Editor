@@ -31,6 +31,7 @@
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
 #include "GameForger/Editor/SplashScreen.hpp"
+#include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Editor/ViewportRenderer.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
@@ -410,6 +411,11 @@ int main()
 	// each frame via blitToCurrentFramebuffer() since there's no ImGui here
 	// to present through via ImGui::Image().
 	ViewportRenderer viewportRenderer;
+	// A shipped game must not show authoring furniture - the ground grid and
+	// the light / camera / Empty / UI wireframe gizmos are Editor-only. They
+	// rendered here until this call existed, which is exactly what a scene
+	// with lights in it looked like when first run standalone.
+	viewportRenderer.setShowEditorGizmos(false);
 	if (!viewportRenderer.initialize())
 	{
 		std::fprintf(stderr, "Failed to initialize the renderer.\n");
@@ -715,14 +721,45 @@ int main()
 
 		// Camera: whichever entity's script last called self.camera:setMode
 		// (fps/third_person), same framing math as the Editor's Game view -
-		// or a fixed fallback pose if nothing has claimed the camera yet
-		// (no free-look orbit control exists here, unlike the Editor's own
-		// separate "gameCamera" - Runtime has no UI to drive one with).
-		const GameCameraState cameraState = followedEntity != nullptr
-			? scriptedPlayCamera(
-				  *followedEntity, scriptRuntime.activeCameraMode(), gameCameraLookYawDegrees,
-				  gameCameraLookPitchDegrees)
-			: GameCameraState{};
+		// then the scene's Main Camera entity, then a fixed fallback pose.
+		//
+		// The Main Camera step MUST stay in step with the Editor's Game view
+		// (drawGameViewPanel, main.cpp). This project already carries three
+		// defects of exactly the shape "the Editor implements it, the Runtime
+		// stubs it, and nothing catches the divergence until someone ships a
+		// game" - see MissingFunctions.md section 1b. Adding a camera feature
+		// to the Editor alone would have made it a fourth.
+		const SceneEntity* mainCameraEntity = nullptr;
+		for (const SceneEntity& candidate : scene.entities())
+		{
+			if (candidate.isCamera && candidate.camera.isMainCamera && candidate.active)
+			{
+				mainCameraEntity = &candidate;
+				break;
+			}
+		}
+
+		GameCameraState cameraState{};
+		if (followedEntity != nullptr)
+		{
+			cameraState = scriptedPlayCamera(
+				*followedEntity, scriptRuntime.activeCameraMode(), gameCameraLookYawDegrees,
+				gameCameraLookPitchDegrees);
+			viewportRenderer.setLens(50.0F, 0.1F, 200.0F);
+		}
+		else if (mainCameraEntity != nullptr)
+		{
+			cameraState = cameraLookingAt(
+				mainCameraEntity->position,
+				mainCameraEntity->position + entityForward(*mainCameraEntity) * 10.0F);
+			viewportRenderer.setLens(
+				mainCameraEntity->camera.fieldOfViewDegrees, mainCameraEntity->camera.nearClip,
+				mainCameraEntity->camera.farClip);
+		}
+		else
+		{
+			viewportRenderer.setLens(50.0F, 0.1F, 200.0F);
+		}
 		viewportRenderer.setCamera(cameraState.yaw, cameraState.pitch, cameraState.distance, cameraState.target);
 
 		// Standard FPS convention: don't render the player's own body mesh

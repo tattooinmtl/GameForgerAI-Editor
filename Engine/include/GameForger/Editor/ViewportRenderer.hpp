@@ -42,6 +42,18 @@ namespace gameforger::editor
 			const std::filesystem::path& projectRoot,
 			int excludeEntityId = -1);
 		void setCamera(float yaw, float pitch, float distance, const glm::vec3& target) noexcept;
+		// Vertical FOV (degrees) plus the near/far planes used by the next
+		// render(). Defaults reproduce the values that used to be hardcoded
+		// in render(), so a caller that never touches this is unaffected.
+		// The Game view sets these from the active Camera entity's CameraData;
+		// without it, that entity's FOV / clip settings would be authored,
+		// serialized and displayed but never actually applied.
+		void setLens(float fieldOfViewDegrees, float nearClip, float farClip) noexcept;
+		// Whether to draw editor-only decoration: the ground grid and the
+		// wireframe gizmos for lights, cameras, Empties and UI markers.
+		// Defaults true so the Editor is unaffected; GameForgerRuntime turns
+		// it off, because a shipped game must not show authoring furniture.
+		void setShowEditorGizmos(bool show) noexcept { showEditorGizmos_ = show; }
 		void shutdown() noexcept;
 
 		// Blits this renderer's own offscreen color buffer (as of the most
@@ -340,6 +352,10 @@ namespace gameforger::editor
 		float cameraPitch_ = 0.35F;
 		float cameraDistance_ = 4.0F;
 		glm::vec3 cameraTarget_{0.0F};
+		bool showEditorGizmos_ = true;
+		float cameraFieldOfViewDegrees_ = 50.0F;
+		float cameraNearClip_ = 0.1F;
+		float cameraFarClip_ = 200.0F;
 
 		glm::mat4 lastView_{1.0F};
 		glm::mat4 lastProjection_{1.0F};

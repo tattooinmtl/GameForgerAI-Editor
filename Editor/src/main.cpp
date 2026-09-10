@@ -94,6 +94,18 @@ namespace
     using gameforger::editor::AddTagCommand;
     using gameforger::editor::AttachScriptCommand;
     using gameforger::editor::CreateEntityCommand;
+    using gameforger::editor::CreateCameraCommand;
+    using gameforger::editor::CreateLightCommand;
+    using gameforger::editor::CreateUIElementCommand;
+    using gameforger::editor::LightType;
+    using gameforger::editor::lightTypeName;
+    using gameforger::editor::lightTypeFromName;
+    using gameforger::editor::UIAnchor;
+    using gameforger::editor::uiAnchorName;
+    using gameforger::editor::UIElementKind;
+    using gameforger::editor::uiElementKindName;
+    using gameforger::editor::isGizmoOnlyEntity;
+    using gameforger::editor::entityForward;
     using gameforger::editor::CreateScriptCommand;
     using gameforger::editor::DeleteEntityCommand;
     using gameforger::editor::DetachScriptCommand;
@@ -889,6 +901,106 @@ namespace
             {
                 selectOnly(selection, created->id);
             }
+        }
+    }
+
+    // Light / Camera / UI creation share spawnPrimitive's shape: run the
+    // validated command, then select whatever it made so the Inspector is
+    // already showing the new object's settings. `parentName` is optional -
+    // pass it to create the object already parented (the Hierarchy's
+    // "Add Child" path), leave it empty for a top-level object.
+    void spawnLight(
+        EditorScene& scene,
+        AICommandBus& commandBus,
+        SelectionState& selection,
+        ConsoleState& console,
+        const LightType type,
+        const std::string& parentName = {})
+    {
+        CreateLightCommand command;
+        command.type = lightTypeName(type);
+        command.name = makeMenuEntityName(
+            scene,
+            type == LightType::Directional ? "Sun" : (type == LightType::Point ? "PointLight" : "SpotLight"));
+        // A point or spot light aimed straight down from above lights
+        // something immediately; the directional default already carries a
+        // sun angle. Without this a new point light sits at the origin
+        // inside the floor and looks broken.
+        if (type != LightType::Directional)
+        {
+            command.position = glm::vec3(0.0F, 6.0F, 0.0F);
+            command.rotationEuler = glm::vec3(90.0F, 0.0F, 0.0F);
+        }
+        const AICommandResult result = executeLogged(commandBus, command);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
+        if (!result.success)
+        {
+            return;
+        }
+        if (const SceneEntity* created = scene.findEntity(command.name))
+        {
+            if (!parentName.empty())
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{command.name, "Parent", "parentName", parentName});
+            }
+            selectOnly(selection, created->id);
+        }
+    }
+
+    void spawnCamera(
+        EditorScene& scene,
+        AICommandBus& commandBus,
+        SelectionState& selection,
+        ConsoleState& console,
+        const std::string& parentName = {})
+    {
+        CreateCameraCommand command;
+        command.name = makeMenuEntityName(scene, "Camera");
+        // Only claim main-camera status if nothing else has it, so adding a
+        // second camera to rig a cutscene doesn't silently steal the Game
+        // view from the one the scene was built around.
+        command.makeMain = std::none_of(
+            scene.entities().begin(), scene.entities().end(),
+            [](const SceneEntity& entity) { return entity.isCamera && entity.camera.isMainCamera; });
+        const AICommandResult result = executeLogged(commandBus, command);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
+        if (!result.success)
+        {
+            return;
+        }
+        if (const SceneEntity* created = scene.findEntity(command.name))
+        {
+            if (!parentName.empty())
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{command.name, "Parent", "parentName", parentName});
+            }
+            selectOnly(selection, created->id);
+        }
+    }
+
+    void spawnUIElement(
+        EditorScene& scene,
+        AICommandBus& commandBus,
+        SelectionState& selection,
+        ConsoleState& console,
+        const UIElementKind kind,
+        const std::string& parentName = {})
+    {
+        CreateUIElementCommand command;
+        command.kind = uiElementKindName(kind);
+        command.parentName = parentName;
+        command.name = makeMenuEntityName(scene, uiElementKindName(kind));
+        const AICommandResult result = executeLogged(commandBus, command);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
+        if (!result.success)
+        {
+            return;
+        }
+        if (const SceneEntity* created = scene.findEntity(command.name))
+        {
+            selectOnly(selection, created->id);
         }
     }
 
@@ -2355,6 +2467,56 @@ namespace
             {
                 spawnPrimitive(scene, commandBus, selection, PrimitiveType::Capsule, "Capsule");
             }
+            ImGui::Separator();
+            // Create Empty sits at the top of Unity's own GameObject menu; it
+            // is here under the primitives because this menu is ordered
+            // "shapes first", and an Empty is not a shape.
+            if (ImGui::MenuItem("Create Empty"))
+            {
+                spawnPrimitive(scene, commandBus, selection, PrimitiveType::Empty, "Empty");
+            }
+            if (ImGui::BeginMenu("Light"))
+            {
+                if (ImGui::MenuItem("Directional Light (Sun)"))
+                {
+                    spawnLight(scene, commandBus, selection, console, LightType::Directional);
+                }
+                if (ImGui::MenuItem("Point Light"))
+                {
+                    spawnLight(scene, commandBus, selection, console, LightType::Point);
+                }
+                if (ImGui::MenuItem("Spot Light"))
+                {
+                    spawnLight(scene, commandBus, selection, console, LightType::Spot);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Camera"))
+            {
+                spawnCamera(scene, commandBus, selection, console);
+            }
+            if (ImGui::BeginMenu("UI"))
+            {
+                ImGui::TextDisabled("Parent these to a Camera to make them show in Play.");
+                ImGui::Separator();
+                if (ImGui::MenuItem("Crosshair"))
+                {
+                    spawnUIElement(scene, commandBus, selection, console, UIElementKind::Crosshair);
+                }
+                if (ImGui::MenuItem("Text"))
+                {
+                    spawnUIElement(scene, commandBus, selection, console, UIElementKind::Text);
+                }
+                if (ImGui::MenuItem("Image"))
+                {
+                    spawnUIElement(scene, commandBus, selection, console, UIElementKind::Image);
+                }
+                if (ImGui::MenuItem("Panel"))
+                {
+                    spawnUIElement(scene, commandBus, selection, console, UIElementKind::Panel);
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
 
@@ -3428,6 +3590,180 @@ namespace
     // Play, if a script has claimed the camera (self.camera:setMode(...)),
     // this follows that entity instead of using the fixed default framing,
     // and holding right mouse over the image looks around (see PlayModeState).
+    // Screen position an anchor resolves to inside a rect of `size`, before
+    // the element's own pixel offset is added.
+    ImVec2 uiAnchorPoint(const UIAnchor anchor, const ImVec2& origin, const ImVec2& size)
+    {
+        switch (anchor)
+        {
+            case UIAnchor::TopLeft:      return ImVec2(origin.x, origin.y);
+            case UIAnchor::TopCenter:    return ImVec2(origin.x + size.x * 0.5F, origin.y);
+            case UIAnchor::TopRight:     return ImVec2(origin.x + size.x, origin.y);
+            case UIAnchor::MiddleLeft:   return ImVec2(origin.x, origin.y + size.y * 0.5F);
+            case UIAnchor::MiddleRight:  return ImVec2(origin.x + size.x, origin.y + size.y * 0.5F);
+            case UIAnchor::BottomLeft:   return ImVec2(origin.x, origin.y + size.y);
+            case UIAnchor::BottomCenter: return ImVec2(origin.x + size.x * 0.5F, origin.y + size.y);
+            case UIAnchor::BottomRight:  return ImVec2(origin.x + size.x, origin.y + size.y);
+            case UIAnchor::Center: break;
+        }
+        return ImVec2(origin.x + size.x * 0.5F, origin.y + size.y * 0.5F);
+    }
+
+    // Draws every isUIElement entity whose parent chain reaches `hostCamera`,
+    // as a 2D overlay inside the Game view's own on-screen rect.
+    //
+    // Screen-space ImGui draws rather than world geometry, deliberately: this
+    // is the same technique the existing crosshair, pickup hint and detection
+    // icon already use, so a HUD needs no new render pass, no canvas mesh and
+    // no second projection path. The element's 3D transform is ignored -
+    // anchor + offsetPixels place it - which is why a UI element's gizmo in
+    // the Viewport is only a marker for where it sits in the hierarchy.
+    //
+    // `hostCamera` may be null (nothing is looking through a camera), in which
+    // case nothing draws at all - the same as Unity showing no HUD when a
+    // Canvas has no camera.
+    void drawUIElementOverlays(
+        const EditorScene& scene,
+        const SceneEntity* hostCamera,
+        const ImVec2& viewOrigin,
+        const ImVec2& viewSize,
+        const std::filesystem::path& projectRoot)
+    {
+        if (hostCamera == nullptr || viewSize.x <= 0.0F || viewSize.y <= 0.0F)
+        {
+            return;
+        }
+
+        // An element draws if the host camera is anywhere up its parent
+        // chain, not just its immediate parent - so a HUD can be organised
+        // under an Empty ("Camera > HUD > HealthText") the way anyone would
+        // actually lay one out. The walk is depth-capped rather than
+        // cycle-tracked: applyParentConstraints already tolerates cycles, and
+        // a fixed cap keeps this O(depth) with no allocation on a path that
+        // runs for every element every frame.
+        const auto descendsFromHost = [&scene, hostCamera](const SceneEntity& element)
+        {
+            constexpr int kMaxParentDepth = 32;
+            const SceneEntity* walk = &element;
+            for (int depth = 0; depth < kMaxParentDepth; ++depth)
+            {
+                if (walk->parentName.empty())
+                {
+                    return false;
+                }
+                const SceneEntity* parent = scene.findEntity(walk->parentName);
+                if (parent == nullptr)
+                {
+                    return false;
+                }
+                if (parent->id == hostCamera->id)
+                {
+                    return true;
+                }
+                walk = parent;
+            }
+            return false;
+        };
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        // Confine every element to the Game view's rect. Without this a large
+        // panel or a big offset would paint over the Inspector and the menu
+        // bar, which reads as a rendering bug rather than a layout mistake.
+        drawList->PushClipRect(
+            viewOrigin, ImVec2(viewOrigin.x + viewSize.x, viewOrigin.y + viewSize.y), true);
+
+        for (const SceneEntity& element : scene.entities())
+        {
+            if (!element.isUIElement || !element.active || !descendsFromHost(element))
+            {
+                continue;
+            }
+
+            const ImVec2 anchorPoint = uiAnchorPoint(element.ui.anchor, viewOrigin, viewSize);
+            const ImVec2 center(
+                anchorPoint.x + element.ui.offsetPixels.x, anchorPoint.y + element.ui.offsetPixels.y);
+            const float opacity = std::clamp(element.ui.opacity, 0.0F, 1.0F);
+            const ImU32 color = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(element.ui.color.r, element.ui.color.g, element.ui.color.b, opacity));
+
+            switch (element.ui.kind)
+            {
+                case UIElementKind::Crosshair:
+                {
+                    // Four arms around a centre gap - the gap is what makes a
+                    // crosshair readable against a busy scene, and it is the
+                    // control people reach for first.
+                    const float arm = std::max(element.ui.sizePixels.x, 1.0F);
+                    const float gap = std::max(element.ui.gapPixels, 0.0F);
+                    const float thickness = std::max(element.ui.thicknessPixels, 1.0F);
+                    drawList->AddLine(
+                        ImVec2(center.x - gap - arm, center.y), ImVec2(center.x - gap, center.y), color,
+                        thickness);
+                    drawList->AddLine(
+                        ImVec2(center.x + gap, center.y), ImVec2(center.x + gap + arm, center.y), color,
+                        thickness);
+                    drawList->AddLine(
+                        ImVec2(center.x, center.y - gap - arm), ImVec2(center.x, center.y - gap), color,
+                        thickness);
+                    drawList->AddLine(
+                        ImVec2(center.x, center.y + gap), ImVec2(center.x, center.y + gap + arm), color,
+                        thickness);
+                    break;
+                }
+                case UIElementKind::Panel:
+                {
+                    const ImVec2 half(element.ui.sizePixels.x * 0.5F, element.ui.sizePixels.y * 0.5F);
+                    drawList->AddRectFilled(
+                        ImVec2(center.x - half.x, center.y - half.y),
+                        ImVec2(center.x + half.x, center.y + half.y), color, 4.0F);
+                    break;
+                }
+                case UIElementKind::Image:
+                {
+                    const GLuint texture = element.ui.imagePath.empty()
+                        ? 0U
+                        : ensureIconTextureGpu(element.ui.imagePath, projectRoot);
+                    const ImVec2 half(element.ui.sizePixels.x * 0.5F, element.ui.sizePixels.y * 0.5F);
+                    const ImVec2 topLeft(center.x - half.x, center.y - half.y);
+                    const ImVec2 bottomRight(center.x + half.x, center.y + half.y);
+                    if (texture != 0)
+                    {
+                        drawList->AddImage(
+                            static_cast<ImTextureID>(texture), topLeft, bottomRight, ImVec2(0.0F, 0.0F),
+                            ImVec2(1.0F, 1.0F), color);
+                    }
+                    else
+                    {
+                        // No image assigned, or it failed to load. An outline
+                        // beats drawing nothing: the element is visible where
+                        // it was placed, so a missing path reads as a missing
+                        // path rather than as a broken HUD.
+                        drawList->AddRect(topLeft, bottomRight, color, 2.0F, 0, 1.0F);
+                    }
+                    break;
+                }
+                case UIElementKind::Text:
+                {
+                    // The editor's own font, scaled. Loading the element's
+                    // authored fontPath would mean building an ImFont atlas
+                    // per font at runtime, which ImGui only supports between
+                    // frames - so fontPath round-trips through the scene file
+                    // for a later pass but does not change rendering yet.
+                    const float fontSize = std::max(element.ui.fontSizePixels, 1.0F);
+                    const ImVec2 textSize =
+                        ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, element.ui.text.c_str());
+                    drawList->AddText(
+                        ImGui::GetFont(), fontSize,
+                        ImVec2(center.x - textSize.x * 0.5F, center.y - textSize.y * 0.5F), color,
+                        element.ui.text.c_str());
+                    break;
+                }
+            }
+        }
+
+        drawList->PopClipRect();
+    }
+
     void drawGameViewPanel(
         gameforger::editor::ViewportRenderer& renderer,
         const EditorCameraState& gameCamera,
@@ -3453,6 +3789,20 @@ namespace
             // the followed camera's actual eye/forward - keeping one
             // computation avoids drift between what you SEE and what you
             // can interact with.
+            // The scene's Main Camera, used when no script has claimed a
+            // camera. This is what makes a scene viewable in the Game tab
+            // without first attaching a controller script, matching Unity -
+            // and it is also the entity a crosshair/HUD hangs off.
+            const SceneEntity* mainCameraEntity = nullptr;
+            for (const SceneEntity& candidate : scene.entities())
+            {
+                if (candidate.isCamera && candidate.camera.isMainCamera && candidate.active)
+                {
+                    mainCameraEntity = &candidate;
+                    break;
+                }
+            }
+
             GameCameraState scripted{};
             if (followedEntity != nullptr)
             {
@@ -3462,11 +3812,36 @@ namespace
                     playMode.gameCameraLookYawDegrees,
                     playMode.gameCameraLookPitchDegrees);
                 renderer.setCamera(scripted.yaw, scripted.pitch, scripted.distance, scripted.target);
+                // A followed entity carries a rig, not a lens, so keep the
+                // renderer's own default framing for scripted cameras.
+                renderer.setLens(50.0F, 0.1F, 200.0F);
+            }
+            else if (mainCameraEntity != nullptr)
+            {
+                // cameraLookingAt turns an eye + aim point into the orbit
+                // form setCamera wants - the same conversion the scripted FPS
+                // path already uses, so both agree about what "looking that
+                // way" means. The 10-unit aim distance is arbitrary and
+                // cancels out; only the direction matters.
+                const GameCameraState fromCamera = cameraLookingAt(
+                    mainCameraEntity->position,
+                    mainCameraEntity->position + entityForward(*mainCameraEntity) * 10.0F);
+                renderer.setCamera(
+                    fromCamera.yaw, fromCamera.pitch, fromCamera.distance, fromCamera.target);
+                renderer.setLens(
+                    mainCameraEntity->camera.fieldOfViewDegrees, mainCameraEntity->camera.nearClip,
+                    mainCameraEntity->camera.farClip);
             }
             else
             {
                 renderer.setCamera(gameCamera.yaw, gameCamera.pitch, gameCamera.distance, gameCamera.target);
+                renderer.setLens(50.0F, 0.1F, 200.0F);
             }
+
+            // Whichever camera the player is actually looking through - the
+            // one whose UI children should draw this frame.
+            const SceneEntity* uiHostCamera =
+                followedEntity != nullptr ? followedEntity : mainCameraEntity;
             // Standard FPS convention: don't render the player's own body
             // mesh from inside its own head. Automatic, tied to whichever
             // mode the script itself reported via self.camera:setMode(...)
@@ -3481,6 +3856,13 @@ namespace
             const ImVec2 imagePos = ImGui::GetCursorScreenPos();
             ImGui::Image(
                 static_cast<ImTextureID>(renderer.texture()), available, ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
+
+            // Authored HUD (crosshair / text / image / panel) for whatever
+            // camera is being looked through. Drawn immediately after the
+            // scene image so it sits over the 3D view but under the built-in
+            // overlays below (pickup hints, detection icons), which are
+            // engine feedback rather than authored content.
+            drawUIElementOverlays(scene, uiHostCamera, imagePos, available, projectRoot);
 
             // Source of truth is the followed entity's OWN authored
             // preference (Inspector's Camera Rig > Lock Cursor), not a
@@ -4555,6 +4937,45 @@ namespace
         const HWND nativeWindowHandle)
     {
         ImGui::Begin("Toolbox");
+
+        // Lights, Camera and Empty live here as well as under GameObject.
+        // The Toolbox is where a new user actually looks for "what can I
+        // make?", and until now it listed three things while the menus held
+        // the rest.
+        if (ImGui::Button("Directional Light (Sun)", ImVec2(-1.0F, 0.0F)))
+        {
+            spawnLight(scene, commandBus, selection, console, LightType::Directional);
+        }
+        if (ImGui::Button("Point Light", ImVec2(-1.0F, 0.0F)))
+        {
+            spawnLight(scene, commandBus, selection, console, LightType::Point);
+        }
+        if (ImGui::Button("Spot Light", ImVec2(-1.0F, 0.0F)))
+        {
+            spawnLight(scene, commandBus, selection, console, LightType::Spot);
+        }
+        ImGui::TextDisabled(
+            "Aim a light with the Rotate gizmo. Sun and Spot cast shadows; Point lights light but "
+            "do not occlude yet.");
+
+        if (ImGui::Button("Camera", ImVec2(-1.0F, 0.0F)))
+        {
+            spawnCamera(scene, commandBus, selection, console);
+        }
+        ImGui::TextDisabled(
+            "A real game camera. The Game view uses the Main Camera when no script claims one - "
+            "right-click it in the Hierarchy to add a crosshair or HUD.");
+
+        if (ImGui::Button("Empty Object", ImVec2(-1.0F, 0.0F)))
+        {
+            spawnPrimitive(scene, commandBus, selection, PrimitiveType::Empty, "Empty");
+        }
+        ImGui::TextDisabled(
+            "A transform with no mesh - group meshes, lights and cameras under it and move them "
+            "together.");
+
+        ImGui::Separator();
+
         if (ImGui::Button("Text Mesh", ImVec2(-1.0F, 0.0F)))
         {
             textMeshTool.requestOpen = true;
@@ -4961,6 +5382,66 @@ namespace
                                 scene, commandBus, selection, console, projectRoot, nativeWindowHandle, parentName);
                         };
                     }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Empty"))
+                    {
+                        pendingHierarchyAction = [&scene, &commandBus, &selection, parentName = entity.name]()
+                        {
+                            spawnChildPrimitive(
+                                scene, commandBus, selection, PrimitiveType::Empty, "Empty", parentName);
+                        };
+                    }
+                    if (ImGui::BeginMenu("Light"))
+                    {
+                        const auto addLight = [&](const char* label, const LightType type)
+                        {
+                            if (ImGui::MenuItem(label))
+                            {
+                                pendingHierarchyAction =
+                                    [&scene, &commandBus, &selection, &console, type,
+                                     parentName = entity.name]()
+                                { spawnLight(scene, commandBus, selection, console, type, parentName); };
+                            }
+                        };
+                        addLight("Directional Light (Sun)", LightType::Directional);
+                        addLight("Point Light", LightType::Point);
+                        addLight("Spot Light", LightType::Spot);
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::MenuItem("Camera"))
+                    {
+                        pendingHierarchyAction =
+                            [&scene, &commandBus, &selection, &console, parentName = entity.name]()
+                        { spawnCamera(scene, commandBus, selection, console, parentName); };
+                    }
+                    if (ImGui::BeginMenu("UI"))
+                    {
+                        // Only meaningful under a camera, and this is the
+                        // menu where that actually happens - so say which
+                        // camera it will attach to rather than leaving the
+                        // user to find out in Play.
+                        if (!entity.isCamera && !entity.isCineCamera)
+                        {
+                            ImGui::TextDisabled("'%s' is not a Camera - this will not draw", entity.name.c_str());
+                            ImGui::TextDisabled("until something above it is one.");
+                            ImGui::Separator();
+                        }
+                        const auto addUi = [&](const char* label, const UIElementKind kind)
+                        {
+                            if (ImGui::MenuItem(label))
+                            {
+                                pendingHierarchyAction =
+                                    [&scene, &commandBus, &selection, &console, kind,
+                                     parentName = entity.name]()
+                                { spawnUIElement(scene, commandBus, selection, console, kind, parentName); };
+                            }
+                        };
+                        addUi("Crosshair", UIElementKind::Crosshair);
+                        addUi("Text", UIElementKind::Text);
+                        addUi("Image", UIElementKind::Image);
+                        addUi("Panel", UIElementKind::Panel);
+                        ImGui::EndMenu();
+                    }
                     ImGui::EndMenu();
                 }
                 if (ImGui::MenuItem("Delete"))
@@ -5246,6 +5727,283 @@ namespace
         {
             executeLogged(commandBus,SetPropertyCommand{
                 entity.name, "Transform", "scale", glm::vec3(scale[0], scale[1], scale[2])});
+        }
+
+        if (entity.isLight)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Light");
+
+            int typeIndex = static_cast<int>(entity.light.type);
+            if (ImGui::Combo("Type", &typeIndex, "Directional\0Point\0Spot\0"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "Light", "type",
+                    std::string(lightTypeName(static_cast<LightType>(typeIndex)))});
+            }
+
+            std::array<float, 3> lightColor{
+                entity.light.color.r, entity.light.color.g, entity.light.color.b};
+            if (ImGui::ColorEdit3("Color", lightColor.data()))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "Light", "color",
+                    glm::vec3(lightColor[0], lightColor[1], lightColor[2])});
+            }
+
+            float intensity = entity.light.intensity;
+            if (ImGui::DragFloat("Intensity", &intensity, 0.02F, 0.0F, 20.0F))
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{entity.name, "Light", "intensity", intensity});
+            }
+
+            if (entity.light.type == LightType::Directional)
+            {
+                // A sun's position is meaningless - only its rotation matters -
+                // and that is exactly the kind of thing people lose an hour to.
+                ImGui::TextDisabled("Aim with Transform > Rotation. Position is ignored for a sun.");
+            }
+            else
+            {
+                float range = entity.light.range;
+                if (ImGui::DragFloat("Range", &range, 0.25F, 0.1F, 500.0F))
+                {
+                    executeLogged(commandBus, SetPropertyCommand{entity.name, "Light", "range", range});
+                }
+            }
+
+            if (entity.light.type == LightType::Spot)
+            {
+                float innerCone = entity.light.innerConeDegrees;
+                if (ImGui::DragFloat("Inner Cone", &innerCone, 0.5F, 0.0F, 89.0F, "%.1f deg"))
+                {
+                    executeLogged(
+                        commandBus, SetPropertyCommand{entity.name, "Light", "innerCone", innerCone});
+                }
+                float outerCone = entity.light.outerConeDegrees;
+                if (ImGui::DragFloat("Outer Cone", &outerCone, 0.5F, 0.0F, 89.0F, "%.1f deg"))
+                {
+                    executeLogged(
+                        commandBus, SetPropertyCommand{entity.name, "Light", "outerCone", outerCone});
+                }
+                ImGui::TextDisabled("Half-angles from the cone axis, like the gizmo shows.");
+            }
+
+            bool castShadows = entity.light.castShadows;
+            if (ImGui::Checkbox("Cast Shadows", &castShadows))
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{entity.name, "Light", "castShadows", castShadows});
+            }
+            if (castShadows && entity.light.type == LightType::Point)
+            {
+                // Say it here rather than letting someone tick the box, see no
+                // shadow, and assume it is broken.
+                ImGui::TextColored(
+                    ImVec4(0.95F, 0.75F, 0.35F, 1.0F),
+                    "Point lights do not cast shadows yet (needs a cube map).");
+            }
+            if (castShadows && entity.light.type != LightType::Point)
+            {
+                float shadowBias = entity.light.shadowBias;
+                if (ImGui::DragFloat("Shadow Bias", &shadowBias, 0.0001F, 0.0F, 0.05F, "%.4f"))
+                {
+                    executeLogged(
+                        commandBus, SetPropertyCommand{entity.name, "Light", "shadowBias", shadowBias});
+                }
+                ImGui::TextDisabled("Raise if you see stripes; lower if shadows detach from objects.");
+            }
+        }
+
+        if (entity.isCamera)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Camera");
+
+            bool isMain = entity.camera.isMainCamera;
+            if (ImGui::Checkbox("Main Camera", &isMain))
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{entity.name, "Camera", "isMainCamera", isMain});
+            }
+            ImGui::TextDisabled("The Game view uses this camera when no script has claimed one.");
+
+            float fieldOfView = entity.camera.fieldOfViewDegrees;
+            if (ImGui::DragFloat("Field of View", &fieldOfView, 0.5F, 1.0F, 179.0F, "%.1f deg"))
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{entity.name, "Camera", "fieldOfView", fieldOfView});
+            }
+            float nearClip = entity.camera.nearClip;
+            if (ImGui::DragFloat("Near Clip", &nearClip, 0.01F, 0.001F, 100.0F, "%.3f"))
+            {
+                executeLogged(
+                    commandBus, SetPropertyCommand{entity.name, "Camera", "nearClip", nearClip});
+            }
+            float farClip = entity.camera.farClip;
+            if (ImGui::DragFloat("Far Clip", &farClip, 1.0F, 0.1F, 10000.0F))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "Camera", "farClip", farClip});
+            }
+            std::array<float, 3> clearColor{
+                entity.camera.clearColor.r, entity.camera.clearColor.g, entity.camera.clearColor.b};
+            if (ImGui::ColorEdit3("Background", clearColor.data()))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "Camera", "clearColor",
+                    glm::vec3(clearColor[0], clearColor[1], clearColor[2])});
+            }
+            ImGui::TextDisabled("Right-click this camera in the Hierarchy to add a crosshair or HUD.");
+        }
+
+        if (entity.isUIElement)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("UI Element");
+
+            // The single most common mistake with this feature is authoring a
+            // perfect HUD element that never appears, because nothing parents
+            // it to a camera. Say so, right here, before anything else.
+            const SceneEntity* uiCameraAncestor = nullptr;
+            for (const SceneEntity* walk = &entity; walk != nullptr && !walk->parentName.empty();)
+            {
+                const SceneEntity* parent = scene.findEntity(walk->parentName);
+                if (parent == nullptr)
+                {
+                    break;
+                }
+                if (parent->isCamera || parent->isCineCamera)
+                {
+                    uiCameraAncestor = parent;
+                    break;
+                }
+                walk = parent;
+            }
+            if (uiCameraAncestor == nullptr)
+            {
+                ImGui::TextColored(
+                    ImVec4(0.95F, 0.75F, 0.35F, 1.0F),
+                    "Not under a Camera - this will not draw in Play.");
+                ImGui::TextDisabled("Drag it onto a Camera in the Hierarchy.");
+            }
+            else
+            {
+                ImGui::TextDisabled("Draws through '%s'.", uiCameraAncestor->name.c_str());
+            }
+
+            int kindIndex = static_cast<int>(entity.ui.kind);
+            if (ImGui::Combo("Kind", &kindIndex, "Crosshair\0Image\0Text\0Panel\0"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "UI", "kind",
+                    std::string(uiElementKindName(static_cast<UIElementKind>(kindIndex)))});
+            }
+
+            int anchorIndex = static_cast<int>(entity.ui.anchor);
+            if (ImGui::Combo(
+                    "Anchor", &anchorIndex,
+                    "Center\0Top Left\0Top Center\0Top Right\0Middle Left\0Middle Right\0"
+                    "Bottom Left\0Bottom Center\0Bottom Right\0"))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "UI", "anchor",
+                    std::string(uiAnchorName(static_cast<UIAnchor>(anchorIndex)))});
+            }
+
+            std::array<float, 2> offset{entity.ui.offsetPixels.x, entity.ui.offsetPixels.y};
+            if (ImGui::DragFloat2("Offset (px)", offset.data(), 1.0F))
+            {
+                // vec2 fields ride in on a vec3's xy - EditableValue has no
+                // vec2 member, and adding one would touch every command
+                // consumer for two fields. See EditorScene.cpp's "UI" branch.
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "UI", "offset", glm::vec3(offset[0], offset[1], 0.0F)});
+            }
+
+            if (entity.ui.kind != UIElementKind::Text)
+            {
+                std::array<float, 2> size{entity.ui.sizePixels.x, entity.ui.sizePixels.y};
+                const char* sizeLabel =
+                    entity.ui.kind == UIElementKind::Crosshair ? "Arm Length (px)" : "Size (px)";
+                if (ImGui::DragFloat2(sizeLabel, size.data(), 1.0F, 1.0F, 4096.0F))
+                {
+                    executeLogged(commandBus, SetPropertyCommand{
+                        entity.name, "UI", "size", glm::vec3(size[0], size[1], 0.0F)});
+                }
+            }
+
+            std::array<float, 3> uiColor{entity.ui.color.r, entity.ui.color.g, entity.ui.color.b};
+            if (ImGui::ColorEdit3("Color", uiColor.data()))
+            {
+                executeLogged(commandBus, SetPropertyCommand{
+                    entity.name, "UI", "color", glm::vec3(uiColor[0], uiColor[1], uiColor[2])});
+            }
+            float opacity = entity.ui.opacity;
+            if (ImGui::SliderFloat("Opacity", &opacity, 0.0F, 1.0F))
+            {
+                executeLogged(commandBus, SetPropertyCommand{entity.name, "UI", "opacity", opacity});
+            }
+
+            if (entity.ui.kind == UIElementKind::Crosshair)
+            {
+                float thickness = entity.ui.thicknessPixels;
+                if (ImGui::DragFloat("Thickness (px)", &thickness, 0.25F, 1.0F, 32.0F))
+                {
+                    executeLogged(
+                        commandBus, SetPropertyCommand{entity.name, "UI", "thickness", thickness});
+                }
+                float gap = entity.ui.gapPixels;
+                if (ImGui::DragFloat("Center Gap (px)", &gap, 0.25F, 0.0F, 64.0F))
+                {
+                    executeLogged(commandBus, SetPropertyCommand{entity.name, "UI", "gap", gap});
+                }
+            }
+
+            if (entity.ui.kind == UIElementKind::Text)
+            {
+                static int lastUiTextEntityId = -1;
+                static std::array<char, 512> uiTextBuffer{};
+                if (lastUiTextEntityId != entity.id)
+                {
+                    std::snprintf(uiTextBuffer.data(), uiTextBuffer.size(), "%s", entity.ui.text.c_str());
+                    lastUiTextEntityId = entity.id;
+                }
+                ImGui::InputTextMultiline(
+                    "Text", uiTextBuffer.data(), uiTextBuffer.size(), ImVec2(0.0F, 50.0F));
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    executeLogged(commandBus, SetPropertyCommand{
+                        entity.name, "UI", "text", std::string(uiTextBuffer.data())});
+                }
+                float fontSize = entity.ui.fontSizePixels;
+                if (ImGui::DragFloat("Font Size (px)", &fontSize, 0.5F, 4.0F, 256.0F))
+                {
+                    executeLogged(
+                        commandBus, SetPropertyCommand{entity.name, "UI", "fontSize", fontSize});
+                }
+            }
+
+            if (entity.ui.kind == UIElementKind::Image)
+            {
+                ImGui::Text(
+                    "Image: %s",
+                    entity.ui.imagePath.empty() ? "(none)" : entity.ui.imagePath.c_str());
+                if (ImGui::Button("Choose Image...", ImVec2(-1.0F, 0.0F)))
+                {
+                    const std::filesystem::path iconsDirectory = projectRoot / "Game" / "Icons";
+                    if (const std::optional<std::filesystem::path> picked =
+                            showOpenImageDialog(nativeWindowHandle, iconsDirectory))
+                    {
+                        if (const std::optional<std::string> imported =
+                                importIconIntoProject(*picked, projectRoot))
+                        {
+                            executeLogged(commandBus, SetPropertyCommand{
+                                entity.name, "UI", "imagePath", *imported});
+                        }
+                    }
+                }
+            }
         }
 
         if (entity.isTextMesh)
@@ -6796,6 +7554,20 @@ namespace
     // so re-triangulating on click is cheap enough to not need its own cache.
     std::pair<glm::vec3, glm::vec3> entityLocalBounds(const SceneEntity& entity, const std::filesystem::path& projectRoot)
     {
+        if (isGizmoOnlyEntity(entity))
+        {
+            // Lights, cameras, Empties and UI markers have no mesh, so their
+            // click target is a small fixed box around the origin.
+            //
+            // It must be divided by the entity's own scale, because the
+            // renderer deliberately draws these gizmos at a size that means
+            // something (a point light's ring IS its range) rather than at the
+            // authored scale - so an unscaled box here would drift away from
+            // the shape actually on screen the moment someone scales a light,
+            // and you would be clicking empty space.
+            const glm::vec3 safeScale = glm::max(glm::abs(entity.scale), glm::vec3(0.0001F));
+            return {glm::vec3(-0.5F) / safeScale, glm::vec3(0.5F) / safeScale};
+        }
         if (entity.isTerrain)
         {
             // Approximate box (ignores exact per-vertex heights, like every

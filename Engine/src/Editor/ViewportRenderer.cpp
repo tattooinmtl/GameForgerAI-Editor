@@ -1148,18 +1148,21 @@ void main()
 
 		const glm::vec3 eye = cameraPosition();
 		lastProjection_ = glm::perspective(
-			glm::radians(50.0F),
+			glm::radians(cameraFieldOfViewDegrees_),
 			static_cast<float>(width_) / static_cast<float>(height_),
-			0.1F,
-			200.0F);
+			cameraNearClip_,
+			cameraFarClip_);
 		lastView_ = glm::lookAt(eye, cameraTarget_, glm::vec3(0.0F, 1.0F, 0.0F));
 		const glm::mat4 viewProjection = lastProjection_ * lastView_;
 
 		glUseProgram(lineShaderProgram_);
 		const GLint lineMvpLocation = glGetUniformLocation(lineShaderProgram_, "modelViewProjection");
 		glUniformMatrix4fv(lineMvpLocation, 1, GL_FALSE, glm::value_ptr(viewProjection));
-		glBindVertexArray(gridVertexArray_);
-		glDrawArrays(GL_LINES, 0, gridVertexCount_);
+		if (showEditorGizmos_)
+		{
+			glBindVertexArray(gridVertexArray_);
+			glDrawArrays(GL_LINES, 0, gridVertexCount_);
+		}
 		glBindVertexArray(0);
 
 		// Every lit program gets the same light set. Done once per frame here
@@ -1445,6 +1448,7 @@ void main()
 		// cameras and real cameras share the frustum icon; lights get a shape
 		// per type; Empties get axis crosshairs; UI elements get a screen
 		// marker. Grouped into one pass so the line program is bound once.
+		if (showEditorGizmos_)
 		{
 			glUseProgram(lineShaderProgram_);
 			for (const SceneEntity& entity : entities)
@@ -1891,6 +1895,18 @@ void main()
 		cameraPitch_ = glm::clamp(pitch, -1.45F, 1.45F);
 		cameraDistance_ = glm::clamp(distance, 1.5F, 60.0F);
 		cameraTarget_ = target;
+	}
+
+	void ViewportRenderer::setLens(
+		const float fieldOfViewDegrees, const float nearClip, const float farClip) noexcept
+	{
+		// Clamped rather than trusted: these come from authored CameraData,
+		// and a zero/negative FOV or an inverted clip range produces a
+		// degenerate projection matrix that renders nothing at all - a much
+		// worse failure than being quietly held to a sane range.
+		cameraFieldOfViewDegrees_ = glm::clamp(fieldOfViewDegrees, 1.0F, 179.0F);
+		cameraNearClip_ = glm::max(nearClip, 0.001F);
+		cameraFarClip_ = glm::max(farClip, cameraNearClip_ + 0.001F);
 	}
 
 	void ViewportRenderer::shutdown() noexcept

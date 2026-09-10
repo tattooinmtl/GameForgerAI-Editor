@@ -100,10 +100,19 @@ press Play and is silently inert in the built game. No warning, no log, no faile
 | 1b.2 | **Catapult aiming state is dead.** `aimingCatapultQueryCallback` always returns `false`; `operatingCatapultSetCallback` discards the value. A script can never enter or detect catapult mode. | real | `false` / no-op | `main.cpp:2527-2530` vs `Runtime/src/main.cpp:482-483` |
 | 1b.3 | **Held-item state is dead.** `heldItemQueryCallback` always returns `false`, so any script branching on "am I carrying something" takes the wrong branch for the whole game. | real | `false` | `main.cpp:2525-2526` vs `Runtime/src/main.cpp:481` |
 
+| 1b.4 | **Authored HUD does not draw in a shipped game.** UI elements (crosshair / text / image / panel) parented to a camera render in the Editor's Game view via `drawUIElementOverlays` (`main.cpp`), which is ImGui-based. `GameForgerRuntime` does not link ImGui at all, so nothing draws them there. **Found and recorded while building the feature, not after shipping it** — the fix is a small 2D overlay renderer, and the machinery already exists in `Runtime/src/GameMenu.cpp` (an orthographic tinted/textured-quad shader plus a baked stb_truetype atlas); the honest version extracts that into Engine so both hosts share one path instead of the Editor keeping a private one. | BROKEN | `main.cpp` `drawUIElementOverlays` vs `Runtime/CMakeLists.txt:15-21` (no ImGui) |
+
 **Why this exists:** the Runtime has no inventory UI and no catapult UI, so the callbacks were
 stubbed rather than backed by Runtime-side state. The fix is not UI — it is moving the
 gameplay state these read (`heldItemEntityName`, `playerOperatingCatapult`, the projectile
 list) into `GameplayState`, which the Runtime already owns and already ticks.
+
+**Two more of this class were caught during the lights/camera work and fixed on the spot,
+which is the pattern to keep:** the Runtime had no Main Camera fallback (a scene with a
+camera and no player script was unviewable standalone), and it rendered the Editor's ground
+grid and light/camera wireframe gizmos into the shipped game. Both were found by actually
+running `GameForgerRuntime` against a new scene rather than by reading the Editor's code —
+which is the only reliable way to catch a seam defect.
 
 **The structural risk is worse than the three defects.** Nothing prevents a fourth. Any
 future `scriptConfig.*` callback can be implemented in `main.cpp` and stubbed in
@@ -200,6 +209,7 @@ Checked directly, not assumed:
 | 5.4 | **No engine-version compatibility check** on a loaded game. | MISSING | — | 6 |
 | 5.5 | **The Runtime takes no command-line game argument** and has no file association. | MISSING | `Runtime/src/main.cpp` | 6 |
 | 5.6 | **`GameForgerRuntime` is not in the default build preset** — it needs an explicit `--target`, so it silently goes stale. | DEBT | `CMakePresets.json` | 6 |
+| 5.7 | **Neither is `GameForgerTests`, and that makes `ctest` lie.** `cmake --build --preset editor-debug` builds only `GameForgerEditor`, so a following `ctest -C Debug` happily runs a **stale test binary** and reports all green — including for tests that do not exist in it yet. Confirmed directly: three newly added tests reported "29 passed" (the old count) until `--target GameForgerTests` was built explicitly, then "32 passed". Any "CTest green" claim made without building that target first is worthless. Add both executables to the preset, or always build the target by name. | DEBT | `CMakePresets.json:35-46` | 6 |
 
 ## 6. AI layer
 

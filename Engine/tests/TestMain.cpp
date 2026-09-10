@@ -21,6 +21,7 @@
 #include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
+#include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
@@ -727,6 +728,203 @@ void testParentColliderSolidsChildren()
 		resolveBoxCollision(scene, 999, glm::vec3(0.0F, 0.0F, 0.0F), 0.4F, 2.0F);
 	TEST_ASSERT(std::abs(courtyard.position.x) < 0.01F && std::abs(courtyard.position.y) < 0.01F,
 		"Parent collider must not fill the courtyard with the root cube AABB");
+}
+
+// Light / Camera / UI-element round-trip, plus the two invariants that are
+// easy to break silently:
+//   - enums must survive as NAMES, so reordering LightType/UIElementKind
+//     cannot reinterpret an existing saved scene as a different type;
+//   - PrimitiveType::Empty must not come back as a Cube, which is exactly what
+//     happens if a new enumerator is added without updating BOTH sides of the
+//     name mapping in SceneSerializer.cpp.
+void testLightCameraUiRoundTrip()
+{
+	const std::filesystem::path sceneFile = "test_light_camera_ui.scene";
+
+	SceneEntity sun;
+	sun.name = "Sun";
+	sun.isLight = true;
+	sun.light.type = LightType::Directional;
+	sun.light.color = glm::vec3(1.0F, 0.5F, 0.25F);
+	sun.light.intensity = 2.5F;
+	sun.light.castShadows = true;
+	sun.light.shadowBias = 0.0042F;
+
+	SceneEntity spot;
+	spot.name = "Spot";
+	spot.isLight = true;
+	spot.light.type = LightType::Spot;
+	spot.light.range = 33.5F;
+	spot.light.innerConeDegrees = 12.0F;
+	spot.light.outerConeDegrees = 41.0F;
+	spot.light.castShadows = false;
+
+	SceneEntity camera;
+	camera.name = "MainCam";
+	camera.isCamera = true;
+	camera.camera.fieldOfViewDegrees = 72.5F;
+	camera.camera.nearClip = 0.25F;
+	camera.camera.farClip = 900.0F;
+	camera.camera.clearColor = glm::vec3(0.1F, 0.2F, 0.3F);
+	camera.camera.isMainCamera = true;
+
+	SceneEntity crosshair;
+	crosshair.name = "Crosshair";
+	crosshair.isUIElement = true;
+	crosshair.parentName = "MainCam";
+	crosshair.ui.kind = UIElementKind::Crosshair;
+	crosshair.ui.anchor = UIAnchor::BottomRight;
+	crosshair.ui.offsetPixels = glm::vec2(-18.0F, 24.0F);
+	crosshair.ui.sizePixels = glm::vec2(11.0F, 13.0F);
+	crosshair.ui.opacity = 0.5F;
+	crosshair.ui.thicknessPixels = 3.0F;
+	crosshair.ui.gapPixels = 7.0F;
+
+	SceneEntity hudText;
+	hudText.name = "Ammo";
+	hudText.isUIElement = true;
+	hudText.ui.kind = UIElementKind::Text;
+	hudText.ui.text = "Ammo: 42";
+	hudText.ui.fontSizePixels = 27.0F;
+
+	SceneEntity empty;
+	empty.name = "Group";
+	empty.primitive = PrimitiveType::Empty;
+
+	const SceneSaveResult saved =
+		saveScene(sceneFile, {sun, spot, camera, crosshair, hudText, empty});
+	TEST_ASSERT(saved.success, "Saving a scene with lights/camera/UI must succeed");
+
+	const SceneLoadResult loaded = loadScene(sceneFile);
+	TEST_ASSERT(loaded.success, "Loading a scene with lights/camera/UI must succeed");
+	TEST_ASSERT(loaded.entities.size() == 6, "All six entities must round-trip");
+
+	const SceneEntity& loadedSun = loaded.entities[0];
+	TEST_ASSERT(loadedSun.isLight, "Sun must still be a light");
+	TEST_ASSERT(loadedSun.light.type == LightType::Directional, "Sun light type");
+	TEST_ASSERT(std::abs(loadedSun.light.intensity - 2.5F) < 0.001F, "Sun intensity");
+	TEST_ASSERT(std::abs(loadedSun.light.color.g - 0.5F) < 0.001F, "Sun color");
+	TEST_ASSERT(loadedSun.light.castShadows, "Sun cast shadows flag");
+	TEST_ASSERT(std::abs(loadedSun.light.shadowBias - 0.0042F) < 0.0001F, "Sun shadow bias");
+
+	const SceneEntity& loadedSpot = loaded.entities[1];
+	TEST_ASSERT(loadedSpot.light.type == LightType::Spot, "Spot light type");
+	TEST_ASSERT(std::abs(loadedSpot.light.range - 33.5F) < 0.001F, "Spot range");
+	TEST_ASSERT(std::abs(loadedSpot.light.innerConeDegrees - 12.0F) < 0.001F, "Spot inner cone");
+	TEST_ASSERT(std::abs(loadedSpot.light.outerConeDegrees - 41.0F) < 0.001F, "Spot outer cone");
+	TEST_ASSERT(!loadedSpot.light.castShadows, "Spot cast shadows must stay off");
+
+	const SceneEntity& loadedCamera = loaded.entities[2];
+	TEST_ASSERT(loadedCamera.isCamera, "Camera flag");
+	TEST_ASSERT(std::abs(loadedCamera.camera.fieldOfViewDegrees - 72.5F) < 0.001F, "Camera FOV");
+	TEST_ASSERT(std::abs(loadedCamera.camera.nearClip - 0.25F) < 0.001F, "Camera near clip");
+	TEST_ASSERT(std::abs(loadedCamera.camera.farClip - 900.0F) < 0.01F, "Camera far clip");
+	TEST_ASSERT(loadedCamera.camera.isMainCamera, "Main camera flag");
+
+	const SceneEntity& loadedCrosshair = loaded.entities[3];
+	TEST_ASSERT(loadedCrosshair.isUIElement, "Crosshair UI flag");
+	TEST_ASSERT(loadedCrosshair.ui.kind == UIElementKind::Crosshair, "Crosshair kind");
+	TEST_ASSERT(loadedCrosshair.ui.anchor == UIAnchor::BottomRight, "Crosshair anchor");
+	TEST_ASSERT(loadedCrosshair.parentName == "MainCam", "Crosshair parent must survive");
+	TEST_ASSERT(std::abs(loadedCrosshair.ui.offsetPixels.x + 18.0F) < 0.001F, "Crosshair offset x");
+	TEST_ASSERT(std::abs(loadedCrosshair.ui.sizePixels.y - 13.0F) < 0.001F, "Crosshair size y");
+	TEST_ASSERT(std::abs(loadedCrosshair.ui.gapPixels - 7.0F) < 0.001F, "Crosshair gap");
+
+	const SceneEntity& loadedText = loaded.entities[4];
+	TEST_ASSERT(loadedText.ui.kind == UIElementKind::Text, "HUD text kind");
+	TEST_ASSERT(loadedText.ui.text == "Ammo: 42", "HUD text content");
+	TEST_ASSERT(std::abs(loadedText.ui.fontSizePixels - 27.0F) < 0.001F, "HUD text font size");
+
+	// The regression this guards: a new PrimitiveType enumerator that the
+	// serializer's name mapping does not know about falls through to "cube",
+	// so an Empty silently becomes a solid Cube on reload.
+	TEST_ASSERT(
+		loaded.entities[5].primitive == PrimitiveType::Empty,
+		"PrimitiveType::Empty must not round-trip as a Cube");
+
+	// Entities that are none of these must not gain the flags by accident -
+	// the writer emits the light/camera/ui blocks unconditionally, so a bad
+	// default in the reader would turn every object in every scene into a light.
+	TEST_ASSERT(!loaded.entities[5].isLight, "A plain entity must not become a light");
+	TEST_ASSERT(!loaded.entities[5].isCamera, "A plain entity must not become a camera");
+	TEST_ASSERT(!loaded.entities[5].isUIElement, "A plain entity must not become a UI element");
+
+	std::filesystem::remove(sceneFile);
+	std::filesystem::remove(sceneFile.string() + ".bak");
+}
+
+// Lights and cameras are aimed with the ordinary Rotate gizmo, so
+// entityForward() IS the light direction - if it disagrees with the project's
+// local-+Z forward convention, every light in every scene points the wrong way.
+void testEntityForwardMatchesForwardConvention()
+{
+	SceneEntity unrotated;
+	const glm::vec3 forward = entityForward(unrotated);
+	TEST_ASSERT(std::abs(forward.z - 1.0F) < 0.001F, "Unrotated forward must be local +Z");
+	TEST_ASSERT(std::abs(forward.x) < 0.001F, "Unrotated forward must have no X");
+
+	// Yaw 90 degrees: +Z swings to +X, matching yawPitchForward's own
+	// sin(yaw)/cos(yaw) convention that fps_controller.lua depends on.
+	SceneEntity yawed;
+	yawed.rotationEuler = glm::vec3(0.0F, 90.0F, 0.0F);
+	const glm::vec3 yawedForward = entityForward(yawed);
+	TEST_ASSERT(std::abs(yawedForward.x - 1.0F) < 0.001F, "Yaw 90 must point along +X");
+
+	// Pitch must be honoured - this is the whole reason entityForward exists
+	// separately from the script API's deliberately yaw-only getForward().
+	SceneEntity pitched;
+	pitched.rotationEuler = glm::vec3(-90.0F, 0.0F, 0.0F);
+	const glm::vec3 pitchedForward = entityForward(pitched);
+	TEST_ASSERT(std::abs(pitchedForward.y - 1.0F) < 0.001F, "Pitch -90 must point along +Y");
+
+	// Scale must not leak into the direction: a light stretched on Z still
+	// points the same way, and a zero scale must not produce a zero vector.
+	SceneEntity scaled;
+	scaled.scale = glm::vec3(1.0F, 1.0F, 7.0F);
+	const glm::vec3 scaledForward = entityForward(scaled);
+	TEST_ASSERT(std::abs(glm::length(scaledForward) - 1.0F) < 0.001F, "Forward must be normalized");
+
+	SceneEntity zeroScaled;
+	zeroScaled.scale = glm::vec3(0.0F);
+	const glm::vec3 zeroForward = entityForward(zeroScaled);
+	TEST_ASSERT(glm::length(zeroForward) > 0.5F, "Zero scale must still yield a usable direction");
+}
+
+// isGizmoOnlyEntity gates the mesh pass, and the mesh pass indexes a
+// 6-element array by PrimitiveType - so a false negative for Empty is an
+// out-of-bounds read, not just a cosmetic bug.
+void testGizmoOnlyEntityClassification()
+{
+	SceneEntity cube;
+	TEST_ASSERT(!isGizmoOnlyEntity(cube), "A plain cube has mesh geometry");
+
+	SceneEntity empty;
+	empty.primitive = PrimitiveType::Empty;
+	TEST_ASSERT(isGizmoOnlyEntity(empty), "Empty must be gizmo-only");
+
+	SceneEntity light;
+	light.isLight = true;
+	TEST_ASSERT(isGizmoOnlyEntity(light), "A light must be gizmo-only");
+
+	SceneEntity camera;
+	camera.isCamera = true;
+	TEST_ASSERT(isGizmoOnlyEntity(camera), "A camera must be gizmo-only");
+
+	SceneEntity ui;
+	ui.isUIElement = true;
+	TEST_ASSERT(isGizmoOnlyEntity(ui), "A UI element must be gizmo-only");
+
+	SceneEntity cine;
+	cine.isCineCamera = true;
+	TEST_ASSERT(isGizmoOnlyEntity(cine), "A cine camera must stay gizmo-only");
+
+	// A terrain/text/imported mesh whose `primitive` field happens to still be
+	// Empty DOES have geometry - its shape comes from elsewhere, and skipping
+	// it would make the terrain vanish.
+	SceneEntity terrain;
+	terrain.primitive = PrimitiveType::Empty;
+	terrain.isTerrain = true;
+	TEST_ASSERT(!isGizmoOnlyEntity(terrain), "Terrain draws even if primitive is Empty");
 }
 
 void testColliderBoxMeshConvexTypes()
@@ -1882,6 +2080,9 @@ int main()
 	RUN_TEST(testColliderPrimitiveBlocksWhenChecked);
 	RUN_TEST(testImportedMeshColliderUsesTrianglesNotScaleBox);
 	RUN_TEST(testParentColliderSolidsChildren);
+	RUN_TEST(testLightCameraUiRoundTrip);
+	RUN_TEST(testEntityForwardMatchesForwardConvention);
+	RUN_TEST(testGizmoOnlyEntityClassification);
 	RUN_TEST(testColliderBoxMeshConvexTypes);
 	RUN_TEST(testChatResponseBothProtocols);
 	RUN_TEST(testResolveProjectFileConfinement);

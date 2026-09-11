@@ -23,7 +23,9 @@
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
+#include "GameForger/Editor/MindGraph/GraphCompiler.hpp"
 #include "GameForger/Editor/MindGraph/GraphSerializer.hpp"
+#include "GameForger/Editor/MindGraph/NodeCatalog.hpp"
 #include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
@@ -890,6 +892,366 @@ void testEntityForwardMatchesForwardConvention()
 	zeroScaled.scale = glm::vec3(0.0F);
 	const glm::vec3 zeroForward = entityForward(zeroScaled);
 	TEST_ASSERT(glm::length(zeroForward) > 0.5F, "Zero scale must still yield a usable direction");
+}
+
+// THE TEST THAT MATTERS MOST for Phase 2: does the generated Lua actually load
+// and run in the real ScriptRuntime?
+//
+// Everything else here checks that the compiler emits the text we intended.
+// This checks the only thing the player experiences - that the text is a valid
+// script the engine accepts. Generated code that does not parse is worthless
+// however well-formed it looks in a diff, and a syntax error would otherwise
+// surface at Play time, long after the edit that caused it.
+void testMindGraphGeneratedLuaRuns()
+{
+	using namespace gameforger::editor::mindgraph;
+	namespace fs = std::filesystem;
+
+	MindGraph graph;
+	graph.name = "GeneratedProbe";
+
+	// Deliberately exercises every emitter, not just the easy ones: an event,
+	// an audio call, a world call, a branch (which nests), a delay (which
+	// emits a closure), and a zone event (which emits a guarded block).
+	GraphNode start{};
+	start.id = 1;
+	start.type = "event.game_start";
+	GraphNode play{};
+	play.id = 2;
+	play.type = "audio.play";
+	play.literals["clip"] = "Game/Audio/alarm.wav";
+	play.literals["loop"] = "true";
+	GraphNode branch{};
+	branch.id = 3;
+	branch.type = "flow.branch";
+	GraphNode hide{};
+	hide.id = 4;
+	hide.type = "world.set_active";
+	hide.literals["target"] = "Vault Door";
+	hide.literals["active"] = "false";
+	GraphNode delay{};
+	delay.id = 5;
+	delay.type = "flow.delay";
+	delay.literals["seconds"] = "0.5";
+	GraphNode light{};
+	light.id = 6;
+	light.type = "world.set_light";
+	light.literals["target"] = "Alarm Light";
+	light.literals["intensity"] = "4.0";
+	GraphNode zone{};
+	zone.id = 7;
+	zone.type = "event.zone_enter";
+	zone.literals["zone"] = "Vault";
+	zone.literals["watch_tag"] = "Player";
+	GraphNode update{};
+	update.id = 8;
+	update.type = "event.update";
+
+	graph.nodes = {start, play, branch, hide, delay, light, zone, update};
+	graph.links = {
+		GraphLink{1, 1, "exec_out", 2, "exec_in"},
+		GraphLink{2, 2, "exec_out", 3, "exec_in"},
+		GraphLink{3, 3, "exec_true", 4, "exec_in"},
+		GraphLink{4, 3, "exec_false", 5, "exec_in"},
+		GraphLink{5, 5, "exec_out", 6, "exec_in"},
+		GraphLink{6, 7, "exec_out", 6, "exec_in"},
+	};
+
+	const CompileResult compiled = compileGraph(graph);
+	TEST_ASSERT(compiled.success, "The probe graph must compile");
+
+	// Written under Game/Scripts because startScript confines paths there and
+	// rejects anything outside. The "test_" prefix is what
+	// testAllShippedScriptsLoad skips, so this probe cannot be mistaken for
+	// shipped content by that test or by a reader browsing the folder.
+	fs::path scriptsDir;
+	{
+		std::error_code walkError;
+		fs::path candidate = fs::current_path(walkError);
+		for (int depth = 0; depth < 6 && !candidate.empty(); ++depth)
+		{
+			const fs::path guess = candidate / "Game" / "Scripts";
+			std::error_code ec;
+			if (fs::is_directory(guess, ec))
+			{
+				scriptsDir = guess;
+				break;
+			}
+			if (!candidate.has_parent_path() || candidate.parent_path() == candidate)
+			{
+				break;
+			}
+			candidate = candidate.parent_path();
+		}
+	}
+	if (scriptsDir.empty())
+	{
+		std::error_code ec;
+		scriptsDir = fs::current_path(ec) / "Game" / "Scripts";
+		fs::create_directories(scriptsDir, ec);
+	}
+
+	std::cerr << "----- generated Lua -----\n" << compiled.lua << "-------------------------\n";
+	const fs::path probePath = scriptsDir / "test_generated_graph.lua";
+	{
+		std::ofstream out(probePath, std::ios::binary);
+		TEST_ASSERT(out.good(), "Must be able to write the probe script");
+		out << compiled.lua;
+	}
+
+	EditorScene scene(".");
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	MockInputSource input;
+	ScriptRuntime runtime;
+	// A log callback, so a Lua error names itself instead of the test just
+	// reporting "did not start".
+	ScriptRuntime::Config probeConfig;
+	probeConfig.logCallback = [](bool, const std::string& message)
+	{ std::cerr << "       lua: " << message << "\n"; };
+	runtime.initialize(scene, bus, input, std::move(probeConfig));
+
+	const fs::path projectRoot = scriptsDir.parent_path().parent_path();
+	std::cerr << "       probe at: " << probePath.string() << "\n";
+	std::cerr << "       projectRoot: " << projectRoot.string() << "\n";
+	std::cerr << "       exists: " << (fs::exists(probePath) ? "yes" : "no") << "\n";
+	const bool started = runtime.startScript(1, "Game/Scripts/test_generated_graph.lua", projectRoot);
+	TEST_ASSERT(started, "Generated Lua must load and run on_start in the real ScriptRuntime");
+
+	// Several frames, because the Delay node's continuation only fires after
+	// its timer elapses - a closure that throws would otherwise go unnoticed.
+	for (int frame = 0; frame < 60; ++frame)
+	{
+		runtime.updateEntity(1, 0.016F);
+	}
+	runtime.shutdown();
+
+	std::error_code removeError;
+	fs::remove(probePath, removeError);
+}
+
+// The catalog is the published contract every saved graph names by string.
+// A duplicate or empty id would make two node types indistinguishable to the
+// loader; a duplicate pin id inside one type would make two pins
+// indistinguishable to every link.
+void testMindGraphCatalog()
+{
+	using namespace gameforger::editor::mindgraph;
+
+	const std::vector<NodeType>& catalog = nodeCatalog();
+	TEST_ASSERT(!catalog.empty(), "Catalog must not be empty");
+
+	std::vector<std::string> seenTypes;
+	for (const NodeType& type : catalog)
+	{
+		TEST_ASSERT(!type.id.empty(), "Every node type needs a stable id");
+		TEST_ASSERT(!type.displayName.empty(), "Every node type needs a display name");
+		TEST_ASSERT(!type.summary.empty(), "Every node type needs a one-line summary for the palette");
+		TEST_ASSERT(
+			std::find(seenTypes.begin(), seenTypes.end(), type.id) == seenTypes.end(),
+			"Node type ids must be unique");
+		seenTypes.push_back(type.id);
+
+		std::vector<std::string> seenPins;
+		for (const std::vector<PinSpec>* list : {&type.inputs, &type.outputs, &type.literals})
+		{
+			for (const PinSpec& pin : *list)
+			{
+				TEST_ASSERT(!pin.id.empty(), "Every pin needs a stable id");
+				TEST_ASSERT(
+					std::find(seenPins.begin(), seenPins.end(), pin.id) == seenPins.end(),
+					"Pin ids must be unique within a node type");
+				seenPins.push_back(pin.id);
+			}
+		}
+		// An Event starts a chain, so it must offer somewhere to go next.
+		if (type.category == NodeCategory::Event)
+		{
+			TEST_ASSERT(
+				findPin(type, "exec_out") != nullptr,
+				"Every Event node must have an exec_out to continue from");
+		}
+	}
+
+	TEST_ASSERT(findNodeType("event.game_start") != nullptr, "The Game Start event must exist");
+	TEST_ASSERT(findNodeType("no.such.type") == nullptr, "An unknown type must not resolve");
+	TEST_ASSERT(
+		findPin(*findNodeType("audio.play"), "clip") != nullptr, "Play Audio must expose a clip literal");
+	TEST_ASSERT(findPin(*findNodeType("audio.play"), "nope") == nullptr, "An unknown pin must not resolve");
+}
+
+// The compiler produces the script the game actually runs, so what it emits is
+// the whole feature. Checked by content rather than exact text: asserting a
+// byte-for-byte golden would break on every harmless formatting change.
+void testMindGraphCompiler()
+{
+	using namespace gameforger::editor::mindgraph;
+
+	MindGraph graph;
+	graph.name = "VaultAlarm";
+	GraphNode start{};
+	start.id = 1;
+	start.type = "event.game_start";
+	GraphNode play{};
+	play.id = 2;
+	play.type = "audio.play";
+	play.literals["clip"] = "Game/Audio/alarm.wav";
+	play.literals["loop"] = "true";
+	GraphNode hide{};
+	hide.id = 3;
+	hide.type = "world.set_active";
+	hide.literals["target"] = "Vault Door";
+	hide.literals["active"] = "false";
+	graph.nodes = {start, play, hide};
+	graph.links = {
+		GraphLink{1, 1, "exec_out", 2, "exec_in"},
+		GraphLink{2, 2, "exec_out", 3, "exec_in"},
+	};
+
+	const CompileResult compiled = compileGraph(graph);
+	TEST_ASSERT(compiled.success, "A well-formed graph must compile without errors");
+	TEST_ASSERT(
+		compiled.lua.find("return Graph") != std::string::npos,
+		"Must emit this project's script contract");
+	TEST_ASSERT(
+		compiled.lua.find("function Graph:on_start()") != std::string::npos, "Must emit on_start");
+	TEST_ASSERT(
+		compiled.lua.find("function Graph:on_update(dt)") != std::string::npos, "Must emit on_update");
+	TEST_ASSERT(
+		compiled.lua.find("DO NOT EDIT BY HAND") != std::string::npos,
+		"Generated Lua must say it is generated - it is overwritten on the next compile");
+
+	// The chain must be emitted in execution order: the audio call before the
+	// hide call, because that is the order the wires say.
+	const std::size_t playAt = compiled.lua.find("Game/Audio/alarm.wav");
+	const std::size_t hideAt = compiled.lua.find("Vault Door");
+	TEST_ASSERT(playAt != std::string::npos, "Play Audio must emit its clip literal");
+	TEST_ASSERT(hideAt != std::string::npos, "Show/Hide must emit its target");
+	TEST_ASSERT(playAt < hideAt, "Nodes must be emitted in execution order, not graph order");
+	TEST_ASSERT(
+		compiled.lua.find("setEntityActive") != std::string::npos,
+		"Show/Hide must call the world binding that actually exists");
+
+	// A cycle must be reported, not hang the compiler.
+	MindGraph looped = graph;
+	looped.links.push_back(GraphLink{3, 3, "exec_out", 2, "exec_in"});
+	const CompileResult loopResult = compileGraph(looped);
+	TEST_ASSERT(!loopResult.success, "A cycle in the execution chain must be an error");
+	TEST_ASSERT(!loopResult.diagnostics.empty(), "A cycle must produce a diagnostic naming the node");
+
+	// A link to a deleted node is an error the user can act on, not a crash.
+	MindGraph dangling = graph;
+	dangling.nodes.pop_back();
+	const CompileResult danglingResult = compileGraph(dangling);
+	TEST_ASSERT(!danglingResult.success, "A link to a missing node must be an error");
+
+	// An unknown node type is a WARNING, not an error: a graph from a newer
+	// editor must still compile what it understands, and must keep the rest.
+	MindGraph future = graph;
+	GraphNode alien{};
+	alien.id = 9;
+	alien.type = "future.node.from.a.newer.editor";
+	future.nodes.push_back(alien);
+	const CompileResult futureResult = compileGraph(future);
+	TEST_ASSERT(futureResult.success, "An unknown node type must not fail the whole compile");
+	TEST_ASSERT(!futureResult.diagnostics.empty(), "An unknown node type must still be reported");
+
+	// Malformed literals must not produce Lua that fails to load - that would
+	// surface as a runtime error long after the edit that caused it.
+	MindGraph junk;
+	junk.name = "Junk";
+	GraphNode junkStart{};
+	junkStart.id = 1;
+	junkStart.type = "event.game_start";
+	GraphNode junkDelay{};
+	junkDelay.id = 2;
+	junkDelay.type = "flow.delay";
+	junkDelay.literals["seconds"] = "not a number";
+	junk.nodes = {junkStart, junkDelay};
+	junk.links = {GraphLink{1, 1, "exec_out", 2, "exec_in"}};
+	const CompileResult junkResult = compileGraph(junk);
+	TEST_ASSERT(junkResult.success, "A malformed number literal must fall back, not fail the compile");
+	TEST_ASSERT(
+		junkResult.lua.find("not a number") == std::string::npos,
+		"A malformed number must never reach the generated Lua");
+}
+
+// SECTION 15. Breadcrumb wrapping must be semantics-preserving: with it off
+// and on, the generated Lua must differ ONLY by wrapper lines. If it changes
+// anything else, live node highlighting is altering how the game behaves.
+void testMindGraphBreadcrumbWrapper()
+{
+	using namespace gameforger::editor::mindgraph;
+
+	MindGraph graph;
+	graph.name = "Wrapped";
+	GraphNode a{};
+	a.id = 1;
+	a.type = "event.game_start";
+	GraphNode b{};
+	b.id = 2;
+	b.type = "audio.play";
+	b.literals["clip"] = "a.wav";
+	GraphNode c{};
+	c.id = 3;
+	c.type = "flow.branch";
+	GraphNode d{};
+	d.id = 4;
+	d.type = "world.set_active";
+	d.literals["target"] = "Door";
+	graph.nodes = {a, b, c, d};
+	graph.links = {
+		GraphLink{1, 1, "exec_out", 2, "exec_in"},
+		GraphLink{2, 2, "exec_out", 3, "exec_in"},
+		GraphLink{3, 3, "exec_true", 4, "exec_in"},
+	};
+
+	const CompileResult without = compileGraph(graph, false);
+	const CompileResult with = compileGraph(graph, true);
+	TEST_ASSERT(without.success && with.success, "Both variants must compile");
+	TEST_ASSERT(
+		without.lua.find("__gfNode(") == std::string::npos, "Breadcrumbs off must emit no breadcrumbs");
+	TEST_ASSERT(with.lua.find("__gfNode(") != std::string::npos, "Breadcrumbs on must emit them");
+
+	// Strip the wrapper lines from the wrapped output; what remains must be
+	// identical to the unwrapped output, line for line.
+	const auto stripBreadcrumbs = [](const std::string& text)
+	{
+		std::string out;
+		std::size_t start = 0;
+		while (start <= text.size())
+		{
+			const std::size_t end = text.find('\n', start);
+			const std::string line =
+				text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+			// Any line MENTIONING the breadcrumb - including the shim that
+			// defines it - is a wrapper line. Matching on "__gfNode(" alone
+			// missed the shim, whose call form is rawget(_G, "__gfNode").
+			if (line.find("__gfNode") == std::string::npos)
+			{
+				out += line;
+				out += '\n';
+			}
+			if (end == std::string::npos)
+			{
+				break;
+			}
+			start = end + 1;
+		}
+		return out;
+	};
+	TEST_ASSERT(
+		stripBreadcrumbs(with.lua) == stripBreadcrumbs(without.lua),
+		"Breadcrumb wrapping must change NOTHING except its own lines");
+
+	// One breadcrumb per node actually reached by the execution chain.
+	std::size_t count = 0;
+	for (std::size_t at = with.lua.find("__gfNode("); at != std::string::npos;
+		 at = with.lua.find("__gfNode(", at + 1))
+	{
+		++count;
+	}
+	TEST_ASSERT(count == 3, "Every executed node must announce itself exactly once");
 }
 
 // Mind Graph round-trip. The file is the authoring format, so anything that
@@ -2322,6 +2684,10 @@ int main()
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testLightCameraUiRoundTrip);
 	RUN_TEST(testEntityForwardMatchesForwardConvention);
+	RUN_TEST(testMindGraphGeneratedLuaRuns);
+	RUN_TEST(testMindGraphCatalog);
+	RUN_TEST(testMindGraphCompiler);
+	RUN_TEST(testMindGraphBreadcrumbWrapper);
 	RUN_TEST(testMindGraphRoundTrip);
 	RUN_TEST(testMindGraphPinStability);
 	RUN_TEST(testSharedScriptCallbackParity);

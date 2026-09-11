@@ -504,6 +504,53 @@ namespace gameforger::editor
 			return 0;
 		}
 
+		// Light properties. Mind Graph's Set Light node needs these, and
+		// nothing could reach a light from script before: world had bindings
+		// to show/hide and rotate another entity, but a light's intensity and
+		// colour - the two things a cutscene actually changes - were
+		// unreachable.
+		//
+		// Written directly rather than through the command bus for the same
+		// reason the transform writes on this object are: these are per-frame
+		// gameplay changes, and a dimming light would otherwise put one undo
+		// entry per frame into the stack.
+		int luaWorldSetLightIntensity(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string entityName = luaL_checkstring(L, 2);
+			const float intensity = static_cast<float>(luaL_checknumber(L, 3));
+			const SceneEntity* entity = runtime->scene().findEntity(entityName);
+			if (entity == nullptr || !entity->isLight)
+			{
+				runtime->log(
+					false, "world:setLightIntensity ignored: \"" + entityName + "\" is not a light.");
+				return 0;
+			}
+			if (SceneEntity* mutableEntity = runtime->scene().findEntityMutable(entity->id))
+			{
+				mutableEntity->light.intensity = intensity < 0.0F ? 0.0F : intensity;
+			}
+			return 0;
+		}
+
+		int luaWorldSetLightColor(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string entityName = luaL_checkstring(L, 2);
+			const glm::vec3 color = checkVec3(L, 3);
+			const SceneEntity* entity = runtime->scene().findEntity(entityName);
+			if (entity == nullptr || !entity->isLight)
+			{
+				runtime->log(false, "world:setLightColor ignored: \"" + entityName + "\" is not a light.");
+				return 0;
+			}
+			if (SceneEntity* mutableEntity = runtime->scene().findEntityMutable(entity->id))
+			{
+				mutableEntity->light.color = color;
+			}
+			return 0;
+		}
+
 		// True when the named entity exists and is active - lets a script ask
 		// about state it just set, or that another script owns.
 		int luaWorldIsEntityActive(lua_State* L)
@@ -678,6 +725,8 @@ namespace gameforger::editor
 			addMethod("setOperatingCatapult", luaWorldSetOperatingCatapult);
 			addMethod("setEntityRotation", luaWorldSetEntityRotation);
 			addMethod("setEntityActive", luaWorldSetEntityActive);
+			addMethod("setLightIntensity", luaWorldSetLightIntensity);
+			addMethod("setLightColor", luaWorldSetLightColor);
 			addMethod("isEntityActive", luaWorldIsEntityActive);
 			addMethod("fireGravityProjectile", luaWorldFireGravityProjectile);
 		}

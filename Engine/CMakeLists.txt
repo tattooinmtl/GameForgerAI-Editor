@@ -46,7 +46,9 @@ add_library(GameForgerEngine STATIC
     src/Editor/Collision.cpp
     src/Editor/TerrainTexture.cpp
     src/Editor/StbImageImpl.cpp
+    src/Editor/MindGraph/GraphCompiler.cpp
     src/Editor/MindGraph/GraphData.cpp
+    src/Editor/MindGraph/NodeCatalog.cpp
     src/Editor/MindGraph/GraphSerializer.cpp
     src/Editor/OverlayFont.cpp
     src/Editor/StbTrueTypeImpl.cpp

@@ -23,6 +23,7 @@
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
+#include "GameForger/Editor/MindGraph/GraphSerializer.hpp"
 #include "GameForger/Editor/Storyboard.hpp"
 
 using namespace gameforger::editor;
@@ -889,6 +890,139 @@ void testEntityForwardMatchesForwardConvention()
 	zeroScaled.scale = glm::vec3(0.0F);
 	const glm::vec3 zeroForward = entityForward(zeroScaled);
 	TEST_ASSERT(glm::length(zeroForward) > 0.5F, "Zero scale must still yield a usable direction");
+}
+
+// Mind Graph round-trip. The file is the authoring format, so anything that
+// does not survive save/load is work the user loses.
+void testMindGraphRoundTrip()
+{
+	using namespace gameforger::editor::mindgraph;
+
+	MindGraph graph;
+	graph.name = "VaultAlarm";
+
+	GraphNode start;
+	start.id = 1;
+	start.type = "event.game_start";
+	start.canvasPosition = glm::vec2(-120.5F, 40.25F);
+
+	GraphNode audio;
+	audio.id = 2;
+	audio.type = "audio.play";
+	audio.canvasPosition = glm::vec2(260.0F, 40.25F);
+	audio.literals["clip"] = "Game/Audio/alarm.wav";
+	audio.literals["target"] = "Vault Speaker";
+	// Quotes and backslashes are exactly what a Windows path and a bit of
+	// prose will contain, and exactly what a hand-rolled writer gets wrong.
+	audio.literals["note"] = "say \"go\" \ loudly";
+
+	graph.nodes = {start, audio};
+	graph.links = {GraphLink{10, 1, "exec_out", 2, "exec_in"}};
+	graph.nextNodeId = 3;
+	graph.nextLinkId = 11;
+
+	const std::string text = serializeGraph(graph);
+	const GraphLoadResult loaded = deserializeGraph(text);
+	TEST_ASSERT(loaded.success, "A serialized graph must deserialize");
+	TEST_ASSERT(loaded.graph.name == "VaultAlarm", "Graph name must survive");
+	TEST_ASSERT(loaded.graph.nodes.size() == 2, "Both nodes must survive");
+	TEST_ASSERT(loaded.graph.links.size() == 1, "The link must survive");
+
+	const GraphNode* reloadedAudio = loaded.graph.findNode(2);
+	TEST_ASSERT(reloadedAudio != nullptr, "Node 2 must be findable by id");
+	TEST_ASSERT(reloadedAudio->type == "audio.play", "Node type must survive");
+	TEST_ASSERT(
+		std::abs(reloadedAudio->canvasPosition.x - 260.0F) < 0.01F, "Canvas position must survive");
+	TEST_ASSERT(
+		reloadedAudio->literals.at("clip") == "Game/Audio/alarm.wav", "Literal value must survive");
+	TEST_ASSERT(
+		reloadedAudio->literals.at("note") == "say \"go\" \ loudly",
+		"Quotes and backslashes in a literal must survive escaping");
+
+	const GraphLink& link = loaded.graph.links[0];
+	TEST_ASSERT(link.fromNode == 1 && link.toNode == 2, "Link endpoints must survive");
+	TEST_ASSERT(link.fromPin == "exec_out" && link.toPin == "exec_in", "Pin ids must survive as strings");
+
+	// Serializing the reloaded graph must produce identical text. If it does
+	// not, something is being reordered or lost, and every save would show a
+	// spurious diff.
+	TEST_ASSERT(serializeGraph(loaded.graph) == text, "Round-trip must be byte-identical");
+
+	// A file that is not ours must be refused rather than loaded as an empty
+	// graph - loading it empty would destroy the real content on next save.
+	TEST_ASSERT(!deserializeGraph("{\"format\":\"Something Else\"}").success, "Foreign format must be refused");
+	TEST_ASSERT(!deserializeGraph("not json at all").success, "Malformed input must be refused");
+	// A graph from a newer editor must be refused, not silently downgraded.
+	TEST_ASSERT(
+		!deserializeGraph("{\"format\":\"GameForgerMindGraph\",\"version\":999}").success,
+		"A newer format version must be refused");
+}
+
+// THE PIN STABILITY TEST - MindGraph-Plan section 13, the load-bearing
+// invariant everything else stands on.
+//
+// Links are stored as (nodeId, pinId STRING). If they were stored as integer
+// pin indices assigned at load, adding a pin to a node type would shift every
+// later index and silently rebind links to the wrong pins. This asserts that
+// mutating a node's pin usage cannot disturb links that were not touched.
+void testMindGraphPinStability()
+{
+	using namespace gameforger::editor::mindgraph;
+
+	MindGraph graph;
+	graph.name = "PinStability";
+	for (int id = 1; id <= 3; ++id)
+	{
+		GraphNode node;
+		node.id = id;
+		node.type = "test.node";
+		graph.nodes.push_back(node);
+	}
+	graph.links = {
+		GraphLink{1, 1, "exec_out", 2, "exec_in"},
+		GraphLink{2, 2, "value_out", 3, "amount_in"},
+	};
+	graph.nextNodeId = 4;
+	graph.nextLinkId = 3;
+
+	const GraphLoadResult first = deserializeGraph(serializeGraph(graph));
+	TEST_ASSERT(first.success, "Baseline graph must load");
+
+	// Simulate the node type gaining a pin and having its pins reordered.
+	// Under an index-based scheme this is precisely the change that would
+	// corrupt the links; under name-based storage the file does not even
+	// mention pin order, so nothing can shift.
+	MindGraph mutated = first.graph;
+	mutated.nodes[0].literals["newly_added_pin"] = "42";
+	mutated.nodes[1].literals["another_pin"] = "hello";
+
+	const GraphLoadResult second = deserializeGraph(serializeGraph(mutated));
+	TEST_ASSERT(second.success, "Mutated graph must load");
+	TEST_ASSERT(second.graph.links.size() == 2, "Both links must survive a pin-list change");
+	TEST_ASSERT(
+		second.graph.links[0].fromPin == "exec_out" && second.graph.links[0].toPin == "exec_in",
+		"Link 1 must still resolve to the same logical endpoints");
+	TEST_ASSERT(
+		second.graph.links[1].fromPin == "value_out" && second.graph.links[1].toPin == "amount_in",
+		"Link 2 must still resolve to the same logical endpoints");
+
+	// A link to a node that no longer exists is REPORTED, never silently
+	// dropped - dropping it would destroy authored work on the first load
+	// after an engine update.
+	MindGraph orphaned = second.graph;
+	orphaned.nodes.erase(orphaned.nodes.begin() + 2);
+	const GraphLoadResult third = deserializeGraph(serializeGraph(orphaned));
+	TEST_ASSERT(third.success, "A graph with a dangling link must still load");
+	TEST_ASSERT(third.graph.links.size() == 2, "The dangling link must be preserved, not dropped");
+	TEST_ASSERT(third.graph.brokenLinks().size() == 1, "The dangling link must be reported as broken");
+
+	// Ids are recomputed from content, so a hand-edited file cannot hand out
+	// an id already in use - which would make two nodes indistinguishable.
+	const GraphLoadResult liar = deserializeGraph(
+		"{\"format\":\"GameForgerMindGraph\",\"version\":1,\"nextNodeId\":1,\"nextLinkId\":1,"
+		"\"nodes\":[{\"id\":7,\"type\":\"test.node\"}],\"links\":[]}");
+	TEST_ASSERT(liar.success, "Graph with an understated nextNodeId must load");
+	TEST_ASSERT(liar.graph.nextNodeId > 7, "nextNodeId must be recomputed past the highest used id");
 }
 
 // THE PARITY TEST. MissingFunctions.md section 1b records four defects of one
@@ -2188,6 +2322,8 @@ int main()
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testLightCameraUiRoundTrip);
 	RUN_TEST(testEntityForwardMatchesForwardConvention);
+	RUN_TEST(testMindGraphRoundTrip);
+	RUN_TEST(testMindGraphPinStability);
 	RUN_TEST(testSharedScriptCallbackParity);
 	RUN_TEST(testCameraPoseDrivesEntityForward);
 	RUN_TEST(testGizmoOnlyEntityClassification);

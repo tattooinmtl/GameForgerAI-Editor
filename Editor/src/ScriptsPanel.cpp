@@ -442,6 +442,15 @@ namespace gameforger::editor
 		{
 			return;
 		}
+		// Must happen BEFORE Begin, and by window name: when the panel is a
+		// background tab, Begin returns false and returns early, so a focus
+		// call inside the body would never run - which is exactly why the
+		// buttons that raise this panel appeared to do nothing.
+		if (state.requestFocus)
+		{
+			state.requestFocus = false;
+			ImGui::SetWindowFocus("Scripts");
+		}
 		if (!ImGui::Begin("Scripts", &state.open))
 		{
 			ImGui::End();
@@ -528,7 +537,6 @@ namespace gameforger::editor
 					? -1
 					: static_cast<int>(std::distance(state.scriptPaths.begin(), found));
 			}
-			ImGui::SetWindowFocus();
 		}
 
 		// ---- left: the file list ----

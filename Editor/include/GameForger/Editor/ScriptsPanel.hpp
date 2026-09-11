@@ -55,6 +55,12 @@ namespace gameforger::editor
 		// The caller sets `open` too; this only says WHICH file.
 		std::string requestOpenPath;
 
+		// Raise the panel to the front. Setting `open` alone is not enough:
+		// once the panel is docked as a tab behind another, it is already
+		// open, so every "Open Scripts Panel" / "Add Script..." button looked
+		// completely dead - the panel was there the whole time, underneath.
+		bool requestFocus = false;
+
 		// Which of the built-in presets are ticked. These moved here from the
 		// Inspector's "Add Script" modal along with everything else scripting:
 		// they are the fastest way to give an object working behaviour, and

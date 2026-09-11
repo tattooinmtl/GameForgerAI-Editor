@@ -3385,6 +3385,7 @@ namespace
                     const std::filesystem::path relativeToRoot =
                         std::filesystem::relative(file.path(), projectRoot, toProjectRootError);
                     scriptsPanel.open = true;
+                    scriptsPanel.requestFocus = true;
                     scriptsPanel.requestOpenPath =
                         toProjectRootError ? name : relativeToRoot.generic_string();
                 }
@@ -5398,6 +5399,7 @@ namespace
                     {
                         selectOnly(selection, entityId);
                         scriptsPanel.open = true;
+                        scriptsPanel.requestFocus = true;
                         scriptsPanel.presetsExpanded = true;
                     };
                 }
@@ -6969,6 +6971,7 @@ namespace
         if (ImGui::Button("Open Scripts Panel", ImVec2(-1.0F, 0.0F)))
         {
             scriptsPanel.open = true;
+            scriptsPanel.requestFocus = true;
         }
         ImGui::TextDisabled("Click a script to focus it - Ctrl+C/Ctrl+V/Delete then act on it.");
         {
@@ -7036,6 +7039,7 @@ namespace
                 // Hands off to the Scripts panel rather than opening a modal
                 // that blocked the rest of the editor while a script was open.
                 scriptsPanel.open = true;
+                scriptsPanel.requestFocus = true;
                 scriptsPanel.requestOpenPath = scriptPath;
             }
             ImGui::SameLine();
@@ -7117,6 +7121,7 @@ namespace
             // and the header button above: one place to pick a preset, attach
             // an existing file, or have the AI write a new one.
             scriptsPanel.open = true;
+            scriptsPanel.requestFocus = true;
             scriptsPanel.presetsExpanded = true;
         }
 

@@ -553,6 +553,27 @@ namespace
         // While on, any pose the entity is left in (gizmo or Inspector) is
         // continuously saved as the keyframe at scrubTime, every frame.
         bool recordMode = false;
+
+        // Frames per second the timeline is quantised to. Keyframe times are
+        // still stored in SECONDS (TransformKeyframe::time) - this is an
+        // authoring grid, not a change to the data model, so an animation
+        // authored at 24fps still plays correctly at any frame rate and
+        // changing this never rewrites existing keys.
+        int framesPerSecond = 24;
+        bool snapToFrames = true;
+
+        // Pose the entity was in before a preview or a scrub started, so it
+        // can be put back. Without this, previewing an animation permanently
+        // left the object wherever the animation ended - it silently
+        // overwrote the transform the user had authored.
+        bool hasPoseSnapshot = false;
+        int snapshotEntityId = -1;
+        AnimatedPose poseSnapshot;
+
+        // Retiming: which keyframe's time field is being dragged, so the
+        // list can re-sort on release rather than reordering under the mouse
+        // mid-drag.
+        int retimingIndex = -1;
     };
 
     // A "shot" is just a cine-camera's own captured EntityAnimation path (not
@@ -8518,10 +8539,98 @@ namespace
 
         ImGui::Separator();
         ImGui::TextUnformatted("Timeline");
+
+        // Frame grid. Keyframe times stay in seconds - this only quantises
+        // what the scrubber and the step buttons land on, so changing the
+        // rate never rewrites existing keys and an animation authored at
+        // 24fps still plays correctly at any frame rate.
+        ImGui::SetNextItemWidth(90.0F);
+        if (ImGui::InputInt("FPS", &animPanel.framesPerSecond))
+        {
+            animPanel.framesPerSecond = std::clamp(animPanel.framesPerSecond, 1, 240);
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap to frames", &animPanel.snapToFrames);
+
+        const float frameStep = 1.0F / static_cast<float>(std::max(animPanel.framesPerSecond, 1));
+        const auto quantise = [&](const float seconds)
+        {
+            if (!animPanel.snapToFrames)
+            {
+                return seconds;
+            }
+            return std::round(seconds / frameStep) * frameStep;
+        };
+
         const float maxTime = entity.animation.keyframes.empty()
             ? 5.0F
             : entity.animation.keyframes.back().time + 2.0F;
-        const bool scrubbed = ImGui::SliderFloat("Time (s)", &animPanel.scrubTime, 0.0F, maxTime, "%.2f");
+        bool scrubbed = ImGui::SliderFloat("Time (s)", &animPanel.scrubTime, 0.0F, maxTime, "%.3f");
+
+        // Frame-accurate stepping - the thing "frame by frame" actually
+        // means, and what the panel had no way to do before.
+        const int currentFrame = static_cast<int>(std::round(animPanel.scrubTime / frameStep));
+        ImGui::Text("Frame %d", currentFrame);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("|< First"))
+        {
+            animPanel.scrubTime = entity.animation.keyframes.empty()
+                ? 0.0F
+                : entity.animation.keyframes.front().time;
+            scrubbed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("< Frame"))
+        {
+            animPanel.scrubTime = std::max(0.0F, quantise(animPanel.scrubTime) - frameStep);
+            scrubbed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Frame >"))
+        {
+            animPanel.scrubTime = quantise(animPanel.scrubTime) + frameStep;
+            scrubbed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Last >|"))
+        {
+            animPanel.scrubTime = entity.animation.keyframes.empty()
+                ? 0.0F
+                : entity.animation.keyframes.back().time;
+            scrubbed = true;
+        }
+        // Jump between the keys that actually exist, which is usually what
+        // you want when reviewing an animation rather than nudging frames.
+        ImGui::SameLine();
+        if (ImGui::SmallButton("< Key"))
+        {
+            for (auto it = entity.animation.keyframes.rbegin(); it != entity.animation.keyframes.rend(); ++it)
+            {
+                if (it->time < animPanel.scrubTime - 0.0005F)
+                {
+                    animPanel.scrubTime = it->time;
+                    scrubbed = true;
+                    break;
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Key >"))
+        {
+            for (const TransformKeyframe& candidate : entity.animation.keyframes)
+            {
+                if (candidate.time > animPanel.scrubTime + 0.0005F)
+                {
+                    animPanel.scrubTime = candidate.time;
+                    scrubbed = true;
+                    break;
+                }
+            }
+        }
+        if (scrubbed)
+        {
+            animPanel.scrubTime = std::max(0.0F, quantise(animPanel.scrubTime));
+        }
 
         if (animPanel.recordMode)
         {
@@ -8582,12 +8691,55 @@ namespace
                 ImGui::Text("   %.2fs", keyframe.time);
             }
             ImGui::SameLine();
+            // Retiming. Keyframes were previously fixed at whatever time they
+            // were recorded at - the only draggable timeline in the editor
+            // takes CineShot, so a plain animated object could not be retimed
+            // anywhere at all.
+            float keyTime = keyframe.time;
+            ImGui::SetNextItemWidth(70.0F);
+            if (ImGui::DragFloat("##time", &keyTime, 0.01F, 0.0F, 3600.0F, "%.3f"))
+            {
+                if (SceneEntity* mutableEntity = scene.findEntityMutable(entityId))
+                {
+                    if (index < mutableEntity->animation.keyframes.size())
+                    {
+                        mutableEntity->animation.keyframes[index].time =
+                            std::max(0.0F, quantise(keyTime));
+                        animPanel.retimingIndex = static_cast<int>(index);
+                    }
+                }
+            }
+            // Re-sort only on release. Sorting mid-drag would reorder the
+            // list under the cursor and hand the drag to a different
+            // keyframe as soon as two keys crossed.
+            if (animPanel.retimingIndex == static_cast<int>(index) && ImGui::IsItemDeactivatedAfterEdit())
+            {
+                if (SceneEntity* mutableEntity = scene.findEntityMutable(entityId))
+                {
+                    std::sort(
+                        mutableEntity->animation.keyframes.begin(),
+                        mutableEntity->animation.keyframes.end(),
+                        [](const TransformKeyframe& a, const TransformKeyframe& b)
+                        { return a.time < b.time; });
+                }
+                animPanel.retimingIndex = -1;
+            }
+            ImGui::SameLine();
             if (ImGui::SmallButton("Go To"))
             {
                 animPanel.scrubTime = keyframe.time;
                 animPanel.recordMode = false;
                 animPanel.previewPlaying = false;
                 applyPose(commandBus, entityName, {keyframe.position, keyframe.rotationEuler, keyframe.scale});
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy"))
+            {
+                // Duplicates this key one frame later, so building a hold or
+                // a small variation does not mean re-posing from scratch.
+                upsertKeyframe(
+                    scene, entityId, quantise(keyframe.time + frameStep), keyframe.position,
+                    keyframe.rotationEuler, keyframe.scale);
             }
             ImGui::SameLine();
             if (ImGui::SmallButton("Delete"))
@@ -8618,6 +8770,14 @@ namespace
         {
             if (ImGui::Button("Preview Playback"))
             {
+                // Remember the pose we are about to drive over. Previewing
+                // used to leave the object wherever the animation ended,
+                // silently overwriting the transform the user had authored -
+                // a preview should be a preview, not an edit.
+                animPanel.poseSnapshot = {entity.position, entity.rotationEuler, entity.scale};
+                animPanel.snapshotEntityId = entityId;
+                animPanel.hasPoseSnapshot = true;
+
                 animPanel.previewPlaying = true;
                 animPanel.previewTime = entity.animation.keyframes.front().time;
             }
@@ -8628,6 +8788,16 @@ namespace
             {
                 animPanel.previewPlaying = false;
             }
+        }
+        if (animPanel.hasPoseSnapshot && !animPanel.previewPlaying)
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Restore Pose"))
+            {
+                applyPose(commandBus, entityName, animPanel.poseSnapshot);
+                animPanel.hasPoseSnapshot = false;
+            }
+            ImGui::TextDisabled("Preview moved this object. Restore Pose puts it back where it was.");
         }
         if (!canPreview)
         {
@@ -8643,6 +8813,15 @@ namespace
             if (!entity.animation.looping && animPanel.previewTime >= entity.animation.keyframes.back().time)
             {
                 animPanel.previewPlaying = false;
+                // A non-looping preview that ran to the end puts the object
+                // back by itself. A preview stopped by hand leaves it where
+                // it is and offers Restore Pose instead, because stopping
+                // mid-way is usually "I want to look at this frame".
+                if (animPanel.hasPoseSnapshot && animPanel.snapshotEntityId == entityId)
+                {
+                    applyPose(commandBus, entityName, animPanel.poseSnapshot);
+                    animPanel.hasPoseSnapshot = false;
+                }
             }
         }
 

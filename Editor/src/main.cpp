@@ -656,39 +656,6 @@ namespace
         std::array<char, 128> buffer{};
     };
 
-    struct ScriptCreatorState
-    {
-        bool requestOpen = false;
-        std::string targetEntityName;
-
-        std::array<char, 128> existingPath{};
-        std::string attachStatus;
-        bool attachStatusSuccess = false;
-
-        std::array<char, 64> scriptName{};
-        std::array<char, 2048> description{};
-
-        std::atomic<bool> generating{false};
-        std::thread worker;
-        std::mutex resultMutex;
-        bool hasResult = false;
-        bool resultSuccess = false;
-        std::string resultContent;
-
-        std::array<char, 8192> previewBuffer{};
-        bool previewSynced = false;
-        bool resultLogged = false;
-    };
-
-    struct ScriptEditorState
-    {
-        bool requestOpen = false;
-        std::string scriptPath;
-        std::array<char, 16384> buffer{};
-        std::string status;
-        bool statusSuccess = false;
-    };
-
     struct Ray
     {
         glm::vec3 origin;
@@ -913,36 +880,6 @@ namespace
             candidate = baseName + " (" + std::to_string(suffix) + ")";
             ++suffix;
         } while (scene.findEntity(candidate) != nullptr);
-        return candidate;
-    }
-
-    std::string sanitizeScriptFileName(const std::string& rawName)
-    {
-        std::string result;
-        for (const char character : rawName)
-        {
-            if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_' || character == '-')
-            {
-                result += character;
-            }
-            else if (character == ' ')
-            {
-                result += '_';
-            }
-        }
-        return result.empty() ? "Script" : result;
-    }
-
-    std::string makeUniqueScriptPath(const std::filesystem::path& projectRoot, const std::string& baseName)
-    {
-        const std::string sanitized = sanitizeScriptFileName(baseName);
-        std::string candidate = "Game/Scripts/" + sanitized + ".lua";
-        int suffix = 2;
-        while (std::filesystem::exists(projectRoot / candidate))
-        {
-            candidate = "Game/Scripts/" + sanitized + "_" + std::to_string(suffix) + ".lua";
-            ++suffix;
-        }
         return candidate;
     }
 
@@ -3363,7 +3300,7 @@ namespace
     void drawProjectBrowser(
         ProjectBrowserState& browser,
         const std::filesystem::path& projectRoot,
-        ScriptEditorState& scriptEditor,
+        ScriptsPanelState& scriptsPanel,
         ProjectSettingsPanelState& projectSettingsPanel,
         // Whether this panel is shown. Owned by PanelVisibility in main() and
         // toggled from the Panels menu; passed by reference so the window's own
@@ -3439,18 +3376,17 @@ namespace
                 browser.selectedFile = file.path();
                 if (file.path().extension() == ".lua")
                 {
+                    // Opens in the Scripts panel, which reads the file itself -
+                    // the browser only has to say which one. It used to load the
+                    // bytes here and push them into a modal editor, so a script
+                    // could be open in two places with two different copies of
+                    // its text.
                     std::error_code toProjectRootError;
                     const std::filesystem::path relativeToRoot =
                         std::filesystem::relative(file.path(), projectRoot, toProjectRootError);
-                    std::ifstream scriptFile(file.path(), std::ios::binary);
-                    const std::string content(
-                        (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                    scriptEditor.buffer.fill('\0');
-                    const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                    std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
-                    scriptEditor.scriptPath = toProjectRootError ? name : relativeToRoot.generic_string();
-                    scriptEditor.status.clear();
-                    scriptEditor.requestOpen = true;
+                    scriptsPanel.open = true;
+                    scriptsPanel.requestOpenPath =
+                        toProjectRootError ? name : relativeToRoot.generic_string();
                 }
                 else if (name == "Project.json" || name == "Settings.json")
                 {
@@ -5462,6 +5398,7 @@ namespace
                     {
                         selectOnly(selection, entityId);
                         scriptsPanel.open = true;
+                        scriptsPanel.presetsExpanded = true;
                     };
                 }
                 if (ImGui::BeginMenu("Add Child"))
@@ -5687,10 +5624,6 @@ namespace
         EditorScene& scene,
         AICommandBus& commandBus,
         SelectionState& selection,
-        ScriptCreatorState& scriptCreator,
-        ScriptEditorState& scriptEditor,
-        const AIProviderClient& aiProviderClient,
-        const std::string& activeProviderId,
         const std::filesystem::path& projectRoot,
         ConsoleState& console,
         EditHistoryState& history,
@@ -7100,15 +7033,10 @@ namespace
             ImGui::SameLine();
             if (ImGui::SmallButton("Edit"))
             {
-                std::ifstream scriptFile(projectRoot / scriptPath, std::ios::binary);
-                std::string content(
-                    (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                scriptEditor.buffer.fill('\0');
-                const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
-                scriptEditor.scriptPath = scriptPath;
-                scriptEditor.status.clear();
-                scriptEditor.requestOpen = true;
+                // Hands off to the Scripts panel rather than opening a modal
+                // that blocked the rest of the editor while a script was open.
+                scriptsPanel.open = true;
+                scriptsPanel.requestOpenPath = scriptPath;
             }
             ImGui::SameLine();
             if (ImGui::SmallButton("Remove"))
@@ -7185,18 +7113,11 @@ namespace
         }
         if (ImGui::Button("Add Script..."))
         {
-            scriptCreator.requestOpen = true;
-            scriptCreator.targetEntityName = entity.name;
-            scriptCreator.existingPath.fill('\0');
-            scriptCreator.scriptName.fill('\0');
-            scriptCreator.description.fill('\0');
-            scriptCreator.attachStatus.clear();
-            scriptCreator.previewSynced = false;
-            scriptCreator.resultLogged = false;
-            {
-                const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                scriptCreator.hasResult = false;
-            }
+            // Same destination as the Hierarchy's right-click "Add Script..."
+            // and the header button above: one place to pick a preset, attach
+            // an existing file, or have the AI write a new one.
+            scriptsPanel.open = true;
+            scriptsPanel.presetsExpanded = true;
         }
 
         ImGui::Separator();
@@ -7276,463 +7197,6 @@ namespace
 
         ImGui::End();
 
-        if (scriptCreator.requestOpen)
-        {
-            ImGui::OpenPopup("Add Script");
-            scriptCreator.requestOpen = false;
-        }
-        if (ImGui::BeginPopupModal("Add Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("Entity: %s", scriptCreator.targetEntityName.c_str());
-            ImGui::Separator();
-
-            ImGui::TextUnformatted("Attach an existing script");
-            ImGui::InputText("Script path", scriptCreator.existingPath.data(), scriptCreator.existingPath.size());
-            ImGui::SameLine();
-            if (ImGui::Button("Attach##existing"))
-            {
-                const AICommandResult result = executeLogged(commandBus,
-                    AttachScriptCommand{scriptCreator.targetEntityName, scriptCreator.existingPath.data()});
-                scriptCreator.attachStatus = result.message;
-                scriptCreator.attachStatusSuccess = result.success;
-                logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
-                if (result.success)
-                {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            if (!scriptCreator.attachStatus.empty() && !scriptCreator.attachStatusSuccess)
-            {
-                ImGui::TextColored(
-                    ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "%s", scriptCreator.attachStatus.c_str());
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Presets: controllers & collider");
-            ImGui::TextDisabled(
-                "Pick one or more from the dropdown - \"Add Selected Presets\" down by Close applies them, "
-                "no need to touch the AI section below. Controllers also mark this object as a Collider.");
-            enum class PresetKind
-            {
-                MovementController,
-                Rigidbody,
-                ColliderOnly,
-                // A real script, unlike ColliderOnly, but not a physics/
-                // movement driver either - doesn't call self.entity:
-                // setPosition() or self.physics:resolve(), so it never
-                // fights a MovementController/Rigidbody for the entity's
-                // transform and stays free to combine with either (or
-                // neither) exactly like ColliderOnly does below.
-                Utility,
-                // enemy_ai.lua DOES call self.entity:setPosition() every
-                // frame (wander/chase movement), same as a
-                // MovementController - so it's exclusive with those too,
-                // just its own kind rather than reusing MovementController
-                // (which is worded/described as player-input-driven).
-                EnemyAI
-            };
-            struct ScriptPreset
-            {
-                const char* label;
-                const char* path; // unused for ColliderOnly
-                const char* description;
-                PresetKind kind;
-            };
-            constexpr std::array<ScriptPreset, 14> presets{{
-                    {"FPS Controller",
-                     "Game/Scripts/fps_controller.lua",
-                     "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
-                     "press C in Play to swap to third-person. Also marks this object as a Collider.",
-                     PresetKind::MovementController},
-                    {"Third-Person Controller",
-                     "Game/Scripts/third_person_controller.lua",
-                     "Same movement/sprint/jump/mouse-look, plus the capsule turns to face where it's "
-                     "moving. Third-person camera by default - press C to swap to first-person. Also marks "
-                     "this object as a Collider.",
-                     PresetKind::MovementController},
-                    {"Rigidbody",
-                     "Game/Scripts/rigidbody.lua",
-                     "Falls under gravity and lands on/collides with Collider-enabled objects - for props "
-                     "like a cube you want to fall and stay put. Also marks this object as a Collider. Not "
-                     "for a player character - use FPS/Third-Person Controller instead, which already "
-                     "include their own gravity and ground collision.",
-                     PresetKind::Rigidbody},
-                    {"Collider Only",
-                     nullptr,
-                     "No script - just marks this object solid, so an FPS/Third-Person/Rigidbody script's "
-                     "self.physics:resolve() collides with it. Use for ground, walls, and platforms.",
-                     PresetKind::ColliderOnly},
-                    {"Inventory & Pickup",
-                     "Game/Scripts/inventory_system.lua",
-                     "E picks up any nearby \"Is Pickup Item\" object (Inspector), I opens the inventory "
-                     "grid. Attach to the player alongside FPS/Third-Person Controller - has no effect on "
-                     "its own without one of those claiming the camera. pickup_range/pickup_height_tolerance "
-                     "are editable in the script itself.",
-                     PresetKind::Utility},
-                    {"Enemy AI",
-                     "Game/Scripts/enemy_ai.lua",
-                     "Wanders near its spawn point until an object tagged target_tag (default \"Player\") "
-                     "comes within search_radius, then chases it until it escapes escape_radius. Shows the "
-                     "red detection icon while chasing. All radii/speeds/target_tag are editable in the "
-                     "script itself. Also marks this object as a Collider.",
-                     PresetKind::EnemyAI},
-                    {"Ranged Attacker",
-                     "Game/Scripts/ranged_attacker.lua",
-                     "Fires projectiles at the nearest object tagged target_tag once it's within fire_range "
-                     "- attach to an enemy (target_tag=\"Player\"), the player (target_tag=\"Enemy\"), or a "
-                     "future tower (either). Optional muzzle_tag names a separate tagged entity to fire "
-                     "from (e.g. \"player_gun_muzzle\") instead of this object's own position - just a "
-                     "regular Inspector tag, no extra setup needed. Needs a target_tag that actually exists "
-                     "in the scene to do anything. Also marks this object as a Collider - fine for an enemy "
-                     "or tower, uncheck it after applying if used on something that shouldn't block movement.",
-                     PresetKind::Utility},
-                    {"Catapult Controller",
-                     "Game/Scripts/catapult_controller.lua",
-                     "Attach to a catapult's base (needs Is Catapult + a \"PlayerCatapult\" tag, Inspector). "
-                     "F grabs/tows it toward you, F again drops it; walk up and press E to load/aim, mouse to "
-                     "aim, hold T to power up the throw, R to fire. Finds its own arm by proximity to an "
-                     "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
-                     "speeds/power-charge-time are editable in the script itself.",
-                     PresetKind::Utility},
-                    {"Game Manager",
-                     "Game/Scripts/game_manager.lua",
-                     "Session-wide state that isn't any one object's business. Owns cursor lock - which "
-                     "used to be a checkbox on every entity's Inspector - and registers itself in the "
-                     "manager list. Attach to ONE entity per scene (an empty cube is fine). Doesn't touch "
-                     "the transform, so it combines with anything.",
-                     PresetKind::Utility},
-                    {"Audio Manager",
-                     "Game/Scripts/audio_manager.lua",
-                     "Plays background music on a loop and exposes self.audio to every other script "
-                     "(play/stop/setMasterVolume/isPlaying). Set music_clip to something in Game/Audio - "
-                     "use the Audio panel's Import Sound from PC to put one there. Doesn't touch the "
-                     "transform.",
-                     PresetKind::Utility},
-                    {"Weapons System",
-                     "Game/Scripts/weapons_system.lua",
-                     "Viewmodel, weapon switching, firing and melee in one pack. Attach to the player "
-                     "alongside FPS Controller. Parent each weapon model as a child of the scene's Main "
-                     "Camera - the engine drives that camera from the live view, so anything under it "
-                     "rides the player's eyes and becomes a viewmodel. Mouse wheel or number keys switch, "
-                     "left mouse attacks. Slots/cooldowns/reach are editable in the script itself.",
-                     PresetKind::Utility},
-                    {"Door",
-                     "Game/Scripts/door_interaction.lua",
-                     "E opens and closes this object, swinging it around its own Pivot - set Pivot to the "
-                     "hinge edge first, or it spins around its middle. Optionally locked behind a key item "
-                     "or a keypad code (lock_mode in the script). Doesn't drive its own position, so it "
-                     "combines with anything.",
-                     PresetKind::Utility},
-                    {"Keypad Panel",
-                     "Game/Scripts/keypad_panel.lua",
-                     "Walk up, E to activate, type a code, Enter to submit. A correct code unlocks every "
-                     "Door in the scene set to that same code - no link between the two objects needed. "
-                     "Entry progress prints to the Console.",
-                     PresetKind::Utility},
-                    {"Key Item",
-                     "Game/Scripts/key_item.lua",
-                     "Marks this object as the key to a locked Door. Also tick \"Is Pickup Item\" and set "
-                     "its Item Name to match the Door's key_item_name. Walking close enough to pick it up "
-                     "unlocks every Door waiting on that key.",
-                     PresetKind::Utility},
-                }};
-
-            static std::array<bool, 14> presetSelected{};
-
-            std::string presetsPreview;
-            for (std::size_t index = 0; index < presets.size(); ++index)
-            {
-                if (presetSelected[index])
-                {
-                    presetsPreview += (presetsPreview.empty() ? "" : ", ") + std::string(presets[index].label);
-                }
-            }
-            if (presetsPreview.empty())
-            {
-                presetsPreview = "Select presets...";
-            }
-
-            if (ImGui::BeginCombo("##PresetsCombo", presetsPreview.c_str()))
-            {
-                for (std::size_t index = 0; index < presets.size(); ++index)
-                {
-                    ImGui::PushID(static_cast<int>(index));
-                    const bool wasSelected = presetSelected[index];
-                    const auto isExclusive = [](const PresetKind kind)
-                    {
-                        return kind == PresetKind::MovementController || kind == PresetKind::Rigidbody ||
-                            kind == PresetKind::EnemyAI;
-                    };
-                    if (ImGui::Checkbox(presets[index].label, &presetSelected[index]) && !wasSelected &&
-                        isExclusive(presets[index].kind))
-                    {
-                        // At most one physics-driving preset (a movement controller
-                        // OR Rigidbody) at a time - each runs its own independent
-                        // gravity/ground-collision every frame and calls
-                        // self.entity:setPosition(), so attaching more than one to
-                        // the same object makes them fight over its transform every
-                        // frame - symptoms: frozen/jittery movement, broken jump,
-                        // and a third-person camera that looks like it isn't
-                        // following. Collider Only and Utility (e.g. Inventory &
-                        // Pickup) never touch the transform, so they stay free to
-                        // combine with any of these.
-                        for (std::size_t other = 0; other < presets.size(); ++other)
-                        {
-                            if (other != index && isExclusive(presets[other].kind))
-                            {
-                                presetSelected[other] = false;
-                            }
-                        }
-                    }
-                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0F);
-                    ImGui::TextDisabled("%s", presets[index].description);
-                    ImGui::PopTextWrapPos();
-                    ImGui::PopID();
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Generate a new script with AI");
-            ImGui::InputText("Script name", scriptCreator.scriptName.data(), scriptCreator.scriptName.size());
-            ImGui::InputTextMultiline(
-                "Describe the behavior",
-                scriptCreator.description.data(),
-                scriptCreator.description.size(),
-                ImVec2(400.0F, 100.0F));
-
-            const bool isGenerating = scriptCreator.generating.load();
-            if (isGenerating)
-            {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Generate"))
-            {
-                if (scriptCreator.worker.joinable())
-                {
-                    scriptCreator.worker.join();
-                }
-                {
-                    const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                    scriptCreator.hasResult = false;
-                }
-                scriptCreator.previewSynced = false;
-                scriptCreator.resultLogged = false;
-                scriptCreator.generating = true;
-
-                const std::string entityName = scriptCreator.targetEntityName;
-                const std::string description = scriptCreator.description.data();
-                const std::string providerId = activeProviderId;
-                scriptCreator.worker = std::thread(
-                    [&scriptCreator, &aiProviderClient, entityName, description, providerId]()
-                    {
-                        try
-                        {
-                            const ScriptGenerationResult result =
-                                generateEntityScript(aiProviderClient, providerId, entityName, description);
-                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                            scriptCreator.resultSuccess = result.success;
-                            scriptCreator.resultContent = result.content;
-                            scriptCreator.hasResult = true;
-                            scriptCreator.generating = false;
-                        }
-                        catch (const std::exception& exception)
-                        {
-                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                            scriptCreator.resultSuccess = false;
-                            scriptCreator.resultContent = std::string("Script generation failed: ") + exception.what();
-                            scriptCreator.hasResult = true;
-                            scriptCreator.generating = false;
-                        }
-                        catch (...)
-                        {
-                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                            scriptCreator.resultSuccess = false;
-                            scriptCreator.resultContent = "Script generation failed.";
-                            scriptCreator.hasResult = true;
-                            scriptCreator.generating = false;
-                        }
-                    });
-            }
-            if (isGenerating)
-            {
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::TextDisabled("Generating...");
-            }
-
-            bool hasResultNow = false;
-            bool resultSuccessNow = false;
-            std::string resultContentNow;
-            {
-                const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                hasResultNow = scriptCreator.hasResult;
-                resultSuccessNow = scriptCreator.resultSuccess;
-                resultContentNow = scriptCreator.resultContent;
-            }
-
-            if (hasResultNow && !scriptCreator.resultLogged)
-            {
-                scriptCreator.resultLogged = true;
-                logMessage(
-                    console,
-                    resultSuccessNow ? LogLevel::Info : LogLevel::Error,
-                    resultSuccessNow ? "AI script generated for '" + scriptCreator.targetEntityName + "'."
-                                      : "AI script generation failed: " + resultContentNow);
-            }
-
-            if (hasResultNow)
-            {
-                ImGui::Separator();
-                if (resultSuccessNow)
-                {
-                    if (!scriptCreator.previewSynced)
-                    {
-                        std::snprintf(
-                            scriptCreator.previewBuffer.data(),
-                            scriptCreator.previewBuffer.size(),
-                            "%s",
-                            resultContentNow.c_str());
-                        scriptCreator.previewSynced = true;
-                    }
-                    ImGui::InputTextMultiline(
-                        "##GeneratedScript",
-                        scriptCreator.previewBuffer.data(),
-                        scriptCreator.previewBuffer.size(),
-                        ImVec2(480.0F, 220.0F));
-
-                    if (ImGui::Button("Save & Attach"))
-                    {
-                        const std::string path = makeUniqueScriptPath(projectRoot, scriptCreator.scriptName.data());
-                        const AICommandResult createResult = executeLogged(commandBus,
-                            CreateScriptCommand{path, "lua", std::string(scriptCreator.previewBuffer.data())});
-                        if (createResult.success)
-                        {
-                            (void)executeLogged(commandBus,AttachScriptCommand{scriptCreator.targetEntityName, path});
-                        }
-                        {
-                            const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                            scriptCreator.hasResult = false;
-                        }
-                        scriptCreator.previewSynced = false;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Discard"))
-                    {
-                        const std::lock_guard<std::mutex> lock(scriptCreator.resultMutex);
-                        scriptCreator.hasResult = false;
-                        scriptCreator.previewSynced = false;
-                    }
-                }
-                else
-                {
-                    ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "%s", resultContentNow.c_str());
-                }
-            }
-
-            ImGui::Separator();
-            {
-                const bool anyPresetSelected =
-                    std::any_of(presetSelected.begin(), presetSelected.end(), [](const bool s) { return s; });
-                if (!anyPresetSelected)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Add Selected Presets"))
-                {
-                    bool anySuccess = false;
-                    for (std::size_t index = 0; index < presets.size(); ++index)
-                    {
-                        if (!presetSelected[index])
-                        {
-                            continue;
-                        }
-                        const ScriptPreset& preset = presets[index];
-                        AICommandResult result{true, false, ""};
-                        if (preset.kind != PresetKind::ColliderOnly)
-                        {
-                            result = executeLogged(commandBus,
-                                AttachScriptCommand{scriptCreator.targetEntityName, preset.path});
-                            if (result.success)
-                            {
-                                executeLogged(commandBus,SetPropertyCommand{
-                                    scriptCreator.targetEntityName, "Collider", "enabled", true});
-                            }
-                        }
-                        else
-                        {
-                            result = executeLogged(commandBus,SetPropertyCommand{
-                                scriptCreator.targetEntityName, "Collider", "enabled", true});
-                        }
-                        logMessage(
-                            console,
-                            result.success ? LogLevel::Info : LogLevel::Error,
-                            std::string(preset.label) + ": " + result.message);
-                        anySuccess = anySuccess || result.success;
-                        presetSelected[index] = false;
-                    }
-                    scriptCreator.attachStatus =
-                        anySuccess ? "Preset(s) applied." : "No presets applied - see Console for details.";
-                    scriptCreator.attachStatusSuccess = anySuccess;
-                    if (anySuccess)
-                    {
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-                if (!anyPresetSelected)
-                {
-                    ImGui::EndDisabled();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Close"))
-            {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-
-        if (scriptEditor.requestOpen)
-        {
-            ImGui::OpenPopup("Edit Script");
-            scriptEditor.requestOpen = false;
-        }
-        if (ImGui::BeginPopupModal("Edit Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("File: %s", scriptEditor.scriptPath.c_str());
-            ImGui::Separator();
-            ImGui::InputTextMultiline(
-                "##EditScriptContent",
-                scriptEditor.buffer.data(),
-                scriptEditor.buffer.size(),
-                ImVec2(560.0F, 320.0F));
-
-            if (ImGui::Button("Save"))
-            {
-                const AICommandResult saveResult = executeLogged(commandBus,
-                    CreateScriptCommand{scriptEditor.scriptPath, "lua", std::string(scriptEditor.buffer.data())});
-                scriptEditor.status = saveResult.message;
-                scriptEditor.statusSuccess = saveResult.success;
-                if (saveResult.success)
-                {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Close"))
-            {
-                ImGui::CloseCurrentPopup();
-            }
-            if (!scriptEditor.status.empty())
-            {
-                ImGui::TextColored(
-                    scriptEditor.statusSuccess ? ImVec4(0.35F, 0.85F, 0.45F, 1.0F) : ImVec4(0.95F, 0.35F, 0.35F, 1.0F),
-                    "%s",
-                    scriptEditor.status.c_str());
-            }
-            ImGui::EndPopup();
-        }
     }
 
     Ray computeMouseRay(
@@ -8780,8 +8244,6 @@ namespace
         AICommandBus& commandBus,
         SelectionState& selection,
         RenameState& renameState,
-        ScriptCreatorState& scriptCreator,
-        ScriptEditorState& scriptEditor,
         AIProviderClient& aiProviderClient,
         const std::string& activeProviderId,
         const std::filesystem::path& projectRoot,
@@ -8965,10 +8427,6 @@ namespace
             scene,
             commandBus,
             selection,
-            scriptCreator,
-            scriptEditor,
-            aiProviderClient,
-            activeProviderId,
             projectRoot,
             console,
             history,
@@ -8976,7 +8434,7 @@ namespace
             terrainSculpt,
             nativeWindowHandle, panels.inspector, scriptsPanel);
 
-        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel, panels.project);
+        drawProjectBrowser(projectBrowser, projectRoot, scriptsPanel, projectSettingsPanel, panels.project);
 
         ImGui::Begin("AI Forge", &panels.aiForge);
         static std::array<char, 1024> prompt{};
@@ -9642,8 +9100,6 @@ int main()
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
-    ScriptCreatorState scriptCreator;
-    ScriptEditorState scriptEditor;
     PlayModeState playMode;
     ScriptRuntime scriptRuntime;
     // Stateless (just wraps ImGui::IsKeyDown/IsKeyPressed calls) - lives for
@@ -9760,8 +9216,6 @@ int main()
             commandBus,
             selection,
             renameState,
-            scriptCreator,
-            scriptEditor,
             aiProviderClient,
             activeProviderId,
             projectRoot,
@@ -9936,10 +9390,6 @@ int main()
     shutdownScriptsPanel(scriptsPanel);
     shutdownMindGraphPanel(mindGraph);
     gameforger::editor::joinCockpitWorker(aiCockpit);
-    if (scriptCreator.worker.joinable())
-    {
-        scriptCreator.worker.join();
-    }
     if (aiForge.worker.joinable())
     {
         aiForge.worker.join();

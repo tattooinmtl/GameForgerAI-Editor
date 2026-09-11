@@ -80,8 +80,14 @@ Each item verified as stated — builds, tests and live runs actually executed.
 | `63f1dc5` | **Mind Graph Phase 0.** Pinned imgui-node-editor to commit `021aa0ea`, not the v0.9.3 tag — the tag fails to compile against ImGui 1.92.3 (it redefines `ImVec2` operators 1.92 now provides). `GIT_SHALLOW FALSE`, same reason ImGuizmo documents. Repo ships no CMakeLists, so its four sources build as `GameForgerNodeEditor`. Canvas renders with draggable links. | Debug + all-release clean; 34/34; canvas verified in the editor |
 | `1acc01b` | **§1b.4 HUD — the last one.** Moved HUD drawing out of the Editor's ImGui path into `ViewportRenderer`, which both hosts share. New `OverlayFont` in Engine (extracted, not copied — GameMenu and TextMesh each already had one). Two bugs only visible by running it: the UI host was `followedEntity` (the *player*, not a camera), and text was centred on its anchor so top-left labels spilled off-screen. `UIElementData::fontPath` now actually works. | 3 configs; 34/34; editor clean; **crosshair + both text lines verified in a standalone Runtime run** |
 
+| `0d45678` | **Mind Graph Phase 3** — the panel: categorised searchable palette, canvas, details strip with scene-bound dropdowns, compile bar. Pin handles are rebuilt per frame and never persisted; `literalResolves()` implements §14 (names/paths, not GUIDs, checked against the live scene). | 3 configs; 40/40; canvas driven in the editor |
+| `2825336` | **Panels menu.** Every panel was hardcoded open, so a closed one could not be reopened and Mind Graph had no visible entry at all. `PanelVisibility` in `main()`, each panel taking only its own flag by reference, plus "Show All Panels". | 3 configs; 40/40 |
+| `63738bd` | **Scripts panel (§4.7).** Scripting was fused into the Inspector — the file list, attach controls and AI prompt all buried inside one object's property sheet, with a *modal* editor that blocked the app. Now a dockable panel with a real editor and a Create/Modify switch, so the AI can change an existing script rather than only write a new one. | 3 configs; 40/40 |
+| `6b9a51c` | **Hierarchy → Scripts bridge.** Right-click an object → `Add Script...` selects it and raises the panel. `Load to Object` is always present and refuses with "No object is selected!" rather than vanishing — a control that disappears when unusable teaches nothing. | 3 configs; 40/40 |
+| *(this commit)* | **Consolidated the old script UI away.** Deleted the `Add Script` and `Edit Script` modals, `ScriptCreatorState`, `ScriptEditorState` and two orphaned naming helpers (~500 lines); moved the 14 presets into the Scripts panel; repointed every entry point (Inspector `Edit`/`Add Script...`, Hierarchy right-click, Project browser `.lua` click) through `requestOpenPath`. Two defects went with it: the same script could be open in a modal *and* the panel with two divergent copies of its text, and applying **any** preset set `Collider` — so an Audio Manager on an empty silently blocked the player. `marksCollider` is now per-preset data that matches each description. | 3 configs clean, no new warnings; 40/40 |
+
 **Also shipped:** 37 GLB models imported to `Game/Models/kit/`; four reusable script presets
-(Weapons System, Door, Keypad Panel, Key Item) registered in the Add Script dropdown; the
+(Weapons System, Door, Keypad Panel, Key Item) registered as presets; the
 `FPS_controller_scene_demo.gfprod` demo (72 entities) plus its generator; Lua bindings for
 `input:getScrollDelta`, `input:isMouseButtonDown`, `world:setEntityActive`,
 `world:isEntityActive`; `entityForward()`, `gameCameraEye()`, `applyCameraPoseToEntity()`,
@@ -99,8 +105,9 @@ Each item verified as stated — builds, tests and live runs actually executed.
 | ~~P0~~ | ~~§1b.4 HUD~~ | **DONE** (`1acc01b`). §1b now has zero remaining defects. |
 | ~~P1~~ | ~~Mind Graph Phase 0~~ | **DONE** (`63f1dc5`). It earned its keep: the latest tag (v0.9.3, 2023) does **not** compile against our ImGui 1.92.3 — 1.92 defines `ImVec2` comparison operators the tag redefines. Pinned to the commit SHA with the reproduction recorded in `CMakeLists.txt`. |
 | ~~P1~~ | ~~Mind Graph Phases 1 and 2~~ | **DONE** (`4dc97e6`, `9c92b81`). Model, serializer, 12-node catalog and graph-to-Lua compiler, all with no UI and all tested. |
-| **P1** | **Mind Graph Phase 3** | Next: the panel — palette, details strip, compile bar, literals per §14. Phase 0.5's literal-refresh spike folds into it, since the contract it proves is what the panel's dropdowns rely on. |
-| P1 | **Mind Graph Phase 4** | Trigger Zone entity trait, enter/exit in `GameplayLoop` (Engine, both hosts) plus its parity test. |
+| ~~P1~~ | ~~Mind Graph Phase 3~~ | **DONE** (`0d45678`). The literal-refresh spike folded into it, as planned. |
+| ~~P1~~ | ~~Scripts panel + Panels menu (§4.7, §7.3)~~ | **DONE** (`2825336`, `63738bd`, `6b9a51c`, and the consolidation above). The Inspector's old script UI is fully removed, not merely bypassed. |
+| **P1** | **Mind Graph Phase 4** | Next: Trigger Zone entity trait, enter/exit in `GameplayLoop` (Engine, both hosts) plus its parity test. |
 | P1 | **Serialized script fields** | Read `self.*` back after `on_start`, store per-entity overrides, re-apply on Play. Makes `weapons_system.lua`'s slot table editable without opening the file. |
 | P2 | **Animation 4b.4** — property tracks | Key light intensity, camera FOV, lens layers, `active`, UI opacity. The largest animation item and the one that unlocks real cutscenes. |
 | P2 | **Animation 4b.5** — interpolation modes | Ease in/out and **stepped** — stepped is what frame-by-frame is built on. |
@@ -149,16 +156,25 @@ Standing bar for every phase:
    Editor's code. Every §1b defect was found that way and none were found any other way.
 5. No frame-time regression on the reference scene vs the Phase 0 baseline.
 
-**Last full run (2026-09-11, `9c92b81`):** 3 configs clean · **40/40 tests** · editor launches
-with empty stderr · FPS demo, lens layers **and the full HUD** verified live in the standalone
-Runtime. The parity test was additionally verified by reintroducing the real 1b.3 defect and
-confirming it fails — a test nobody has seen fail is not yet a test.
+**Last full run (2026-09-11, script-UI consolidation):** Debug + all-release clean with no new
+warnings · **40/40 tests** · editor launches with empty stderr · FPS demo, lens layers **and the
+full HUD** verified live in the standalone Runtime. The parity test was additionally verified by
+reintroducing the real 1b.3 defect and confirming it fails — a test nobody has seen fail is not
+yet a test.
+
+**Toolchain note:** the MSVC environment now comes from
+`C:\Program Files\Microsoft Visual Studio8\Community\Common7\Toolssdevcmd.bat`
+(`-arch=x64 -host_arch=x64`). VS 2022 is gone from this machine, and the `vcvars64.bat` shim
+beside it exits 1 with "The filename, directory name, or volume label syntax is incorrect" —
+calling VsDevCmd directly works. A build that reports missing `<algorithm>` means the env step
+silently failed, not that the code is broken.
 
 ---
 
 ## 9. Next action
 
-§1b closed, layout fixed, Mind Graph 0–2 done. **Phase 3 (the panel) is next** — palette,
-details strip, compile bar, and the §14 literal contract its dropdowns depend on. The model
-and compiler underneath it are already proven by 8 tests, which was the entire point of
-building them without UI first.
+§1b closed, layout fixed, Mind Graph 0–3 done, and scripting now lives in its own panel with
+the Inspector's old modal path deleted rather than merely bypassed. **Mind Graph Phase 4 is
+next** — the Trigger Zone entity trait plus enter/exit in `GameplayLoop`, which must land in
+Engine so both hosts get it by construction; that is the §1b lesson applied before the fact
+rather than after.

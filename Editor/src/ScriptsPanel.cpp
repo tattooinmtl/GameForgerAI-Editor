@@ -13,6 +13,167 @@ namespace gameforger::editor
 {
 	namespace
 	{
+		enum class PresetKind
+		{
+			MovementController,
+			Rigidbody,
+			ColliderOnly,
+			// A real script, unlike ColliderOnly, but not a physics/movement
+			// driver either - doesn't call self.entity:setPosition() or
+			// self.physics:resolve(), so it never fights a MovementController/
+			// Rigidbody for the entity's transform and stays free to combine
+			// with either (or neither) exactly like ColliderOnly does.
+			Utility,
+			// enemy_ai.lua DOES call self.entity:setPosition() every frame
+			// (wander/chase movement), same as a MovementController - so it's
+			// exclusive with those too, just its own kind rather than reusing
+			// MovementController (which is worded as player-input-driven).
+			EnemyAI
+		};
+
+		struct ScriptPreset
+		{
+			const char* label;
+			const char* path; // unused for ColliderOnly
+			const char* description;
+			PresetKind kind;
+			// Whether applying this preset also marks the object solid. This is
+			// per-preset data rather than derived from `kind` because the two do
+			// not line up: Ranged Attacker is a Utility that SHOULD be solid (it
+			// is an enemy or a tower), while Game Manager, Audio Manager, Door,
+			// Keypad and Key Item are Utilities that should not be. The old
+			// Inspector version set Collider on every preset that had a script,
+			// which quietly made an audio manager attached to an empty block the
+			// player - contradicting this table's own descriptions.
+			bool marksCollider;
+		};
+
+		constexpr std::array<ScriptPreset, kScriptPresetCount> kPresets{{
+			{"FPS Controller",
+			 "Game/Scripts/fps_controller.lua",
+			 "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
+			 "press C in Play to swap to third-person. Also marks this object as a Collider.",
+			 PresetKind::MovementController,
+			 true},
+			{"Third-Person Controller",
+			 "Game/Scripts/third_person_controller.lua",
+			 "Same movement/sprint/jump/mouse-look, plus the capsule turns to face where it's "
+			 "moving. Third-person camera by default - press C to swap to first-person. Also marks "
+			 "this object as a Collider.",
+			 PresetKind::MovementController,
+			 true},
+			{"Rigidbody",
+			 "Game/Scripts/rigidbody.lua",
+			 "Falls under gravity and lands on/collides with Collider-enabled objects - for props "
+			 "like a cube you want to fall and stay put. Also marks this object as a Collider. Not "
+			 "for a player character - use FPS/Third-Person Controller instead, which already "
+			 "include their own gravity and ground collision.",
+			 PresetKind::Rigidbody,
+			 true},
+			{"Collider Only",
+			 nullptr,
+			 "No script - just marks this object solid, so an FPS/Third-Person/Rigidbody script's "
+			 "self.physics:resolve() collides with it. Use for ground, walls, and platforms.",
+			 PresetKind::ColliderOnly,
+			 true},
+			{"Inventory & Pickup",
+			 "Game/Scripts/inventory_system.lua",
+			 "E picks up any nearby \"Is Pickup Item\" object (Inspector), I opens the inventory "
+			 "grid. Attach to the player alongside FPS/Third-Person Controller - has no effect on "
+			 "its own without one of those claiming the camera. pickup_range/pickup_height_tolerance "
+			 "are editable in the script itself.",
+			 PresetKind::Utility,
+			 false},
+			{"Enemy AI",
+			 "Game/Scripts/enemy_ai.lua",
+			 "Wanders near its spawn point until an object tagged target_tag (default \"Player\") "
+			 "comes within search_radius, then chases it until it escapes escape_radius. Shows the "
+			 "red detection icon while chasing. All radii/speeds/target_tag are editable in the "
+			 "script itself. Also marks this object as a Collider.",
+			 PresetKind::EnemyAI,
+			 true},
+			{"Ranged Attacker",
+			 "Game/Scripts/ranged_attacker.lua",
+			 "Fires projectiles at the nearest object tagged target_tag once it's within fire_range "
+			 "- attach to an enemy (target_tag=\"Player\"), the player (target_tag=\"Enemy\"), or a "
+			 "future tower (either). Optional muzzle_tag names a separate tagged entity to fire "
+			 "from (e.g. \"player_gun_muzzle\") instead of this object's own position - just a "
+			 "regular Inspector tag, no extra setup needed. Needs a target_tag that actually exists "
+			 "in the scene to do anything. Also marks this object as a Collider - fine for an enemy "
+			 "or tower, uncheck it after applying if used on something that shouldn't block movement.",
+			 PresetKind::Utility,
+			 true},
+			{"Catapult Controller",
+			 "Game/Scripts/catapult_controller.lua",
+			 "Attach to a catapult's base (needs Is Catapult + a \"PlayerCatapult\" tag, Inspector). "
+			 "F grabs/tows it toward you, F again drops it; walk up and press E to load/aim, mouse to "
+			 "aim, hold T to power up the throw, R to fire. Finds its own arm by proximity to an "
+			 "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
+			 "speeds/power-charge-time are editable in the script itself.",
+			 PresetKind::Utility,
+			 false},
+			{"Game Manager",
+			 "Game/Scripts/game_manager.lua",
+			 "Session-wide state that isn't any one object's business. Owns cursor lock - which "
+			 "used to be a checkbox on every entity's Inspector - and registers itself in the "
+			 "manager list. Attach to ONE entity per scene (an empty is fine). Doesn't touch "
+			 "the transform, so it combines with anything.",
+			 PresetKind::Utility,
+			 false},
+			{"Audio Manager",
+			 "Game/Scripts/audio_manager.lua",
+			 "Plays background music on a loop and exposes self.audio to every other script "
+			 "(play/stop/setMasterVolume/isPlaying). Set music_clip to something in Game/Audio - "
+			 "use the Audio panel's Import Sound from PC to put one there. Doesn't touch the "
+			 "transform.",
+			 PresetKind::Utility,
+			 false},
+			{"Weapons System",
+			 "Game/Scripts/weapons_system.lua",
+			 "Viewmodel, weapon switching, firing and melee in one pack. Attach to the player "
+			 "alongside FPS Controller. Parent each weapon model as a child of the scene's Main "
+			 "Camera - the engine drives that camera from the live view, so anything under it "
+			 "rides the player's eyes and becomes a viewmodel. Mouse wheel or number keys switch, "
+			 "left mouse attacks. Slots/cooldowns/reach are editable in the script itself.",
+			 PresetKind::Utility,
+			 false},
+			{"Door",
+			 "Game/Scripts/door_interaction.lua",
+			 "E opens and closes this object, swinging it around its own Pivot - set Pivot to the "
+			 "hinge edge first, or it spins around its middle. Optionally locked behind a key item "
+			 "or a keypad code (lock_mode in the script). Doesn't drive its own position, so it "
+			 "combines with anything.",
+			 PresetKind::Utility,
+			 false},
+			{"Keypad Panel",
+			 "Game/Scripts/keypad_panel.lua",
+			 "Walk up, E to activate, type a code, Enter to submit. A correct code unlocks every "
+			 "Door in the scene set to that same code - no link between the two objects needed. "
+			 "Entry progress prints to the Console.",
+			 PresetKind::Utility,
+			 false},
+			{"Key Item",
+			 "Game/Scripts/key_item.lua",
+			 "Marks this object as the key to a locked Door. Also tick \"Is Pickup Item\" and set "
+			 "its Item Name to match the Door's key_item_name. Walking close enough to pick it up "
+			 "unlocks every Door waiting on that key.",
+			 PresetKind::Utility,
+			 false},
+		}};
+
+		// At most one physics-driving preset at a time: each runs its own
+		// independent gravity/ground-collision every frame and calls
+		// self.entity:setPosition(), so attaching two to the same object makes
+		// them fight over its transform - symptoms are frozen or jittery
+		// movement, a broken jump, and a third-person camera that looks like it
+		// isn't following. Collider Only and the Utilities never touch the
+		// transform, so they stay free to combine with any of these.
+		constexpr bool isExclusivePreset(const PresetKind kind) noexcept
+		{
+			return kind == PresetKind::MovementController || kind == PresetKind::Rigidbody
+				|| kind == PresetKind::EnemyAI;
+		}
+
 		void refreshScriptList(ScriptsPanelState& state, const std::filesystem::path& projectRoot)
 		{
 			state.scriptPaths.clear();
@@ -75,12 +236,121 @@ namespace gameforger::editor
 			state.bufferDirty = false;
 		}
 
+		// The built-in behaviour packs. Collapsed by default so the file list -
+		// the thing you are usually here for - keeps the space.
+		void drawPresetsSection(
+			ScriptsPanelState& state,
+			AICommandBus& commandBus,
+			const SceneEntity* selected,
+			const ScriptsLogFn& log)
+		{
+			ImGui::SetNextItemOpen(state.presetsExpanded, ImGuiCond_Always);
+			state.presetsExpanded = ImGui::CollapsingHeader("Presets");
+			if (!state.presetsExpanded)
+			{
+				return;
+			}
+
+			ImGui::TextDisabled("Tick one or more, then Apply to Object.");
+			for (std::size_t index = 0; index < kPresets.size(); ++index)
+			{
+				ImGui::PushID(static_cast<int>(index));
+				const bool wasSelected = state.presetSelected[index];
+				if (ImGui::Checkbox(kPresets[index].label, &state.presetSelected[index]) && !wasSelected
+					&& isExclusivePreset(kPresets[index].kind))
+				{
+					for (std::size_t other = 0; other < kPresets.size(); ++other)
+					{
+						if (other != index && isExclusivePreset(kPresets[other].kind))
+						{
+							state.presetSelected[other] = false;
+						}
+					}
+				}
+				if (ImGui::IsItemHovered())
+				{
+					// Tooltip rather than inline text: these descriptions are
+					// paragraphs, and printing fourteen of them would bury the
+					// file list underneath them.
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(420.0F);
+					ImGui::TextUnformatted(kPresets[index].description);
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
+				}
+				ImGui::PopID();
+			}
+
+			const bool anySelected = std::any_of(
+				state.presetSelected.begin(), state.presetSelected.end(), [](const bool s) { return s; });
+			if (!anySelected)
+			{
+				ImGui::BeginDisabled();
+			}
+			// Present-but-refusing when nothing is selected, same as the
+			// Load to Object button below - see the note there.
+			if (ImGui::Button("Apply to Object"))
+			{
+				if (selected == nullptr)
+				{
+					state.status = "No object is selected! Pick one in the Hierarchy first.";
+					state.statusSuccess = false;
+					log(false, "Scripts: no object is selected.");
+				}
+				else
+				{
+					bool anySuccess = false;
+					for (std::size_t index = 0; index < kPresets.size(); ++index)
+					{
+						if (!state.presetSelected[index])
+						{
+							continue;
+						}
+						const ScriptPreset& preset = kPresets[index];
+						AICommandResult result{true, false, ""};
+						if (preset.kind != PresetKind::ColliderOnly)
+						{
+							result = commandBus.execute(AttachScriptCommand{selected->name, preset.path});
+						}
+						if (result.success && preset.marksCollider)
+						{
+							const AICommandResult collider = commandBus.execute(
+								SetPropertyCommand{selected->name, "Collider", "enabled", true});
+							if (preset.kind == PresetKind::ColliderOnly)
+							{
+								result = collider;
+							}
+						}
+						log(result.success, std::string(preset.label) + ": " + result.message);
+						anySuccess = anySuccess || result.success;
+						state.presetSelected[index] = false;
+					}
+					state.status = anySuccess ? "Preset(s) applied to " + selected->name + "."
+											  : "No presets applied - see the Console.";
+					state.statusSuccess = anySuccess;
+				}
+			}
+			if (!anySelected)
+			{
+				ImGui::EndDisabled();
+			}
+			ImGui::SameLine();
+			if (selected != nullptr)
+			{
+				ImGui::TextDisabled("-> %s", selected->name.c_str());
+			}
+			else
+			{
+				ImGui::TextColored(ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "no object selected");
+			}
+			ImGui::Separator();
+		}
+
 		void startAiRequest(
 			ScriptsPanelState& state,
 			const AIProviderClient& providerClient,
 			const std::string& activeProviderId,
 			const std::string& entityName,
-			const std::string& gameTitle,
 			const std::string& targetPath,
 			const bool create)
 		{
@@ -183,8 +453,27 @@ namespace gameforger::editor
 
 		const SceneEntity* selected = scene.findEntity(selectedEntityId);
 
-		// ---- left: the file list ----
-		ImGui::BeginChild("##scriptList", ImVec2(240.0F, -150.0F), true);
+		// Someone outside the panel asked for a specific file - the Project
+		// browser, or the Inspector's list of attached scripts.
+		if (!state.requestOpenPath.empty())
+		{
+			const std::string wanted = state.requestOpenPath;
+			state.requestOpenPath.clear();
+			if (wanted != state.loadedPath)
+			{
+				refreshScriptList(state, projectRoot);
+				loadScriptIntoBuffer(state, projectRoot, wanted);
+				const auto found = std::find(state.scriptPaths.begin(), state.scriptPaths.end(), wanted);
+				state.selectedIndex = found == state.scriptPaths.end()
+					? -1
+					: static_cast<int>(std::distance(state.scriptPaths.begin(), found));
+			}
+			ImGui::SetWindowFocus();
+		}
+
+		// ---- left: presets, then the file list ----
+		ImGui::BeginChild("##scriptList", ImVec2(260.0F, -150.0F), true);
+		drawPresetsSection(state, commandBus, selected, log);
 		ImGui::TextUnformatted("Scripts");
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Refresh"))
@@ -353,7 +642,7 @@ namespace gameforger::editor
 				? "Game/Scripts/" + suggestedScriptFileName(state.newScriptName.data(), gameTitle)
 				: state.loadedPath;
 			startAiRequest(
-				state, providerClient, activeProviderId, entityName, gameTitle, target, state.createMode);
+				state, providerClient, activeProviderId, entityName, target, state.createMode);
 			log(true, std::string("Scripts: asking the AI to ")
 					+ (state.createMode ? "write " : "modify ") + target + "...");
 		}

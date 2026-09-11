@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -16,6 +17,12 @@
 namespace gameforger::editor
 {
 	using ScriptsLogFn = std::function<void(bool success, const std::string& message)>;
+
+	// How many built-in script presets the panel offers. Declared here only so
+	// the tick state can be a fixed array; the table itself lives in
+	// ScriptsPanel.cpp behind a static_assert, so adding a preset there without
+	// bumping this is a build error rather than a silently ignored last entry.
+	inline constexpr std::size_t kScriptPresetCount = 14;
 
 	// The Scripts panel: browse, read, edit, attach, and ask the AI to write or
 	// change a script - in one dockable window.
@@ -41,6 +48,20 @@ namespace gameforger::editor
 		std::string loadedPath;
 		std::array<char, 32768> buffer{};
 		bool bufferDirty = false;
+
+		// A project-relative script path something outside the panel wants
+		// opened - the Project browser double-clicking a .lua, or the
+		// Inspector clicking an attached script. Consumed on the next draw.
+		// The caller sets `open` too; this only says WHICH file.
+		std::string requestOpenPath;
+
+		// Which of the built-in presets are ticked. These moved here from the
+		// Inspector's "Add Script" modal along with everything else scripting:
+		// they are the fastest way to give an object working behaviour, and
+		// leaving them behind in a popup while the panel owned every other
+		// script path would have split the one workflow across two places.
+		std::array<bool, kScriptPresetCount> presetSelected{};
+		bool presetsExpanded = false;
 
 		std::string status;
 		bool statusSuccess = true;

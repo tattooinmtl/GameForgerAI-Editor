@@ -9496,6 +9496,7 @@ int main()
     // Phase C. Owns worker thread + message queue for the agent loop.
     AICockpitState aiCockpit;
     MindGraphPanelState mindGraph;
+
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
@@ -9587,7 +9588,10 @@ int main()
         blenderClient.pumpMainThread();
 
         gameforger::editor::pumpCockpit(aiCockpit);
-        drawMindGraphPanel(mindGraph);
+        drawMindGraphPanel(
+            mindGraph, scene, projectRoot,
+            [&console](const bool success, const std::string& message)
+            { logMessage(console, success ? LogLevel::Info : LogLevel::Error, message); });
         drawMainMenu(
             scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
             settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,

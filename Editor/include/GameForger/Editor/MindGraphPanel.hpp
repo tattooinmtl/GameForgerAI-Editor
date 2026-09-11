@@ -1,55 +1,72 @@
 #pragma once
 
+#include <array>
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
+#include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Editor/MindGraph/GraphCompiler.hpp"
+#include "GameForger/Editor/MindGraph/GraphData.hpp"
+
 namespace gameforger::editor
 {
+	using MindGraphLogFn = std::function<void(bool success, const std::string& message)>;
+
 	// Mind Graph - the visual node-scripting canvas (docs/MindGraph-Plan.md).
 	//
-	// PHASE 0 ONLY. This is the dependency de-risk slice and nothing more: it
-	// proves imgui-node-editor renders a canvas, draws nodes with pins, and
-	// lets a link be dragged between them inside this editor's own ImGui
-	// context and docking setup. It compiles no graph and saves no file.
-	//
-	// The real data model (GraphData.hpp) and compiler land in Phases 1-2,
-	// which deliberately have no UI at all so they can be fully tested before
-	// the canvas work depends on them.
+	// The graph is the authored artefact (`.gfgraph`); compiling it writes a
+	// readable Lua module under Game/Scripts/generated/ that runs on the
+	// existing ScriptRuntime in BOTH hosts. There is no second execution
+	// engine - that is decision D9, and the reason is the Editor/Runtime seam
+	// that produced every §1b defect.
 	struct MindGraphPanelState
 	{
 		bool panelOpen = false;
 
-		// Phase 0 placeholder graph. Two nodes and whatever links the user
-		// drags between them, held in memory for the session only.
-		//
-		// Ids are ints here purely because imgui-node-editor addresses pins
-		// and nodes by integer handle. That is NOT the persistence model:
-		// section 13 of the plan requires links to serialize as
-		// (nodeId, pinStringId) pairs, because ints assigned at load shift
-		// when a node type's pin list changes and silently rebind links.
-		struct Link
-		{
-			int id = 0;
-			int fromPin = 0;
-			int toPin = 0;
-		};
-		std::vector<Link> links;
-		int nextLinkId = 100;
+		mindgraph::MindGraph graph;
+		std::filesystem::path graphPath; // empty until saved or loaded
+		bool dirty = false;
 
-		// Frames drawn since the panel opened. Used only to defer the initial
-		// "frame the content" call until node extents are known.
+		// Last compile, kept so the error list persists between frames and a
+		// double-click on a diagnostic can select the node it names.
+		std::vector<mindgraph::CompileDiagnostic> diagnostics;
+		std::string compileStatus;
+		bool compileSucceeded = false;
+
+		int selectedNodeId = 0;
+		std::array<char, 128> paletteFilter{};
+
+		// imgui-node-editor addresses nodes and pins by integer handle, so the
+		// canvas maps each (nodeId, pinStringId) to an int for the duration of
+		// a frame. Those ints are NEVER persisted - section 13 requires links
+		// on disk to be (nodeId, pinStringId), because an integer assigned at
+		// load shifts the moment a node type gains a pin and silently rebinds
+		// every later link.
+		std::vector<std::pair<int, std::string>> pinHandleToPin; // index+1 == handle
+		int pendingFocusNodeId = 0;
+
+		// Frames drawn since the panel opened. The canvas cannot be framed on
+		// frame 1 - node extents are not known until they have been submitted
+		// once - so the initial "fit the content" call is deferred.
 		int framesDrawn = 0;
 
-		// Set once the editor context has been created, so it is created
-		// lazily on first draw rather than at startup - the canvas costs
-		// nothing until someone opens the panel.
 		bool contextCreated = false;
 		void* context = nullptr; // ax::NodeEditor::EditorContext*
 	};
 
 	// Draws the "Mind Graph" window. Safe to call every frame; does nothing
 	// while `panelOpen` is false.
-	void drawMindGraphPanel(MindGraphPanelState& state);
+	//
+	// `scene` populates the scene-bound dropdowns - objects, tags and lights
+	// that actually exist - which is design pillar 3 ("the scene is the
+	// vocabulary"): no typing names and hoping.
+	void drawMindGraphPanel(
+		MindGraphPanelState& state,
+		const EditorScene& scene,
+		const std::filesystem::path& projectRoot,
+		const MindGraphLogFn& log);
 
 	// Releases the node-editor context. Called once on shutdown.
 	void shutdownMindGraphPanel(MindGraphPanelState& state) noexcept;

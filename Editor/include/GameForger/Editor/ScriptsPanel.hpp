@@ -63,6 +63,12 @@ namespace gameforger::editor
 		std::array<bool, kScriptPresetCount> presetSelected{};
 		bool presetsExpanded = false;
 
+		// The selection the panel last drew against. A status line naming an
+		// object you are no longer pointing at is a lie the user reasonably
+		// reads as "it is still attached to that first object", so the status
+		// is cleared whenever this changes.
+		int lastSelectedEntityId = -2;
+
 		std::string status;
 		bool statusSuccess = true;
 

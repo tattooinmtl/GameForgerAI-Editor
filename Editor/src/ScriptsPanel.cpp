@@ -236,8 +236,33 @@ namespace gameforger::editor
 			state.bufferDirty = false;
 		}
 
-		// The built-in behaviour packs. Collapsed by default so the file list -
-		// the thing you are usually here for - keeps the space.
+		// Attaches one preset to `entityName`, marking it solid when that preset
+		// says it should be. Shared by the Presets section and the script
+		// list's right-click menu so the two cannot drift.
+		AICommandResult applyPreset(
+			AICommandBus& commandBus, const ScriptPreset& preset, const std::string& entityName)
+		{
+			AICommandResult result{true, false, ""};
+			if (preset.kind != PresetKind::ColliderOnly)
+			{
+				result = commandBus.execute(AttachScriptCommand{entityName, preset.path});
+			}
+			if (result.success && preset.marksCollider)
+			{
+				const AICommandResult collider =
+					commandBus.execute(SetPropertyCommand{entityName, "Collider", "enabled", true});
+				if (preset.kind == PresetKind::ColliderOnly)
+				{
+					result = collider;
+				}
+			}
+			return result;
+		}
+
+		// The built-in behaviour packs. Full panel width, not inside the file
+		// list's narrow column: when this lived in a 260px child, the "-> which
+		// object" label beside the Apply button was clipped off the right edge,
+		// so nothing on screen ever showed that the target had changed.
 		void drawPresetsSection(
 			ScriptsPanelState& state,
 			AICommandBus& commandBus,
@@ -251,34 +276,44 @@ namespace gameforger::editor
 				return;
 			}
 
-			ImGui::TextDisabled("Tick one or more, then Apply to Object.");
-			for (std::size_t index = 0; index < kPresets.size(); ++index)
+			ImGui::TextDisabled(
+				"Tick one or more, then Apply to Object. Ticks stay put afterwards, so the same set "
+				"can go onto several objects one after another.");
+
+			// Three columns: fourteen stacked checkboxes pushed the Apply
+			// button below the fold.
+			if (ImGui::BeginTable("##presetGrid", 3, ImGuiTableFlags_SizingStretchSame))
 			{
-				ImGui::PushID(static_cast<int>(index));
-				const bool wasSelected = state.presetSelected[index];
-				if (ImGui::Checkbox(kPresets[index].label, &state.presetSelected[index]) && !wasSelected
-					&& isExclusivePreset(kPresets[index].kind))
+				for (std::size_t index = 0; index < kPresets.size(); ++index)
 				{
-					for (std::size_t other = 0; other < kPresets.size(); ++other)
+					ImGui::TableNextColumn();
+					ImGui::PushID(static_cast<int>(index));
+					const bool wasSelected = state.presetSelected[index];
+					if (ImGui::Checkbox(kPresets[index].label, &state.presetSelected[index]) && !wasSelected
+						&& isExclusivePreset(kPresets[index].kind))
 					{
-						if (other != index && isExclusivePreset(kPresets[other].kind))
+						for (std::size_t other = 0; other < kPresets.size(); ++other)
 						{
-							state.presetSelected[other] = false;
+							if (other != index && isExclusivePreset(kPresets[other].kind))
+							{
+								state.presetSelected[other] = false;
+							}
 						}
 					}
+					if (ImGui::IsItemHovered())
+					{
+						// Tooltip rather than inline text: these descriptions
+						// are paragraphs, and printing fourteen of them would
+						// bury everything below.
+						ImGui::BeginTooltip();
+						ImGui::PushTextWrapPos(420.0F);
+						ImGui::TextUnformatted(kPresets[index].description);
+						ImGui::PopTextWrapPos();
+						ImGui::EndTooltip();
+					}
+					ImGui::PopID();
 				}
-				if (ImGui::IsItemHovered())
-				{
-					// Tooltip rather than inline text: these descriptions are
-					// paragraphs, and printing fourteen of them would bury the
-					// file list underneath them.
-					ImGui::BeginTooltip();
-					ImGui::PushTextWrapPos(420.0F);
-					ImGui::TextUnformatted(kPresets[index].description);
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-				ImGui::PopID();
+				ImGui::EndTable();
 			}
 
 			const bool anySelected = std::any_of(
@@ -306,33 +341,30 @@ namespace gameforger::editor
 						{
 							continue;
 						}
-						const ScriptPreset& preset = kPresets[index];
-						AICommandResult result{true, false, ""};
-						if (preset.kind != PresetKind::ColliderOnly)
-						{
-							result = commandBus.execute(AttachScriptCommand{selected->name, preset.path});
-						}
-						if (result.success && preset.marksCollider)
-						{
-							const AICommandResult collider = commandBus.execute(
-								SetPropertyCommand{selected->name, "Collider", "enabled", true});
-							if (preset.kind == PresetKind::ColliderOnly)
-							{
-								result = collider;
-							}
-						}
-						log(result.success, std::string(preset.label) + ": " + result.message);
+						const AICommandResult result =
+							applyPreset(commandBus, kPresets[index], selected->name);
+						log(result.success, std::string(kPresets[index].label) + ": " + result.message);
 						anySuccess = anySuccess || result.success;
-						state.presetSelected[index] = false;
+						// Ticks are deliberately NOT cleared here. Clearing them
+						// left the Apply button disabled the instant it was
+						// used, so applying the same preset to a second object
+						// looked like the panel had stopped working.
 					}
-					state.status = anySuccess ? "Preset(s) applied to " + selected->name + "."
-											  : "No presets applied - see the Console.";
+					state.status = anySuccess
+						? "Applied to " + selected->name + ". Select another object and Apply again, "
+							"or untick above."
+						: "Nothing applied to " + selected->name + " - see the Console.";
 					state.statusSuccess = anySuccess;
 				}
 			}
 			if (!anySelected)
 			{
 				ImGui::EndDisabled();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Clear ticks"))
+			{
+				state.presetSelected.fill(false);
 			}
 			ImGui::SameLine();
 			if (selected != nullptr)
@@ -343,7 +375,6 @@ namespace gameforger::editor
 			{
 				ImGui::TextColored(ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "no object selected");
 			}
-			ImGui::Separator();
 		}
 
 		void startAiRequest(
@@ -453,6 +484,35 @@ namespace gameforger::editor
 
 		const SceneEntity* selected = scene.findEntity(selectedEntityId);
 
+		// The selection moved. Drop the old status: it names the previous
+		// object, and a line reading "Applied to Capsule" under a panel now
+		// pointing at something else is indistinguishable from the panel being
+		// stuck on the capsule.
+		if (selectedEntityId != state.lastSelectedEntityId)
+		{
+			state.lastSelectedEntityId = selectedEntityId;
+			state.status.clear();
+			state.statusSuccess = true;
+		}
+
+		// Who everything on this panel acts on, stated once at the top where it
+		// cannot be clipped or missed. Every attach below goes to THIS object.
+		ImGui::TextUnformatted("Target object:");
+		ImGui::SameLine();
+		if (selected != nullptr)
+		{
+			ImGui::TextColored(ImVec4(0.45F, 0.85F, 0.50F, 1.0F), "%s", selected->name.c_str());
+		}
+		else
+		{
+			ImGui::TextColored(
+				ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "none - pick one in the Hierarchy");
+		}
+		ImGui::Separator();
+
+		drawPresetsSection(state, commandBus, selected, log);
+		ImGui::Separator();
+
 		// Someone outside the panel asked for a specific file - the Project
 		// browser, or the Inspector's list of attached scripts.
 		if (!state.requestOpenPath.empty())
@@ -471,9 +531,8 @@ namespace gameforger::editor
 			ImGui::SetWindowFocus();
 		}
 
-		// ---- left: presets, then the file list ----
+		// ---- left: the file list ----
 		ImGui::BeginChild("##scriptList", ImVec2(260.0F, -150.0F), true);
-		drawPresetsSection(state, commandBus, selected, log);
 		ImGui::TextUnformatted("Scripts");
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Refresh"))
@@ -491,15 +550,83 @@ namespace gameforger::editor
 				&& std::find(selected->scripts.begin(), selected->scripts.end(), path)
 					!= selected->scripts.end();
 			std::string label = (attached ? "* " : "  ") + path.substr(path.rfind('/') + 1);
+			ImGui::PushID(static_cast<int>(index));
 			if (ImGui::Selectable(label.c_str(), isOpen))
 			{
 				loadScriptIntoBuffer(state, projectRoot, path);
 				state.selectedIndex = static_cast<int>(index);
 			}
+			// Right-click acts on the row under the cursor without disturbing
+			// which file is open in the editor - you can send a script to an
+			// object while reading a different one.
+			if (ImGui::BeginPopupContextItem("##scriptRowMenu"))
+			{
+				ImGui::TextDisabled("%s", path.c_str());
+				ImGui::Separator();
+				if (ImGui::MenuItem("Send to Object", nullptr, false, !attached))
+				{
+					if (selected == nullptr)
+					{
+						state.status = "No object is selected! Pick one in the Hierarchy first.";
+						state.statusSuccess = false;
+						log(false, "Scripts: no object is selected.");
+					}
+					else
+					{
+						const AICommandResult result =
+							commandBus.execute(AttachScriptCommand{selected->name, path});
+						state.status = result.message;
+						state.statusSuccess = result.success;
+						log(result.success, "Scripts: " + result.message);
+					}
+				}
+				if (ImGui::MenuItem("Remove from Object", nullptr, false, attached))
+				{
+					const AICommandResult result =
+						commandBus.execute(DetachScriptCommand{selected->name, path});
+					state.status = result.message;
+					state.statusSuccess = result.success;
+					log(result.success, "Scripts: " + result.message);
+				}
+				ImGui::Separator();
+				if (ImGui::MenuItem("Open in Editor"))
+				{
+					loadScriptIntoBuffer(state, projectRoot, path);
+					state.selectedIndex = static_cast<int>(index);
+				}
+				if (ImGui::MenuItem("Copy Path"))
+				{
+					ImGui::SetClipboardText(path.c_str());
+					state.status = "Copied " + path;
+					state.statusSuccess = true;
+				}
+				// Named rather than "Modify": it says which script the AI
+				// prompt at the bottom is about to rewrite.
+				if (ImGui::MenuItem("Ask AI to modify this"))
+				{
+					loadScriptIntoBuffer(state, projectRoot, path);
+					state.selectedIndex = static_cast<int>(index);
+					state.createMode = false;
+				}
+				ImGui::Separator();
+				if (selected != nullptr)
+				{
+					ImGui::TextDisabled("target: %s", selected->name.c_str());
+				}
+				else
+				{
+					ImGui::TextColored(ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "no object selected");
+				}
+				ImGui::EndPopup();
+			}
 			if (ImGui::IsItemHovered())
 			{
-				ImGui::SetTooltip("%s%s", path.c_str(), attached ? "\n(attached to the selected object)" : "");
+				ImGui::SetTooltip(
+					"%s%s\nRight-click for Send to Object.",
+					path.c_str(),
+					attached ? "\n(attached to the selected object)" : "");
 			}
+			ImGui::PopID();
 		}
 		if (state.scriptPaths.empty())
 		{

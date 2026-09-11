@@ -74,6 +74,9 @@ Each item verified as stated — builds, tests and live runs actually executed.
 | `d430aad` | **Mind Graph plan** authored. | — |
 | `aaff04d` | **Mind Graph plan amended** — §13 catalog/pin contract, §14 literal refresh (correcting the review's GUID recommendation), §15 breadcrumb wrapper, §16 amended phases. This file created. | — |
 | `307fddf` | **§1b parity: five defects fixed by removing the cause.** All eight GameplayState/AudioEngine-backed `ScriptRuntime` callbacks now bind once in Engine (`bindSharedScriptCallbacks`), called by both hosts, so a callback is bound in both **by construction**. Deleted ~6.8 KB of duplicated binding. Two *new* instances of the class surfaced while fixing the first three: `projectilesFiredThisTick` never reset in the Runtime, and the Runtime firing only `OnPlayStart` audio hooks. | 3 configs; 34/34; **test verified by reintroducing the real defect** and confirming it fails |
+| `4e59bd8` | **Default dock layout (7.3b).** There was none: a fresh clone and Edit > Reset both left every panel floating, and the editor saved that, so the mess repeated every launch. Now builds the Unity-style arrangement — Hierarchy/Project left, Inspector/Toolbox right, log and authoring tabs bottom, 3D views centre. | Verified by deleting the ini and screenshotting the result |
+| `4dc97e6` | **Mind Graph Phase 1** — graph model + `.gfgraph` serializer, no UI. Links serialize as `(nodeId, pinId STRING)`, never an integer index; ids recomputed from content so a hand-edited file cannot reissue a live id; broken links preserved and reported rather than dropped. | 3 configs; 36/36 |
+| `9c92b81` | **Mind Graph Phase 2** — 12-node catalog + graph→Lua compiler with its own runtime prelude. Added `world:setLightIntensity` / `setLightColor`, without which Set Light had nothing to call. **`testMindGraphGeneratedLuaRuns` caught a real bug**: the emitter wrote `play(clip, loop)` when the binding is `play(clip, VOLUME, loop)`. | 3 configs; 40/40 |
 | `63f1dc5` | **Mind Graph Phase 0.** Pinned imgui-node-editor to commit `021aa0ea`, not the v0.9.3 tag — the tag fails to compile against ImGui 1.92.3 (it redefines `ImVec2` operators 1.92 now provides). `GIT_SHALLOW FALSE`, same reason ImGuizmo documents. Repo ships no CMakeLists, so its four sources build as `GameForgerNodeEditor`. Canvas renders with draggable links. | Debug + all-release clean; 34/34; canvas verified in the editor |
 | `1acc01b` | **§1b.4 HUD — the last one.** Moved HUD drawing out of the Editor's ImGui path into `ViewportRenderer`, which both hosts share. New `OverlayFont` in Engine (extracted, not copied — GameMenu and TextMesh each already had one). Two bugs only visible by running it: the UI host was `followedEntity` (the *player*, not a camera), and text was centred on its anchor so top-left labels spilled off-screen. `UIElementData::fontPath` now actually works. | 3 configs; 34/34; editor clean; **crosshair + both text lines verified in a standalone Runtime run** |
 
@@ -95,7 +98,9 @@ Each item verified as stated — builds, tests and live runs actually executed.
 | ~~P0~~ | ~~§1b Runtime parity fix~~ | **DONE** (`307fddf`) — and the state never needed moving; it had always been in `GameplayState`. The callbacks were simply never wired to it. |
 | ~~P0~~ | ~~§1b.4 HUD~~ | **DONE** (`1acc01b`). §1b now has zero remaining defects. |
 | ~~P1~~ | ~~Mind Graph Phase 0~~ | **DONE** (`63f1dc5`). It earned its keep: the latest tag (v0.9.3, 2023) does **not** compile against our ImGui 1.92.3 — 1.92 defines `ImVec2` comparison operators the tag redefines. Pinned to the commit SHA with the reproduction recorded in `CMakeLists.txt`. |
-| **P1** | **Mind Graph Phase 0.5 → 1 → 2** | Next. 0.5 is the 30-minute literal-refresh spike; 1 and 2 are the graph model and compiler, both fully testable with no UI. |
+| ~~P1~~ | ~~Mind Graph Phases 1 and 2~~ | **DONE** (`4dc97e6`, `9c92b81`). Model, serializer, 12-node catalog and graph-to-Lua compiler, all with no UI and all tested. |
+| **P1** | **Mind Graph Phase 3** | Next: the panel — palette, details strip, compile bar, literals per §14. Phase 0.5's literal-refresh spike folds into it, since the contract it proves is what the panel's dropdowns rely on. |
+| P1 | **Mind Graph Phase 4** | Trigger Zone entity trait, enter/exit in `GameplayLoop` (Engine, both hosts) plus its parity test. |
 | P1 | **Serialized script fields** | Read `self.*` back after `on_start`, store per-entity overrides, re-apply on Play. Makes `weapons_system.lua`'s slot table editable without opening the file. |
 | P2 | **Animation 4b.4** — property tracks | Key light intensity, camera FOV, lens layers, `active`, UI opacity. The largest animation item and the one that unlocks real cutscenes. |
 | P2 | **Animation 4b.5** — interpolation modes | Ease in/out and **stepped** — stepped is what frame-by-frame is built on. |
@@ -144,7 +149,7 @@ Standing bar for every phase:
    Editor's code. Every §1b defect was found that way and none were found any other way.
 5. No frame-time regression on the reference scene vs the Phase 0 baseline.
 
-**Last full run (2026-09-11, `63f1dc5`):** 3 configs clean · **34/34 tests** · editor launches
+**Last full run (2026-09-11, `9c92b81`):** 3 configs clean · **40/40 tests** · editor launches
 with empty stderr · FPS demo, lens layers **and the full HUD** verified live in the standalone
 Runtime. The parity test was additionally verified by reintroducing the real 1b.3 defect and
 confirming it fails — a test nobody has seen fail is not yet a test.
@@ -153,6 +158,7 @@ confirming it fails — a test nobody has seen fail is not yet a test.
 
 ## 9. Next action
 
-§1b is closed. Proceeding through the approved run: **Mind Graph Phase 0** (pin the
-dependency), then 0.5 (literal-refresh spike), then 1–2 (model + compiler, both fully
-testable with no UI), then the panel.
+§1b closed, layout fixed, Mind Graph 0–2 done. **Phase 3 (the panel) is next** — palette,
+details strip, compile bar, and the §14 literal contract its dropdowns depend on. The model
+and compiler underneath it are already proven by 8 tests, which was the entire point of
+building them without UI first.

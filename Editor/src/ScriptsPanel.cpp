@@ -243,34 +243,54 @@ namespace gameforger::editor
 					refreshScriptList(state, projectRoot);
 				}
 			}
-			if (selected != nullptr)
-			{
-				const bool attached =
-					std::find(selected->scripts.begin(), selected->scripts.end(), state.loadedPath)
+			// The load-to-object button is ALWAYS here, whether or not
+			// something is selected. A control that vanishes when it cannot be
+			// used teaches nothing - you are left wondering whether the
+			// feature exists at all. Present but refusing, with a reason, is
+			// the honest version.
+			const bool attached = selected != nullptr
+				&& std::find(selected->scripts.begin(), selected->scripts.end(), state.loadedPath)
 					!= selected->scripts.end();
-				ImGui::SameLine();
-				if (attached)
+			ImGui::SameLine();
+			if (attached)
+			{
+				if (ImGui::SmallButton("Remove from Object"))
 				{
-					if (ImGui::SmallButton("Detach"))
-					{
-						const AICommandResult result = commandBus.execute(
-							DetachScriptCommand{selected->name, state.loadedPath});
-						log(result.success, "Scripts: " + result.message);
-					}
+					const AICommandResult result =
+						commandBus.execute(DetachScriptCommand{selected->name, state.loadedPath});
+					state.status = result.message;
+					state.statusSuccess = result.success;
+					log(result.success, "Scripts: " + result.message);
 				}
-				else if (ImGui::SmallButton("Attach to Selection"))
+			}
+			else if (ImGui::SmallButton("Load to Object"))
+			{
+				if (selected == nullptr)
+				{
+					// Said here AND in the status line, because the click
+					// happens at the button and the eye is already there.
+					state.status = "No object is selected! Pick one in the Hierarchy first.";
+					state.statusSuccess = false;
+					log(false, "Scripts: no object is selected.");
+				}
+				else
 				{
 					const AICommandResult result =
 						commandBus.execute(AttachScriptCommand{selected->name, state.loadedPath});
+					state.status = result.message;
+					state.statusSuccess = result.success;
 					log(result.success, "Scripts: " + result.message);
 				}
-				ImGui::SameLine();
+			}
+			ImGui::SameLine();
+			if (selected != nullptr)
+			{
 				ImGui::TextDisabled("(%s)", selected->name.c_str());
 			}
 			else
 			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("(select an object to attach)");
+				ImGui::TextColored(
+					ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "no object selected");
 			}
 
 			if (ImGui::InputTextMultiline(

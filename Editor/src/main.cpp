@@ -5279,7 +5279,9 @@ namespace
         // Whether this panel is shown. Owned by PanelVisibility in main() and
         // toggled from the Panels menu; passed by reference so the window's own
         // close button writes straight back to it.
-        bool& panelOpen)
+        bool& panelOpen,
+        // Only so the context menu can raise the Scripts panel.
+        ScriptsPanelState& scriptsPanel)
     {
         ImGui::Begin("Hierarchy", &panelOpen);
 
@@ -5448,6 +5450,19 @@ namespace
                 {
                     pendingHierarchyAction = [&commandBus, name = entity.name]()
                     { executeLogged(commandBus,DuplicateEntityCommand{name}); };
+                }
+                // Bridges the Hierarchy to the Scripts panel: selects this
+                // object and raises the panel, so "add a script to this thing"
+                // starts where you are looking rather than requiring you to
+                // find the panel and then remember what you had selected.
+                if (ImGui::MenuItem("Add Script..."))
+                {
+                    pendingHierarchyAction =
+                        [&selection, &scriptsPanel, entityId = entity.id]()
+                    {
+                        selectOnly(selection, entityId);
+                        scriptsPanel.open = true;
+                    };
                 }
                 if (ImGui::BeginMenu("Add Child"))
                 {
@@ -8945,7 +8960,7 @@ namespace
             }
         }
 
-        drawHierarchyPanel(scene, commandBus, selection, renameState, console, projectRoot, nativeWindowHandle, panels.hierarchy);
+        drawHierarchyPanel(scene, commandBus, selection, renameState, console, projectRoot, nativeWindowHandle, panels.hierarchy, scriptsPanel);
         drawInspector(
             scene,
             commandBus,

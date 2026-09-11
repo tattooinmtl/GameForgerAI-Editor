@@ -17,6 +17,12 @@ namespace gameforger::editor
 	// there is nowhere to hang a cue on a bare entity animation.
 	struct TimelinePanelState
 	{
+		// Whether the panel is shown. Every panel is closable and reopenable
+		// from the Panels menu; before this they were drawn unconditionally,
+		// so a panel could be neither hidden nor recovered.
+		bool open = true;
+
+
 		// Index into StoryboardState::shots, or -1 for "no shot selected".
 		int shotIndex = -1;
 

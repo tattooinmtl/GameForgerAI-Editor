@@ -87,7 +87,11 @@ namespace gameforger::editor
 			}
 		}
 
-		ImGui::Begin("Performance");
+		if (!state.open)
+		{
+			return;
+		}
+		ImGui::Begin("Performance", &state.open);
 
 		const float averageMs = profiler.averageMilliseconds();
 		const float worstMs = profiler.worstMillisecondsInWindow();

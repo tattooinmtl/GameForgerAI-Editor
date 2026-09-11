@@ -553,6 +553,29 @@ namespace
         int paintLayerIndex = 0; // 0..2, which of TerrainData::layers to paint
     };
 
+    // One visibility flag per panel drawn from this file. Before this, most
+    // panels were submitted unconditionally - they could not be closed, and a
+    // panel was only findable if it happened to be in the dock layout. The
+    // Panels menu now lists every one with a checkmark.
+    struct PanelVisibility
+    {
+        bool viewport = true;
+        bool game = true;
+        bool hierarchy = true;
+        bool inspector = true;
+        bool project = true;
+        bool toolbox = true;
+        bool console = true;
+        bool aiForge = true;
+        bool animation = true;
+        bool audio = true;
+        bool timeline = true;
+        bool projectSettings = true;
+        bool performance = true;
+        bool storyboard = true;
+        bool cinePreview = true;
+    };
+
     struct AnimationPanelState
     {
         float scrubTime = 0.0F;
@@ -2304,7 +2327,8 @@ namespace
         BlenderClient& blenderClient,
         BlenderPanelState& blenderPanel,
         AICockpitState& cockpit,
-        MindGraphPanelState& mindGraph)
+        MindGraphPanelState& mindGraph,
+        PanelVisibility& panels)
     {
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
@@ -2643,9 +2667,64 @@ namespace
             {
                 cockpit.panelOpen = !cockpit.panelOpen;
             }
-            if (ImGui::MenuItem("Open Mind Graph", nullptr, mindGraph.panelOpen))
+            ImGui::EndMenu();
+        }
+
+        // Every panel that can be closed, in one place. This did not exist:
+        // Mind Graph was reachable only from the AI menu, which is not where
+        // anyone looks for a scripting canvas, and a panel closed by accident
+        // had no obvious way back. A Window menu is where every editor puts
+        // this, and its absence is why "the Mind Graph is not there" was the
+        // correct report even though the panel worked.
+        // Every panel, with a checkmark. Sits between AI and Settings.
+        if (ImGui::BeginMenu("Panels"))
+        {
+            const auto toggle = [](const char* label, bool& flag)
             {
-                mindGraph.panelOpen = !mindGraph.panelOpen;
+                // Passing `flag` as `selected` is what draws the checkmark, so
+                // the menu shows current state rather than just offering an
+                // action.
+                if (ImGui::MenuItem(label, nullptr, flag))
+                {
+                    flag = !flag;
+                }
+            };
+
+            toggle("Viewport", panels.viewport);
+            toggle("Game", panels.game);
+            toggle("Mind Graph", mindGraph.panelOpen);
+            toggle("Cine Camera Preview", panels.cinePreview);
+            ImGui::Separator();
+            toggle("Hierarchy", panels.hierarchy);
+            toggle("Inspector", panels.inspector);
+            toggle("Project", panels.project);
+            toggle("Toolbox", panels.toolbox);
+            ImGui::Separator();
+            toggle("Console", panels.console);
+            toggle("AI Forge", panels.aiForge);
+            toggle("AI Cockpit", cockpit.panelOpen);
+            toggle("Blender MCP", blenderPanel.panelOpen);
+            ImGui::Separator();
+            toggle("Animation", panels.animation);
+            toggle("Timeline", panels.timeline);
+            toggle("Storyboard", panels.storyboard);
+            toggle("Audio", panels.audio);
+            ImGui::Separator();
+            toggle("Project Settings", panels.projectSettings);
+            toggle("Performance", panels.performance);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Show All Panels"))
+            {
+                // The way back from any arrangement, without losing the dock
+                // layout the way Reset does.
+                panels = PanelVisibility{};
+                mindGraph.panelOpen = true;
+                cockpit.panelOpen = true;
+                blenderPanel.panelOpen = true;
+            }
+            if (ImGui::MenuItem("Reset Editor Layout"))
+            {
+                resetLayout = true;
             }
             ImGui::EndMenu();
         }
@@ -3224,9 +3303,9 @@ namespace
         ImGui::End();
     }
 
-    void drawConsolePanel(ConsoleState& console)
+    void drawConsolePanel(ConsoleState& console, bool& panelOpen)
     {
-        ImGui::Begin("Console");
+        ImGui::Begin("Console", &panelOpen);
 
         if (ImGui::Button("Clear"))
         {
@@ -3279,7 +3358,11 @@ namespace
         ProjectBrowserState& browser,
         const std::filesystem::path& projectRoot,
         ScriptEditorState& scriptEditor,
-        ProjectSettingsPanelState& projectSettingsPanel)
+        ProjectSettingsPanelState& projectSettingsPanel,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
         const std::filesystem::path gameRoot = projectRoot / "Game";
         if (browser.currentDirectory.empty())
@@ -3287,7 +3370,7 @@ namespace
             browser.currentDirectory = gameRoot;
         }
 
-        ImGui::Begin("Project");
+        ImGui::Begin("Project", &panelOpen);
 
         std::error_code relativeError;
         const std::filesystem::path relativePath =
@@ -3763,9 +3846,13 @@ namespace
         PlayModeState& playMode,
         const ScriptRuntime& scriptRuntime,
         const std::filesystem::path& projectRoot,
-        GLFWwindow* window)
+        GLFWwindow* window,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
-        ImGui::Begin("Game");
+        ImGui::Begin("Game", &panelOpen);
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const bool ready = available.x > 0.0F && available.y > 0.0F &&
@@ -4793,9 +4880,9 @@ namespace
     // own EntityAnimation at the moment it's captured (in-memory only this
     // pass, not persisted with the scene). Playback happens in the Cine
     // Camera Preview panel, which this opens as needed.
-    void drawStoryboardPanel(EditorScene& scene, SelectionState& selection, StoryboardState& storyboard)
+    void drawStoryboardPanel(EditorScene& scene, SelectionState& selection, StoryboardState& storyboard, bool& panelOpen)
     {
-        ImGui::Begin("Storyboard");
+        ImGui::Begin("Storyboard", &panelOpen);
 
         const SceneEntity* liveCamera = selection.selectedEntityId.has_value()
             ? scene.findEntity(*selection.selectedEntityId)
@@ -4953,9 +5040,13 @@ namespace
         SelectionState& selection,
         ConsoleState& console,
         const std::filesystem::path& projectRoot,
-        const HWND nativeWindowHandle)
+        const HWND nativeWindowHandle,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
-        ImGui::Begin("Toolbox");
+        ImGui::Begin("Toolbox", &panelOpen);
 
         // Lights, Camera and Empty live here as well as under GameObject.
         // The Toolbox is where a new user actually looks for "what can I
@@ -5178,9 +5269,13 @@ namespace
         RenameState& renameState,
         ConsoleState& console,
         const std::filesystem::path& projectRoot,
-        const HWND nativeWindowHandle)
+        const HWND nativeWindowHandle,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
-        ImGui::Begin("Hierarchy");
+        ImGui::Begin("Hierarchy", &panelOpen);
 
         static std::array<char, 128> searchFilterBuffer{};
         ImGui::SetNextItemWidth(-1.0F);
@@ -5580,9 +5675,13 @@ namespace
         EditHistoryState& history,
         ScriptRuntime& scriptRuntime,
         TerrainSculptState& terrainSculpt,
-        const HWND nativeWindowHandle)
+        const HWND nativeWindowHandle,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
-        ImGui::Begin("Inspector");
+        ImGui::Begin("Inspector", &panelOpen);
 
         const SceneEntity* selected = selection.selectedEntityId.has_value()
             ? scene.findEntity(*selection.selectedEntityId)
@@ -8279,9 +8378,13 @@ namespace
         const AIProviderClient& aiProviderClient,
         const std::string& activeProviderId,
         ConsoleState& console,
-        const float deltaTime)
+        const float deltaTime,
+        // Whether this panel is shown. Owned by PanelVisibility in main() and
+        // toggled from the Panels menu; passed by reference so the window's own
+        // close button writes straight back to it.
+        bool& panelOpen)
     {
-        ImGui::Begin("Animation");
+        ImGui::Begin("Animation", &panelOpen);
 
         drawAiAnimationSection(scene, commandBus, selection, aiAnimation, aiProviderClient, activeProviderId, console);
 
@@ -8672,7 +8775,10 @@ namespace
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
         const float deltaTime,
-        const HWND nativeWindowHandle)
+        const HWND nativeWindowHandle,
+        // The umbrella takes the whole struct because it dispatches to every
+        // panel; each individual panel below receives only its own flag.
+        PanelVisibility& panels)
     {
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
@@ -8820,7 +8926,7 @@ namespace
             }
         }
 
-        drawHierarchyPanel(scene, commandBus, selection, renameState, console, projectRoot, nativeWindowHandle);
+        drawHierarchyPanel(scene, commandBus, selection, renameState, console, projectRoot, nativeWindowHandle, panels.hierarchy);
         drawInspector(
             scene,
             commandBus,
@@ -8834,11 +8940,11 @@ namespace
             history,
             scriptRuntime,
             terrainSculpt,
-            nativeWindowHandle);
+            nativeWindowHandle, panels.inspector);
 
-        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel);
+        drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel, panels.project);
 
-        ImGui::Begin("AI Forge");
+        ImGui::Begin("AI Forge", &panels.aiForge);
         static std::array<char, 1024> prompt{};
         ImGui::TextWrapped(
             "Describe what you want in plain language. Local commands (create_entity Name, "
@@ -9035,7 +9141,7 @@ namespace
 
         EditorCameraState& activeCamera = playMode.isPlaying ? playMode.playCamera : camera;
 
-        ImGui::Begin("Viewport");
+        ImGui::Begin("Viewport", &panels.viewport);
 
         if (playMode.isPlaying)
         {
@@ -9334,7 +9440,7 @@ namespace
             aiProviderClient,
             activeProviderId,
             console,
-            deltaTime);
+            deltaTime, panels.animation);
     }
 
 }
@@ -9496,6 +9602,7 @@ int main()
     // Phase C. Owns worker thread + message queue for the agent loop.
     AICockpitState aiCockpit;
     MindGraphPanelState mindGraph;
+    PanelVisibility panels;
 
     AIForgeState aiForge;
     SelectionState selection;
@@ -9595,7 +9702,8 @@ int main()
         drawMainMenu(
             scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
             settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
-            blenderLauncher, blenderClient, blenderPanel, aiCockpit, mindGraph);
+            blenderLauncher, blenderClient, blenderPanel, aiCockpit, mindGraph,
+            panels);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
         drawCockpitPanel(
             aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
@@ -9633,14 +9741,15 @@ int main()
             gizmoOperation,
             terrainSculpt,
             deltaTime,
-            nativeWindowHandle);
+            nativeWindowHandle,
+            panels);
         frameProfiler.endZone();
         drawToolboxPanel(
             textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
-            nativeWindowHandle);
-        drawConsolePanel(console);
+            nativeWindowHandle, panels.toolbox);
+        drawConsolePanel(console, panels.console);
         drawGameViewPanel(
-            gameViewRenderer, gameViewCamera, scene, commandBus, playMode, scriptRuntime, projectRoot, window);
+            gameViewRenderer, gameViewCamera, scene, commandBus, playMode, scriptRuntime, projectRoot, window, panels.game);
         {
             const SceneEntity* followedEntity = (playMode.isPlaying && scriptRuntime.hasActiveCamera())
                 ? scene.findEntity(scriptRuntime.activeCameraEntityId())
@@ -9659,7 +9768,7 @@ int main()
             projectRoot,
             projectSettingsBus.settings().audioHooks,
             deltaTime);
-        drawStoryboardPanel(scene, selection, storyboard);
+        drawStoryboardPanel(scene, selection, storyboard, panels.storyboard);
         drawProjectSettingsPanel(
             projectSettingsBus, projectRoot, projectSettingsPanel,
             // The panel lives in its own TU and cannot see ConsoleState, so

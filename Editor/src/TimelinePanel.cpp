@@ -168,7 +168,11 @@ namespace gameforger::editor
 			}
 		}
 
-		ImGui::Begin("Timeline");
+		if (!state.open)
+		{
+			return;
+		}
+		ImGui::Begin("Timeline", &state.open);
 
 		if (!state.clipChoicesLoaded)
 		{

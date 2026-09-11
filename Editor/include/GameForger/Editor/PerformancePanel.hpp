@@ -10,6 +10,12 @@ namespace gameforger::editor
 {
 	struct PerformancePanelState
 	{
+		// Whether the panel is shown. Every panel is closable and reopenable
+		// from the Panels menu; before this they were drawn unconditionally,
+		// so a panel could be neither hidden nor recovered.
+		bool open = true;
+
+
 		// Frame time above which a frame counts as a dip, in milliseconds.
 		// 20ms = missing 50fps. Editable in the panel.
 		float dipThresholdMs = 20.0F;

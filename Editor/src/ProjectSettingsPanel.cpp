@@ -234,7 +234,11 @@ namespace gameforger::editor
 			state.focusRequested = false;
 		}
 
-		ImGui::Begin("Project Settings");
+		if (!state.open)
+		{
+			return;
+		}
+		ImGui::Begin("Project Settings", &state.open);
 
 		if (!state.sceneChoicesLoaded)
 		{

@@ -154,7 +154,11 @@ namespace gameforger::editor
 		const AudioPanelLogFn& log,
 		const AudioImportFn& importSound)
 	{
-		ImGui::Begin("Audio");
+		if (!state.open)
+		{
+			return;
+		}
+		ImGui::Begin("Audio", &state.open);
 
 		if (audio.isSilent())
 		{

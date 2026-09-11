@@ -23,7 +23,11 @@ namespace gameforger::editor
 	// that produced every §1b defect.
 	struct MindGraphPanelState
 	{
-		bool panelOpen = false;
+		// Open by default, like the Viewport, Game and Hierarchy panels. It is
+		// a headline authoring surface, not an optional tool - defaulting it
+		// closed meant it simply was not there on launch, and the only way to
+		// find it was a menu nobody would think to look in.
+		bool panelOpen = true;
 
 		mindgraph::MindGraph graph;
 		std::filesystem::path graphPath; // empty until saved or loaded

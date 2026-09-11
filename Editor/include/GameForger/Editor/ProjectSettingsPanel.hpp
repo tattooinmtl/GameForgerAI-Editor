@@ -19,6 +19,12 @@ namespace gameforger::editor
 
 	struct ProjectSettingsPanelState
 	{
+		// Whether the panel is shown. Every panel is closable and reopenable
+		// from the Panels menu; before this they were drawn unconditionally,
+		// so a panel could be neither hidden nor recovered.
+		bool open = true;
+
+
 		// ImGui InputText needs writable char storage. These mirror the bus's
 		// settings and are re-synced from it whenever the widget is not being
 		// actively edited, so an AI-driven change shows up live in the panel

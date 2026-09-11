@@ -65,6 +65,7 @@
 #include "GameForger/Editor/TimelinePanel.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
 #include "GameForger/Editor/ScriptGenerator.hpp"
+#include "GameForger/Editor/ScriptsPanel.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
 #include "GameForger/Editor/SplashScreen.hpp"
 #include "GameForger/Editor/Terrain.hpp"
@@ -92,6 +93,9 @@ namespace
     using gameforger::editor::AICockpitState;
     using gameforger::editor::MindGraphPanelState;
     using gameforger::editor::drawMindGraphPanel;
+    using gameforger::editor::drawScriptsPanel;
+    using gameforger::editor::shutdownScriptsPanel;
+    using gameforger::editor::ScriptsPanelState;
     using gameforger::editor::shutdownMindGraphPanel;
     using gameforger::editor::BlenderClient;
     using gameforger::editor::BlenderLauncher;
@@ -2328,7 +2332,8 @@ namespace
         BlenderPanelState& blenderPanel,
         AICockpitState& cockpit,
         MindGraphPanelState& mindGraph,
-        PanelVisibility& panels)
+        PanelVisibility& panels,
+        ScriptsPanelState& scriptsPanel)
     {
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
@@ -2693,6 +2698,7 @@ namespace
             toggle("Viewport", panels.viewport);
             toggle("Game", panels.game);
             toggle("Mind Graph", mindGraph.panelOpen);
+            toggle("Scripts", scriptsPanel.open);
             toggle("Cine Camera Preview", panels.cinePreview);
             ImGui::Separator();
             toggle("Hierarchy", panels.hierarchy);
@@ -5679,7 +5685,10 @@ namespace
         // Whether this panel is shown. Owned by PanelVisibility in main() and
         // toggled from the Panels menu; passed by reference so the window's own
         // close button writes straight back to it.
-        bool& panelOpen)
+        bool& panelOpen,
+        // Only so the Scripts section can raise the panel where scripts are
+        // actually written.
+        ScriptsPanelState& scriptsPanel)
     {
         ImGui::Begin("Inspector", &panelOpen);
 
@@ -7004,6 +7013,15 @@ namespace
 
         ImGui::Separator();
         ImGui::TextUnformatted("Scripts");
+        // What is attached to THIS object belongs here, the way Unity lists
+        // components on the selected object. Writing and editing scripts does
+        // not - that moved to the dockable Scripts panel, where there is room
+        // for a real editor and where the AI can modify a script rather than
+        // only create one.
+        if (ImGui::Button("Open Scripts Panel", ImVec2(-1.0F, 0.0F)))
+        {
+            scriptsPanel.open = true;
+        }
         ImGui::TextDisabled("Click a script to focus it - Ctrl+C/Ctrl+V/Delete then act on it.");
         {
             // Each of these three drives its own independent gravity/ground-
@@ -8778,7 +8796,8 @@ namespace
         const HWND nativeWindowHandle,
         // The umbrella takes the whole struct because it dispatches to every
         // panel; each individual panel below receives only its own flag.
-        PanelVisibility& panels)
+        PanelVisibility& panels,
+        ScriptsPanelState& scriptsPanel)
     {
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
@@ -8940,7 +8959,7 @@ namespace
             history,
             scriptRuntime,
             terrainSculpt,
-            nativeWindowHandle, panels.inspector);
+            nativeWindowHandle, panels.inspector, scriptsPanel);
 
         drawProjectBrowser(projectBrowser, projectRoot, scriptEditor, projectSettingsPanel, panels.project);
 
@@ -9603,6 +9622,7 @@ int main()
     AICockpitState aiCockpit;
     MindGraphPanelState mindGraph;
     PanelVisibility panels;
+    ScriptsPanelState scriptsPanel;
 
     AIForgeState aiForge;
     SelectionState selection;
@@ -9703,13 +9723,21 @@ int main()
             scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
             settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
             blenderLauncher, blenderClient, blenderPanel, aiCockpit, mindGraph,
-            panels);
+            panels,
+            scriptsPanel);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
         drawCockpitPanel(
             aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
         const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
         frameProfiler.beginZone("Panels + Simulation");
+        drawScriptsPanel(
+            scriptsPanel, scene, commandBus, aiProviderClient, activeProviderId,
+            projectSettingsBus.settings().name, projectRoot,
+            selection.selectedEntityId.value_or(-1),
+            [&console](const bool success, const std::string& message)
+            { logMessage(console, success ? LogLevel::Info : LogLevel::Error, message); });
+
         drawEditorPanels(
             viewportRenderer,
             camera,
@@ -9742,7 +9770,8 @@ int main()
             terrainSculpt,
             deltaTime,
             nativeWindowHandle,
-            panels);
+            panels,
+            scriptsPanel);
         frameProfiler.endZone();
         drawToolboxPanel(
             textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
@@ -9889,6 +9918,7 @@ int main()
 
     aiProviderClient.requestCancel();
     blenderClient.requestCancel();
+    shutdownScriptsPanel(scriptsPanel);
     shutdownMindGraphPanel(mindGraph);
     gameforger::editor::joinCockpitWorker(aiCockpit);
     if (scriptCreator.worker.joinable())

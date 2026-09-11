@@ -88,6 +88,19 @@ namespace gameforger::editor
 		}
 	}
 
+	namespace
+	{
+		// The API catalog, shared by generate and modify. It MUST be one copy:
+		// two would drift, and a drifted copy is exactly how a model gets told
+		// an API exists that does not. Several scripts already in
+		// Game/Scripts were generated against an earlier, thinner version of
+		// this and called APIs that never existed - Input./Entity./Vector()/
+		// Raycast()/UI., an Update() entry point - and had to be rewritten by
+		// hand. Keep it in step with pushEntityProxy and friends in
+		// ScriptRuntime.cpp.
+		std::string apiCatalogPrompt(const std::string& entityName);
+	}
+
 	ScriptGenerationResult generateEntityScript(
 		const AIProviderClient& client,
 		const std::string& providerId,
@@ -103,73 +116,7 @@ namespace gameforger::editor
 		// Vector()/Raycast()/UI., an Update() entry point); they had to be
 		// rewritten by hand. Keep this in step with pushEntityProxy and friends
 		// in ScriptRuntime.cpp.
-		request.systemPrompt =
-			"You are a Lua scripting assistant for the GameForgerAI game engine editor. "
-			"Generate a single, complete Lua script implementing the gameplay behavior the user "
-			"describes, for a game entity named '" + entityName + "'. "
-			"Output ONLY raw Lua source code: no markdown code fences, no explanation before or "
-			"after the code. Add a short comment only where the logic is non-obvious.\n\n"
-
-			"STRUCTURE. The script MUST end with `return TableName`, where TableName is a local "
-			"table whose methods are the lifecycle hooks. A script that does not return such a "
-			"table will fail to load. Example:\n"
-			"local X = {}\n"
-			"function X:on_start() end\n"
-			"function X:on_update(delta_time) end\n"
-			"function X:on_end() end\n"
-			"return X\n\n"
-			"on_start(self) runs once when Play starts. on_update(self, delta_time) runs every "
-			"frame. on_end(self) runs when Play stops or the script is detached - use it to "
-			"release anything on_start took.\n\n"
-
-			"AVAILABLE APIs. The engine attaches these to `self` before on_start() runs. This is "
-			"the COMPLETE list - nothing else exists. Do NOT invent globals such as Input, Entity, "
-			"Vector, Raycast, UI, DeltaTime, GameObject, or love.*; there is no Update() entry "
-			"point, and vectors are plain {x=,y=,z=} tables with NO arithmetic operators, so "
-			"multiply components individually.\n\n"
-
-			"self.entity  - getPosition() -> {x,y,z}; setPosition({x=,y=,z=}) (ONE table, not three "
-			"numbers); getRotation() -> {x,y,z} degrees; setRotation({x=,y=,z=}); getScale() -> "
-			"{x,y,z}; getForward() -> {x,y,z}; getRight() -> {x,y,z} screen-right, use it for "
-			"strafing and do NOT negate it.\n"
-
-			"self.input   - isKeyDown(name) -> bool held; isKeyPressed(name) -> bool this frame "
-			"only; getAxis(positiveKey, negativeKey) -> -1..1; getMouseDeltaX(); getMouseDeltaY(). "
-			"Key names are strings like \"W\", \"A\", \"S\", \"D\", \"Space\", \"LeftShift\", "
-			"\"E\", \"C\", \"V\", \"Left\", \"Right\". MOUSE BUTTONS ARE NOT AVAILABLE - there is "
-			"no \"LeftMouse\" key; gate mouse-driven behaviour on a held key instead.\n"
-
-			"self.camera  - setMode(\"fps\"|\"third_person\"); getMode().\n"
-
-			"self.physics - resolve(position, halfWidth, height) -> correctedPosition, grounded. "
-			"Box collision against Collider-enabled entities. This is the ONLY collision query; "
-			"there is no raycast.\n"
-
-			"self.world   - findNearestWithTag(tag) -> position|nil, distance, name (nearest OTHER "
-			"entity with that tag); findPositionByTag(tag) -> position|nil; "
-			"fireProjectile(from, to, speed, hitTag); fireGravityProjectile(from, direction, speed, "
-			"hitTag) for an arcing shot; isHoldingItem(); isAimingCatapult(); "
-			"setOperatingCatapult(bool); setEntityRotation(entityName, {x=,y=,z=}). Use "
-			"fireProjectile/fireGravityProjectile rather than simulating projectiles in Lua tables "
-			"- the engine owns their movement, collision and despawn.\n"
-
-			"self.gameManager - setCursorLock(bool). Any script that drives the player camera "
-			"should call setCursorLock(true) in on_start and setCursorLock(false) in on_end.\n"
-
-			"self.managers    - register(name); unregister(name); has(name) -> bool; list() -> "
-			"table of names. A controller MUST register(name) in on_start and unregister(name) in "
-			"on_end: the engine only locks the mouse cursor while at least one manager is "
-			"registered, so a controller that skips this gets no cursor lock.\n"
-
-			"self.audio   - play(clipPath, volume, loop) with clipPath relative to the project "
-			"root under Game/Audio; stop() stops ALL sounds, not just this script's; "
-			"setMasterVolume(0..1); isPlaying() currently always returns false, so do not branch "
-			"on it.\n\n"
-
-			"There is no way for a script to delete its own entity, draw UI, load a scene, or read "
-			"a file. If the request needs something absent from the list above, implement the "
-			"closest achievable behaviour and note the limitation in a comment rather than calling "
-			"an API that does not exist.";
+		request.systemPrompt = apiCatalogPrompt(entityName);
 		request.prompt = description;
 
 		const AIProviderResponse response = client.send(providerId, request);
@@ -189,5 +136,173 @@ namespace gameforger::editor
 			return {false, "The AI response did not contain any script content."};
 		}
 		return {true, recoverOverEscapedNewlines(stripCodeFences(*content))};
+	}
+
+
+	namespace
+	{
+		std::string apiCatalogPrompt(const std::string& entityName)
+		{
+			return
+				"You are a Lua scripting assistant for the GameForgerAI game engine editor. "
+				"Generate a single, complete Lua script implementing the gameplay behavior the user "
+				"describes, for a game entity named '" + entityName + "'. "
+				"Output ONLY raw Lua source code: no markdown code fences, no explanation before or "
+				"after the code. Add a short comment only where the logic is non-obvious.\n\n"
+	
+				"STRUCTURE. The script MUST end with `return TableName`, where TableName is a local "
+				"table whose methods are the lifecycle hooks. A script that does not return such a "
+				"table will fail to load. Example:\n"
+				"local X = {}\n"
+				"function X:on_start() end\n"
+				"function X:on_update(delta_time) end\n"
+				"function X:on_end() end\n"
+				"return X\n\n"
+				"on_start(self) runs once when Play starts. on_update(self, delta_time) runs every "
+				"frame. on_end(self) runs when Play stops or the script is detached - use it to "
+				"release anything on_start took.\n\n"
+	
+				"AVAILABLE APIs. The engine attaches these to `self` before on_start() runs. This is "
+				"the COMPLETE list - nothing else exists. Do NOT invent globals such as Input, Entity, "
+				"Vector, Raycast, UI, DeltaTime, GameObject, or love.*; there is no Update() entry "
+				"point, and vectors are plain {x=,y=,z=} tables with NO arithmetic operators, so "
+				"multiply components individually.\n\n"
+	
+				"self.entity  - getPosition() -> {x,y,z}; setPosition({x=,y=,z=}) (ONE table, not three "
+				"numbers); getRotation() -> {x,y,z} degrees; setRotation({x=,y=,z=}); getScale() -> "
+				"{x,y,z}; getForward() -> {x,y,z}; getRight() -> {x,y,z} screen-right, use it for "
+				"strafing and do NOT negate it.\n"
+	
+				"self.input   - isKeyDown(name) -> bool held; isKeyPressed(name) -> bool this frame "
+				"only; getAxis(positiveKey, negativeKey) -> -1..1; getMouseDeltaX(); getMouseDeltaY(). "
+				"Key names are strings like \"W\", \"A\", \"S\", \"D\", \"Space\", \"LeftShift\", "
+				"\"E\", \"C\", \"V\", \"Left\", \"Right\". MOUSE BUTTONS ARE NOT AVAILABLE - there is "
+				"no \"LeftMouse\" key; gate mouse-driven behaviour on a held key instead.\n"
+	
+				"self.camera  - setMode(\"fps\"|\"third_person\"); getMode().\n"
+	
+				"self.physics - resolve(position, halfWidth, height) -> correctedPosition, grounded. "
+				"Box collision against Collider-enabled entities. This is the ONLY collision query; "
+				"there is no raycast.\n"
+	
+				"self.world   - findNearestWithTag(tag) -> position|nil, distance, name (nearest OTHER "
+				"entity with that tag); findPositionByTag(tag) -> position|nil; "
+				"fireProjectile(from, to, speed, hitTag); fireGravityProjectile(from, direction, speed, "
+				"hitTag) for an arcing shot; isHoldingItem(); isAimingCatapult(); "
+				"setOperatingCatapult(bool); setEntityRotation(entityName, {x=,y=,z=}). Use "
+				"fireProjectile/fireGravityProjectile rather than simulating projectiles in Lua tables "
+				"- the engine owns their movement, collision and despawn.\n"
+	
+				"self.gameManager - setCursorLock(bool). Any script that drives the player camera "
+				"should call setCursorLock(true) in on_start and setCursorLock(false) in on_end.\n"
+	
+				"self.managers    - register(name); unregister(name); has(name) -> bool; list() -> "
+				"table of names. A controller MUST register(name) in on_start and unregister(name) in "
+				"on_end: the engine only locks the mouse cursor while at least one manager is "
+				"registered, so a controller that skips this gets no cursor lock.\n"
+	
+				"self.audio   - play(clipPath, volume, loop) with clipPath relative to the project "
+				"root under Game/Audio; stop() stops ALL sounds, not just this script's; "
+				"setMasterVolume(0..1); isPlaying() currently always returns false, so do not branch "
+				"on it.\n\n"
+	
+				"There is no way for a script to delete its own entity, draw UI, load a scene, or read "
+				"a file. If the request needs something absent from the list above, implement the "
+				"closest achievable behaviour and note the limitation in a comment rather than calling "
+				"an API that does not exist.";
+		}
+	}
+
+	ScriptGenerationResult modifyEntityScript(
+		const AIProviderClient& client,
+		const std::string& providerId,
+		const std::string& entityName,
+		const std::string& existingSource,
+		const std::string& instruction)
+	{
+		if (trimCopy(existingSource).empty())
+		{
+			return {false, "There is no script open to modify."};
+		}
+
+		AIProviderRequest request;
+		// Same API catalog as generation, plus the rules that only matter when
+		// editing: keep what was not asked about, and return the whole file.
+		request.systemPrompt = apiCatalogPrompt(entityName)
+			+ "\n\nYOU ARE EDITING AN EXISTING SCRIPT, not writing a new one. Apply the requested "
+			  "change and leave everything else exactly as it is - same table name, same tunable "
+			  "field names and values, same comments, same structure - unless the change genuinely "
+			  "requires altering them. Preserving what the author already tuned matters more than "
+			  "tidying it.\n"
+			  "Return the COMPLETE new file, not a diff, not a fragment, and not a description of "
+			  "what you changed. It must still end with `return TableName`.";
+
+		request.prompt =
+			"Here is the current script:\n\n" + existingSource + "\n\nChange requested: " + instruction;
+
+		const AIProviderResponse response = client.send(providerId, request);
+		if (!response.success)
+		{
+			if (!response.error.empty())
+			{
+				return {false, response.error};
+			}
+			const std::string detail = extractErrorMessage(response.body);
+			return {false, detail.empty() ? "AI provider request failed." : detail};
+		}
+
+		const std::optional<std::string> content = extractChatMessageContent(response.body);
+		if (!content.has_value() || content->empty())
+		{
+			return {false, "The AI response did not contain any script content."};
+		}
+		const std::string revised = recoverOverEscapedNewlines(stripCodeFences(*content));
+
+		// A reply that dropped the return statement would produce a file that
+		// cannot load. Catching it here means the user sees a clear refusal
+		// instead of a script that silently fails at Play.
+		if (revised.find("return ") == std::string::npos)
+		{
+			return {false, "The AI returned something that is not a complete script (no `return` found)."};
+		}
+		return {true, revised};
+	}
+
+	std::string suggestedScriptFileName(const std::string& purpose, const std::string& gameTitle)
+	{
+		const auto sanitize = [](const std::string& text)
+		{
+			std::string out;
+			for (const char character : text)
+			{
+				const unsigned char c = static_cast<unsigned char>(character);
+				if (std::isalnum(c) != 0)
+				{
+					out += character;
+				}
+				else if (character == ' ' || character == '-' || character == '_')
+				{
+					// Collapse runs of separators rather than emitting
+					// "My__Game_" for "My  Game ".
+					if (!out.empty() && out.back() != '_')
+					{
+						out += '_';
+					}
+				}
+			}
+			while (!out.empty() && out.back() == '_')
+			{
+				out.pop_back();
+			}
+			return out;
+		};
+
+		const std::string cleanPurpose = sanitize(purpose.empty() ? "Script" : purpose);
+		const std::string cleanTitle = sanitize(gameTitle);
+		if (cleanTitle.empty())
+		{
+			return cleanPurpose + ".lua";
+		}
+		return cleanPurpose + "_" + cleanTitle + ".lua";
 	}
 }

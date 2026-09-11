@@ -3,6 +3,7 @@
     src/AIProviderClient.cpp
     src/AIChatResponse.cpp
     src/ScriptGenerator.cpp
+    src/ScriptsPanel.cpp
     src/AICommandPlanner.cpp
     src/AIAnimationGenerator.cpp
     # Blender MCP integration (Phase A of integration_plan_allinone.md).

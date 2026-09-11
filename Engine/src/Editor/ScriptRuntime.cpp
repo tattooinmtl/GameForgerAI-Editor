@@ -300,8 +300,14 @@ namespace gameforger::editor
 			const glm::vec3 position = checkVec3(L, 2);
 			const float halfWidth = static_cast<float>(luaL_checknumber(L, 3));
 			const float height = static_cast<float>(luaL_checknumber(L, 4));
+			// Both optional, both defaulting to the pre-character-controller
+			// behaviour, so every script written before these existed keeps
+			// working unchanged.
+			CharacterMoveOptions options;
+			options.stepHeight = static_cast<float>(luaL_optnumber(L, 5, 0.0));
+			options.groundProbeDistance = static_cast<float>(luaL_optnumber(L, 6, 0.0));
 			const BoxCollisionResult result = resolveBoxCollision(
-				runtime->scene(), entityIdFromUpvalue(L), position, halfWidth, height);
+				runtime->scene(), entityIdFromUpvalue(L), position, halfWidth, height, {}, options);
 			pushVec3(L, result.position);
 			lua_pushboolean(L, result.grounded);
 			return 2;

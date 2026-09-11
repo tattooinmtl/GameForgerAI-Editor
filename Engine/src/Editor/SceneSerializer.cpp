@@ -403,6 +403,40 @@ namespace gameforger::editor
 				}
 			}
 
+			if (const json::Value* scriptFields = obj.find("scriptFields"))
+			{
+				if (scriptFields->type == json::Value::Type::Array)
+				{
+					for (const json::Value& fieldValue : scriptFields->arrayValue)
+					{
+						ScriptFieldOverride field;
+						field.scriptPath = readString(fieldValue, "script", "");
+						field.fieldName = readString(fieldValue, "name", "");
+						if (field.scriptPath.empty() || field.fieldName.empty())
+						{
+							// An entry that names neither a script nor a field
+							// can never be matched to anything; keeping it would
+							// just re-save junk forever.
+							continue;
+						}
+						field.type = scriptFieldTypeFromName(readString(fieldValue, "type", "Number"));
+						switch (field.type)
+						{
+							case ScriptFieldOverride::Type::Bool:
+								field.boolValue = readBool(fieldValue, "value", false);
+								break;
+							case ScriptFieldOverride::Type::String:
+								field.stringValue = readString(fieldValue, "value", "");
+								break;
+							case ScriptFieldOverride::Type::Number:
+								field.numberValue = readFloat(fieldValue, "value", 0.0F);
+								break;
+						}
+						entity.scriptFieldOverrides.push_back(std::move(field));
+					}
+				}
+			}
+
 			if (const json::Value* animation = obj.find("animation"))
 			{
 				entity.animation.enabled = readBool(*animation, "enabled", false);
@@ -798,6 +832,46 @@ namespace gameforger::editor
 				json += indent + "    \"" + escapeJson(entity.scripts[index]) + "\"";
 			}
 			json += entity.scripts.empty() ? "],\n" : ("\n" + indent + "  ],\n");
+
+			// Omitted entirely when nobody has tuned this entity, so scenes
+			// written before this existed round-trip byte-identical.
+			if (!entity.scriptFieldOverrides.empty())
+			{
+				json += indent + "  \"scriptFields\": [";
+				for (std::size_t index = 0; index < entity.scriptFieldOverrides.size(); ++index)
+				{
+					const ScriptFieldOverride& field = entity.scriptFieldOverrides[index];
+					json += (index == 0 ? "\n" : ",\n");
+					json += indent + "    {\n";
+					json += indent + "      \"script\": \"" + escapeJson(field.scriptPath) + "\",\n";
+					json += indent + "      \"name\": \"" + escapeJson(field.fieldName) + "\",\n";
+					// By name, never the ordinal - reordering the enum must not
+					// silently reinterpret every saved scene.
+					json += indent + "      \"type\": \"" + std::string(scriptFieldTypeName(field.type)) + "\",\n";
+					switch (field.type)
+					{
+						case ScriptFieldOverride::Type::Bool:
+							json += indent + "      \"value\": "
+								+ std::string(field.boolValue ? "true" : "false") + "\n";
+							break;
+						case ScriptFieldOverride::Type::String:
+							json += indent + "      \"value\": \"" + escapeJson(field.stringValue) + "\"\n";
+							break;
+						case ScriptFieldOverride::Type::Number:
+						{
+							// Same "%.6f" as every other float in this file, so
+							// a re-save does not churn the diff.
+							std::array<char, 64> numberBuffer{};
+							std::snprintf(
+								numberBuffer.data(), numberBuffer.size(), "%.6f", field.numberValue);
+							json += indent + "      \"value\": " + numberBuffer.data() + "\n";
+							break;
+						}
+					}
+					json += indent + "    }";
+				}
+				json += "\n" + indent + "  ],\n";
+			}
 
 			json += indent + "  \"animation\": {\n";
 			json += indent + "    \"enabled\": " + std::string(entity.animation.enabled ? "true" : "false") + ",\n";

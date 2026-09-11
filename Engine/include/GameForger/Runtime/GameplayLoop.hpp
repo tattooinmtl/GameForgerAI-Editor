@@ -169,6 +169,22 @@ namespace gameforger::editor
 	// ScriptRuntime::Config and bound here is bound in both hosts by
 	// construction. Only logCallback stays host-specific, because it genuinely
 	// differs - the Editor routes to its Console panel, the Runtime to stderr.
+	// Starts every script on every entity, then pushes that entity's
+	// Inspector-authored field overrides into the fresh instance.
+	//
+	// This lives in Engine and is called by BOTH hosts for the same reason
+	// bindSharedScriptCallbacks does: the two used to run their own identical
+	// start loops, which is exactly the shape of defect that made four script
+	// callbacks work on Play and do nothing in a shipped game (audit 1b). A
+	// tuned walk_speed that applied in the editor and silently reverted to the
+	// script's default in the Runtime would have been the next one.
+	//
+	// Overrides are applied AFTER on_start(), because on_start is where a
+	// script assigns its own defaults - applying first would be overwritten by
+	// the script itself.
+	void startEntityScripts(
+		const EditorScene& scene, ScriptRuntime& scriptRuntime, const std::filesystem::path& projectRoot);
+
 	void bindSharedScriptCallbacks(
 		ScriptRuntime::Config& config,
 		GameplayState& gameplay,

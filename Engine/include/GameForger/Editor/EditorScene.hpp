@@ -100,6 +100,69 @@ namespace gameforger::editor
 		std::string sourcePath;
 	};
 
+	// One Inspector-authored value for a field a script exposes (the
+	// `self.walk_speed = 4.5` style assignments parseScriptProperties finds in
+	// on_start).
+	//
+	// These exist because the Inspector could previously only edit such values
+	// WHILE Play was running - it wrote straight into the live Lua table, so
+	// the moment you stopped, the edit was gone, and in edit mode the control
+	// moved but nothing was stored at all. Tuning a character by starting the
+	// game, dragging a slider, and memorising the number is not tuning.
+	//
+	// Stored per (script, field) on the entity, serialized with the scene, and
+	// pushed into the instance right after on_start() so the authored value
+	// wins over the script's own default without editing the .lua.
+	struct ScriptFieldOverride
+	{
+		// Project-relative, matching SceneEntity::scripts - one entity can run
+		// several scripts that each expose a `speed`.
+		std::string scriptPath;
+		std::string fieldName;
+		// Which of the value members below is meaningful. Serialized BY NAME,
+		// like every other enum in this project.
+		enum class Type
+		{
+			Number,
+			Bool,
+			String
+		};
+		Type type = Type::Number;
+		float numberValue = 0.0F;
+		bool boolValue = false;
+		std::string stringValue;
+	};
+
+	[[nodiscard]] inline const char* scriptFieldTypeName(const ScriptFieldOverride::Type type) noexcept
+	{
+		switch (type)
+		{
+			case ScriptFieldOverride::Type::Bool:
+				return "Bool";
+			case ScriptFieldOverride::Type::String:
+				return "String";
+			case ScriptFieldOverride::Type::Number:
+				break;
+		}
+		return "Number";
+	}
+
+	[[nodiscard]] inline ScriptFieldOverride::Type scriptFieldTypeFromName(const std::string& name) noexcept
+	{
+		if (name == "Bool")
+		{
+			return ScriptFieldOverride::Type::Bool;
+		}
+		if (name == "String")
+		{
+			return ScriptFieldOverride::Type::String;
+		}
+		// Unknown names fall back to Number rather than refusing to load: a
+		// scene written by a newer build must still open here, minus whatever
+		// it knew that this build does not.
+		return ScriptFieldOverride::Type::Number;
+	}
+
 	// Data for an entity with isTextMesh=true (see below). The renderer builds
 	// real extruded 3D glyph geometry from this (TextMesh.hpp), cached per
 	// entity id and rebuilt whenever these fields change - unlike the 6
@@ -279,6 +342,10 @@ namespace gameforger::editor
 		// hinge edge. Position always refers to this pivot's world location.
 		glm::vec3 pivotOffset{0.0F};
 		std::vector<std::string> scripts;
+		// Inspector-authored values for fields the above scripts expose. Empty
+		// for an entity nobody has tuned, which is why this is additive and
+		// costs nothing for existing scenes. See ScriptFieldOverride.
+		std::vector<ScriptFieldOverride> scriptFieldOverrides;
 		EntityAnimation animation;
 		EntityCameraRig cameraRig;
 		// Whether self.physics:resolve() (see Collision.hpp / ScriptRuntime)

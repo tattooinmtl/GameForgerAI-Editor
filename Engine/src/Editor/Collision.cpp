@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -721,22 +722,173 @@ namespace gameforger::editor
 		return &cache.emplace(key, std::move(geometry)).first->second;
 	}
 
-	BoxCollisionResult resolveBoxCollision(
-		const EditorScene& scene,
-		const int selfEntityId,
-		const glm::vec3& startPosition,
-		const float halfWidth,
-		const float height,
-		const ImportedMeshProvider& importedMesh)
+	namespace
 	{
-		BoxCollisionResult result{startPosition, false};
-
-		for (int pass = 0; pass < 3; ++pass)
+		// The original push-out solve, unchanged, lifted out of
+		// resolveBoxCollision so the step-up sweep can run it a second time
+		// from a raised start without duplicating any of it.
+		BoxCollisionResult resolvePushOut(
+			const EditorScene& scene,
+			const int selfEntityId,
+			const glm::vec3& startPosition,
+			const float halfWidth,
+			const float height,
+			const ImportedMeshProvider& importedMesh)
 		{
-			bool resolvedAny = false;
+			BoxCollisionResult result{startPosition, false};
+
+			for (int pass = 0; pass < 3; ++pass)
+			{
+				bool resolvedAny = false;
+				for (const SceneEntity& other : scene.entities())
+				{
+					if (other.id == selfEntityId || !other.active || !entityOrAncestorBlocks(scene, other, selfEntityId))
+					{
+						continue;
+					}
+
+					if (other.isTerrain)
+					{
+						const float half = other.terrain.worldSize * 0.5F;
+						const float localX = result.position.x - other.position.x;
+						const float localZ = result.position.z - other.position.z;
+						if (localX < -half || localX > half || localZ < -half || localZ > half)
+						{
+							continue;
+						}
+						const float groundY = other.position.y +
+							sampleTerrainHeight(
+								other.terrain.resolution,
+								other.terrain.worldSize,
+								other.terrain.heightScale,
+								other.terrain.heights,
+								localX,
+								localZ);
+						if (result.position.y <= groundY)
+						{
+							result.position.y = groundY;
+							result.grounded = true;
+							resolvedAny = true;
+						}
+						continue;
+					}
+
+					const ColliderType type = effectiveColliderType(scene, other, selfEntityId);
+					const MeshCollisionGeometry* mesh = meshGeometryFor(scene, other, importedMesh);
+					const bool skipPrimitiveParent =
+						entityHasChildren(scene, other) && !other.isImportedMesh;
+
+					if (type == ColliderType::Mesh)
+					{
+						if (mesh != nullptr && mesh->valid)
+						{
+							resolveImportedTriangles(result, other, *mesh, halfWidth, height, resolvedAny);
+						}
+						continue;
+					}
+
+					if (type == ColliderType::Convex)
+					{
+						if (mesh != nullptr && mesh->valid)
+						{
+							if (importedMesh)
+							{
+								const MeshCollisionGeometry hull = convexFrom(*mesh);
+								resolveConvexSolid(result, other, hull, halfWidth, height, resolvedAny);
+							}
+							else
+							{
+								static std::unordered_map<std::string, MeshCollisionGeometry> convexCache;
+								const std::string key = other.isImportedMesh
+									? ("i:" + (scene.projectRoot() / other.importedMesh.sourcePath)
+										   .lexically_normal()
+										   .string())
+									: ("p:" + std::to_string(static_cast<int>(other.primitive)));
+								const MeshCollisionGeometry* hull = nullptr;
+								if (const auto found = convexCache.find(key); found != convexCache.end())
+								{
+									hull = &found->second;
+								}
+								else
+								{
+									hull = &convexCache.emplace(key, convexFrom(*mesh)).first->second;
+								}
+								resolveConvexSolid(result, other, *hull, halfWidth, height, resolvedAny);
+							}
+						}
+						continue;
+					}
+
+					// Box: solid AABB. Imported models use real mesh bounds, not
+					// Transform Scale (1,1,1) -> 2x2x2. Primitive parents that
+					// only exist to group children skip their own cube.
+					if (skipPrimitiveParent)
+					{
+						continue;
+					}
+					if (other.isImportedMesh && mesh != nullptr && mesh->valid)
+					{
+						const ColliderAabb box = aabbFromLocalBounds(other, mesh->localMin, mesh->localMax);
+						resolveSolidAabb(
+							result, box.min, box.max, (box.min + box.max) * 0.5F, halfWidth, height, resolvedAny);
+						continue;
+					}
+					resolveSolidAabb(
+						result,
+						other.position - other.scale,
+						other.position + other.scale,
+						other.position,
+						halfWidth,
+						height,
+						resolvedAny);
+				}
+				if (!resolvedAny)
+				{
+					break;
+				}
+			}
+
+			return result;
+		}
+
+		// Highest surface top strictly under `feet` (within `maxDrop`) that the
+		// mover's footprint overlaps in XZ. Used both for the step-up landing
+		// and for the ground probe.
+		//
+		// Mesh and Convex colliders are tested by their AABB here, not their
+		// triangles. That is a deliberate approximation: a per-triangle
+		// downward ray is a different query from the push-out solve this file
+		// is built around, and for the stair/curb case the bounds top is the
+		// same answer. It means a mover can be reported grounded slightly
+		// early over a concave mesh - stated rather than hidden.
+		std::optional<float> highestSupportUnder(
+			const EditorScene& scene,
+			const int selfEntityId,
+			const glm::vec3& feet,
+			const float halfWidth,
+			const float maxDrop,
+			const ImportedMeshProvider& importedMesh)
+		{
+			std::optional<float> best;
+			const auto consider = [&best, &feet, maxDrop](const float surfaceY)
+			{
+				// A hair above the feet still counts: a mover resting exactly on
+				// a surface has feet == surfaceY, and floating-point drift puts
+				// it either side of that.
+				if (surfaceY > feet.y + 0.001F || surfaceY < feet.y - maxDrop)
+				{
+					return;
+				}
+				if (!best.has_value() || surfaceY > *best)
+				{
+					best = surfaceY;
+				}
+			};
+
 			for (const SceneEntity& other : scene.entities())
 			{
-				if (other.id == selfEntityId || !other.active || !entityOrAncestorBlocks(scene, other, selfEntityId))
+				if (other.id == selfEntityId || !other.active
+					|| !entityOrAncestorBlocks(scene, other, selfEntityId))
 				{
 					continue;
 				}
@@ -744,102 +896,107 @@ namespace gameforger::editor
 				if (other.isTerrain)
 				{
 					const float half = other.terrain.worldSize * 0.5F;
-					const float localX = result.position.x - other.position.x;
-					const float localZ = result.position.z - other.position.z;
+					const float localX = feet.x - other.position.x;
+					const float localZ = feet.z - other.position.z;
 					if (localX < -half || localX > half || localZ < -half || localZ > half)
 					{
 						continue;
 					}
-					const float groundY = other.position.y +
-						sampleTerrainHeight(
-							other.terrain.resolution,
-							other.terrain.worldSize,
-							other.terrain.heightScale,
-							other.terrain.heights,
-							localX,
-							localZ);
-					if (result.position.y <= groundY)
-					{
-						result.position.y = groundY;
-						result.grounded = true;
-						resolvedAny = true;
-					}
+					consider(
+						other.position.y
+						+ sampleTerrainHeight(
+							other.terrain.resolution, other.terrain.worldSize, other.terrain.heightScale,
+							other.terrain.heights, localX, localZ));
 					continue;
 				}
 
-				const ColliderType type = effectiveColliderType(scene, other, selfEntityId);
 				const MeshCollisionGeometry* mesh = meshGeometryFor(scene, other, importedMesh);
-				const bool skipPrimitiveParent =
-					entityHasChildren(scene, other) && !other.isImportedMesh;
-
-				if (type == ColliderType::Mesh)
-				{
-					if (mesh != nullptr && mesh->valid)
-					{
-						resolveImportedTriangles(result, other, *mesh, halfWidth, height, resolvedAny);
-					}
-					continue;
-				}
-
-				if (type == ColliderType::Convex)
-				{
-					if (mesh != nullptr && mesh->valid)
-					{
-						if (importedMesh)
-						{
-							const MeshCollisionGeometry hull = convexFrom(*mesh);
-							resolveConvexSolid(result, other, hull, halfWidth, height, resolvedAny);
-						}
-						else
-						{
-							static std::unordered_map<std::string, MeshCollisionGeometry> convexCache;
-							const std::string key = other.isImportedMesh
-								? ("i:" + (scene.projectRoot() / other.importedMesh.sourcePath)
-									   .lexically_normal()
-									   .string())
-								: ("p:" + std::to_string(static_cast<int>(other.primitive)));
-							const MeshCollisionGeometry* hull = nullptr;
-							if (const auto found = convexCache.find(key); found != convexCache.end())
-							{
-								hull = &found->second;
-							}
-							else
-							{
-								hull = &convexCache.emplace(key, convexFrom(*mesh)).first->second;
-							}
-							resolveConvexSolid(result, other, *hull, halfWidth, height, resolvedAny);
-						}
-					}
-					continue;
-				}
-
-				// Box: solid AABB. Imported models use real mesh bounds, not
-				// Transform Scale (1,1,1) -> 2x2x2. Primitive parents that
-				// only exist to group children skip their own cube.
-				if (skipPrimitiveParent)
-				{
-					continue;
-				}
+				ColliderAabb box;
 				if (other.isImportedMesh && mesh != nullptr && mesh->valid)
 				{
-					const ColliderAabb box = aabbFromLocalBounds(other, mesh->localMin, mesh->localMax);
-					resolveSolidAabb(
-						result, box.min, box.max, (box.min + box.max) * 0.5F, halfWidth, height, resolvedAny);
+					box = aabbFromLocalBounds(other, mesh->localMin, mesh->localMax);
+				}
+				else
+				{
+					if (entityHasChildren(scene, other) && !other.isImportedMesh)
+					{
+						// Same rule as the push-out pass: a primitive that only
+						// exists to group children is not itself solid.
+						continue;
+					}
+					box = {other.position - other.scale, other.position + other.scale};
+				}
+
+				if (feet.x + halfWidth < box.min.x || feet.x - halfWidth > box.max.x
+					|| feet.z + halfWidth < box.min.z || feet.z - halfWidth > box.max.z)
+				{
 					continue;
 				}
-				resolveSolidAabb(
-					result,
-					other.position - other.scale,
-					other.position + other.scale,
-					other.position,
-					halfWidth,
-					height,
-					resolvedAny);
+				consider(box.max.y);
 			}
-			if (!resolvedAny)
+			return best;
+		}
+	}
+
+	BoxCollisionResult resolveBoxCollision(
+		const EditorScene& scene,
+		const int selfEntityId,
+		const glm::vec3& startPosition,
+		const float halfWidth,
+		const float height,
+		const ImportedMeshProvider& importedMesh,
+		const CharacterMoveOptions& options)
+	{
+		BoxCollisionResult result =
+			resolvePushOut(scene, selfEntityId, startPosition, halfWidth, height, importedMesh);
+
+		// --- step up ---
+		// How far the solve had to shove us back horizontally. That, not a
+		// contact flag, is what "the move was blocked" means here.
+		const auto horizontalPushBack = [](const BoxCollisionResult& from, const glm::vec3& origin)
+		{
+			const float dx = from.position.x - origin.x;
+			const float dz = from.position.z - origin.z;
+			return std::sqrt(dx * dx + dz * dz);
+		};
+
+		constexpr float kBlockedEpsilon = 0.0005F;
+		const float blocked = horizontalPushBack(result, startPosition);
+		if (options.stepHeight > 0.0F && blocked > kBlockedEpsilon)
+		{
+			const glm::vec3 raisedStart = startPosition + glm::vec3(0.0F, options.stepHeight, 0.0F);
+			const BoxCollisionResult raised =
+				resolvePushOut(scene, selfEntityId, raisedStart, halfWidth, height, importedMesh);
+			const float raisedBlocked = horizontalPushBack(raised, raisedStart);
+
+			// THIS is what stops a mover walking up a wall: against anything
+			// taller than stepHeight the raised attempt is pushed back just as
+			// far as the flat one, so it makes no progress and is rejected.
+			// Only a surface the raise actually clears gets past here.
+			if (raisedBlocked < blocked - kBlockedEpsilon)
 			{
-				break;
+				// Belt and braces: land on something real rather than teleport
+				// into the air. Given the progress check above this is hard to
+				// reach - if the raise cleared the obstacle, the obstacle's top
+				// is by definition within stepHeight - so treat it as a guard
+				// for odd geometry, not as the wall-climbing defence.
+				const std::optional<float> support = highestSupportUnder(
+					scene, selfEntityId, raised.position, halfWidth, options.stepHeight + 0.001F,
+					importedMesh);
+				if (support.has_value())
+				{
+					return {glm::vec3(raised.position.x, *support, raised.position.z), true};
+				}
 			}
+		}
+
+		// --- ground probe ---
+		// Reports only; never snaps. See CharacterMoveOptions for why.
+		if (!result.grounded && options.groundProbeDistance > 0.0F)
+		{
+			const std::optional<float> support = highestSupportUnder(
+				scene, selfEntityId, result.position, halfWidth, options.groundProbeDistance, importedMesh);
+			result.grounded = support.has_value();
 		}
 
 		return result;

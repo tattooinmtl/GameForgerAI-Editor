@@ -259,12 +259,87 @@ namespace gameforger::editor
 			return result;
 		}
 
+		// Builds the player the way this engine actually wants one: an Empty,
+		// not a capsule.
+		//
+		// A capsule was only ever a stand-in for "something with a collider" -
+		// its mesh is never seen in first person, it costs a draw call, and in
+		// third person it is the wrong shape anyway. The controller has never
+		// needed it: fps_controller.lua carries its own collider_radius /
+		// collider_height and never reads the entity's mesh or scale.
+		//
+		// Returns the created entity's name, or empty on failure.
+		std::string createPlayerObject(
+			EditorScene& scene, AICommandBus& commandBus, const ScriptsLogFn& log)
+		{
+			std::string name = "Player";
+			for (int suffix = 2; scene.findEntity(name) != nullptr && suffix < 1000; ++suffix)
+			{
+				name = "Player " + std::to_string(suffix);
+			}
+
+			CreateEntityCommand create;
+			create.name = name;
+			create.primitive = PrimitiveType::Empty;
+			// Feet on the floor: the controller treats the entity position as
+			// the base of its collider, so spawning at y=0 puts it on ground
+			// level rather than sunk or hovering.
+			create.position = glm::vec3(0.0F, 0.0F, 0.0F);
+			const AICommandResult created = commandBus.execute(create);
+			if (!created.success)
+			{
+				log(false, "Create Player: " + created.message);
+				return {};
+			}
+
+			const auto step = [&commandBus, &log, &name](const AICommandResult& result, const char* what)
+			{
+				log(result.success, std::string("Create Player - ") + what + ": " + result.message);
+				return result.success;
+			};
+
+			// Solid, so the world collides with it and so anything the player
+			// stands on resolves against a real box.
+			step(commandBus.execute(SetPropertyCommand{name, "Collider", "enabled", true}), "collider");
+			// The tag every other system looks the player up by - enemy_ai.lua
+			// chases "Player", ranged_attacker.lua targets it.
+			step(commandBus.execute(AddTagCommand{name, "Player"}), "tag");
+
+			// The three that make it a playable FPS character. Order matters
+			// only for the log; none of them fight over the transform -
+			// weapons and inventory are Utility presets.
+			for (const char* scriptPath : {
+					 "Game/Scripts/fps_controller.lua",
+					 "Game/Scripts/weapons_system.lua",
+					 "Game/Scripts/inventory_system.lua"})
+			{
+				step(commandBus.execute(AttachScriptCommand{name, scriptPath}), scriptPath);
+			}
+			return name;
+		}
+
+		// True when some entity in the scene can actually be stood on. A player
+		// spawned into a scene with no solid ground falls forever, and the
+		// least useful way to discover that is by pressing Play.
+		bool sceneHasSolidGround(const EditorScene& scene)
+		{
+			for (const SceneEntity& entity : scene.entities())
+			{
+				if (entity.active && entity.hasCollider)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
 		// The built-in behaviour packs. Full panel width, not inside the file
 		// list's narrow column: when this lived in a 260px child, the "-> which
 		// object" label beside the Apply button was clipped off the right edge,
 		// so nothing on screen ever showed that the target had changed.
 		void drawPresetsSection(
 			ScriptsPanelState& state,
+			EditorScene& scene,
 			AICommandBus& commandBus,
 			const SceneEntity* selected,
 			const ScriptsLogFn& log)
@@ -275,6 +350,39 @@ namespace gameforger::editor
 			{
 				return;
 			}
+
+			if (ImGui::Button("Create Player"))
+			{
+				const std::string created = createPlayerObject(scene, commandBus, log);
+				if (created.empty())
+				{
+					state.status = "Could not create the player - see the Console.";
+					state.statusSuccess = false;
+				}
+				else if (!sceneHasSolidGround(scene))
+				{
+					// Everything worked, but the scene cannot be played. Say so
+					// now rather than letting the first Play look like a bug.
+					state.status = created
+						+ " created - but nothing in this scene has a Collider, so it will fall forever. "
+						  "Tick Solid on your ground or terrain.";
+					state.statusSuccess = false;
+				}
+				else
+				{
+					state.status = created + " created: Empty + collider + \"Player\" tag + FPS Controller, "
+										   "Weapons System and Inventory.";
+					state.statusSuccess = true;
+				}
+			}
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(
+					"Builds a ready-to-play character in one step: an Empty (not a capsule - the mesh is "
+					"never seen in first person and the controller carries its own collider size), marked "
+					"Solid, tagged \"Player\", with FPS Controller + Weapons System + Inventory attached.");
+			}
+			ImGui::Separator();
 
 			ImGui::TextDisabled(
 				"Tick one or more, then Apply to Object. Ticks stay put afterwards, so the same set "
@@ -519,7 +627,7 @@ namespace gameforger::editor
 		}
 		ImGui::Separator();
 
-		drawPresetsSection(state, commandBus, selected, log);
+		drawPresetsSection(state, scene, commandBus, selected, log);
 		ImGui::Separator();
 
 		// Someone outside the panel asked for a specific file - the Project

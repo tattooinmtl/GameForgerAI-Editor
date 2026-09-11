@@ -171,6 +171,7 @@ namespace
     using gameforger::editor::EntityCameraRig;
     using gameforger::editor::ColliderType;
     using gameforger::editor::SceneEntity;
+    using gameforger::editor::ScriptFieldOverride;
     using gameforger::editor::SceneLoadResult;
     using gameforger::editor::SceneSaveResult;
     using gameforger::editor::ScriptGenerationResult;
@@ -2741,13 +2742,7 @@ namespace
                 bindSharedScriptCallbacks(
                     scriptConfig, playMode.gameplay, audioEngine, projectRoot);
                 scriptRuntime.initialize(scene, commandBus, imguiInputSource, std::move(scriptConfig));
-                for (const SceneEntity& entity : scene.entities())
-                {
-                    for (const std::string& scriptPath : entity.scripts)
-                    {
-                        scriptRuntime.startScript(entity.id, scriptPath, projectRoot);
-                    }
-                }
+                startEntityScripts(scene, scriptRuntime, projectRoot);
             }
             ImGui::PopStyleColor(2);
         }
@@ -7064,40 +7059,95 @@ namespace
             if (!exposedProps.empty())
             {
                 ImGui::Indent(15.0F);
+                // Finds this entity's authored override for a field, or null.
+                const auto findOverride =
+                    [&entity, &scriptPath](const std::string& fieldName) -> const ScriptFieldOverride*
+                {
+                    for (const ScriptFieldOverride& field : entity.scriptFieldOverrides)
+                    {
+                        if (field.scriptPath == scriptPath && field.fieldName == fieldName)
+                        {
+                            return &field;
+                        }
+                    }
+                    return nullptr;
+                };
+                // Stores one. In edit mode this is the whole point: the value
+                // used to be written straight into the live Lua table, so it
+                // existed only while Play was running and outside Play the
+                // control moved and nothing was recorded at all.
+                const auto storeOverride = [&scene, &entity, &scriptPath](
+                                               const std::string& fieldName,
+                                               const ScriptFieldOverride::Type type,
+                                               const float number,
+                                               const bool boolean,
+                                               const std::string& text)
+                {
+                    SceneEntity* target = scene.findEntityMutable(entity.id);
+                    if (target == nullptr)
+                    {
+                        return;
+                    }
+                    for (ScriptFieldOverride& field : target->scriptFieldOverrides)
+                    {
+                        if (field.scriptPath == scriptPath && field.fieldName == fieldName)
+                        {
+                            field.type = type;
+                            field.numberValue = number;
+                            field.boolValue = boolean;
+                            field.stringValue = text;
+                            return;
+                        }
+                    }
+                    target->scriptFieldOverrides.push_back(
+                        ScriptFieldOverride{scriptPath, fieldName, type, number, boolean, text});
+                };
+
                 for (const auto& prop : exposedProps)
                 {
                     ImGui::PushID(prop.name.c_str());
+                    const ScriptFieldOverride* authored = findOverride(prop.name);
+                    // While Play runs, show the live value - a script may have
+                    // changed it since on_start. Outside Play, show what was
+                    // authored here, falling back to the script's own default.
                     if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::Number)
                     {
                         float val = scriptRuntime.isRunning()
                             ? scriptRuntime.getScriptNumberField(entity.id, scriptPath, prop.name, prop.defaultNumber)
-                            : prop.defaultNumber;
+                            : (authored != nullptr ? authored->numberValue : prop.defaultNumber);
                         if (ImGui::DragFloat(prop.name.c_str(), &val, 0.1F))
                         {
+                            // Both, while running: the live table so the change
+                            // is visible immediately, and the override so it
+                            // survives Stop.
                             if (scriptRuntime.isRunning())
                             {
                                 scriptRuntime.setScriptNumberField(entity.id, scriptPath, prop.name, val);
                             }
+                            storeOverride(
+                                prop.name, ScriptFieldOverride::Type::Number, val, false, std::string());
                         }
                     }
                     else if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::Bool)
                     {
                         bool val = scriptRuntime.isRunning()
                             ? scriptRuntime.getScriptBoolField(entity.id, scriptPath, prop.name, prop.defaultBool)
-                            : prop.defaultBool;
+                            : (authored != nullptr ? authored->boolValue : prop.defaultBool);
                         if (ImGui::Checkbox(prop.name.c_str(), &val))
                         {
                             if (scriptRuntime.isRunning())
                             {
                                 scriptRuntime.setScriptBoolField(entity.id, scriptPath, prop.name, val);
                             }
+                            storeOverride(
+                                prop.name, ScriptFieldOverride::Type::Bool, 0.0F, val, std::string());
                         }
                     }
                     else if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::String)
                     {
                         std::string val = scriptRuntime.isRunning()
                             ? scriptRuntime.getScriptStringField(entity.id, scriptPath, prop.name, prop.defaultString)
-                            : prop.defaultString;
+                            : (authored != nullptr ? authored->stringValue : prop.defaultString);
                         std::array<char, 128> strBuf{};
                         std::snprintf(strBuf.data(), strBuf.size(), "%s", val.c_str());
                         if (ImGui::InputText(prop.name.c_str(), strBuf.data(), strBuf.size()))
@@ -7106,7 +7156,37 @@ namespace
                             {
                                 scriptRuntime.setScriptStringField(entity.id, scriptPath, prop.name, strBuf.data());
                             }
+                            storeOverride(
+                                prop.name, ScriptFieldOverride::Type::String, 0.0F, false, strBuf.data());
                         }
+                    }
+                    // Authored values are worth distinguishing from defaults -
+                    // otherwise there is no way to tell what you have changed,
+                    // or to put it back.
+                    if (authored != nullptr)
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.95F, 0.75F, 0.35F, 1.0F), "*");
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("Overridden here. Right-click the field to reset.");
+                        }
+                    }
+                    if (ImGui::BeginPopupContextItem("##resetField"))
+                    {
+                        if (ImGui::MenuItem("Reset to script default", nullptr, false, authored != nullptr))
+                        {
+                            if (SceneEntity* target = scene.findEntityMutable(entity.id))
+                            {
+                                std::erase_if(
+                                    target->scriptFieldOverrides,
+                                    [&scriptPath, &prop](const ScriptFieldOverride& field)
+                                    {
+                                        return field.scriptPath == scriptPath && field.fieldName == prop.name;
+                                    });
+                            }
+                        }
+                        ImGui::EndPopup();
                     }
                     ImGui::PopID();
                 }

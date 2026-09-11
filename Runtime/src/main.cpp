@@ -481,13 +481,7 @@ int main()
 		// state worked on Play and were dead in the shipped game.
 		bindSharedScriptCallbacks(scriptConfig, gameplay, audioEngine, projectRoot);
 		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
-		for (const SceneEntity& entity : scene.entities())
-		{
-			for (const std::string& scriptPath : entity.scripts)
-			{
-				scriptRuntime.startScript(entity.id, scriptPath, projectRoot);
-			}
-		}
+		startEntityScripts(scene, scriptRuntime, projectRoot);
 	};
 	startAllScripts();
 

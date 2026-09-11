@@ -403,6 +403,46 @@ namespace gameforger::editor
 		gameplay.projectilesFiredThisTick = 0;
 	}
 
+	void startEntityScripts(
+		const EditorScene& scene, ScriptRuntime& scriptRuntime, const std::filesystem::path& projectRoot)
+	{
+		for (const SceneEntity& entity : scene.entities())
+		{
+			for (const std::string& scriptPath : entity.scripts)
+			{
+				if (!scriptRuntime.startScript(entity.id, scriptPath, projectRoot))
+				{
+					// startScript already reports why through the log callback;
+					// there is nothing to override on an instance that does not
+					// exist.
+					continue;
+				}
+				for (const ScriptFieldOverride& field : entity.scriptFieldOverrides)
+				{
+					if (field.scriptPath != scriptPath)
+					{
+						continue;
+					}
+					switch (field.type)
+					{
+						case ScriptFieldOverride::Type::Bool:
+							scriptRuntime.setScriptBoolField(
+								entity.id, scriptPath, field.fieldName, field.boolValue);
+							break;
+						case ScriptFieldOverride::Type::String:
+							scriptRuntime.setScriptStringField(
+								entity.id, scriptPath, field.fieldName, field.stringValue);
+							break;
+						case ScriptFieldOverride::Type::Number:
+							scriptRuntime.setScriptNumberField(
+								entity.id, scriptPath, field.fieldName, field.numberValue);
+							break;
+					}
+				}
+			}
+		}
+	}
+
 	void bindSharedScriptCallbacks(
 		ScriptRuntime::Config& config,
 		GameplayState& gameplay,

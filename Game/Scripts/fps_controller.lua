@@ -28,6 +28,15 @@ function FpsController:on_start()
     -- height in Y) - roughly Unity's default capsule collider dimensions.
     self.collider_radius = 0.4
     self.collider_height = 2.0
+    -- Character-controller tuning, Unity's Step Offset / ground check.
+    -- step_height: tallest thing walked up without jumping. Keep it well
+    --   under collider_height or you climb walls you should not.
+    -- ground_distance: how far below the feet still counts as standing on
+    --   something. Without it you stutter between grounded and airborne on
+    --   stair edges and slopes, which breaks jumping exactly where you need
+    --   it most.
+    self.step_height = 0.3
+    self.ground_distance = 0.1
 
     -- Sprint power meter (e.g. to drive a UI sprint bar's fill amount).
     self.sprint_max = 100.0
@@ -128,7 +137,17 @@ function FpsController:on_update(delta_time)
     position.z = position.z + move_z * speed * delta_time
     position.y = position.y + self.velocity_y * delta_time
 
-    local resolved, grounded = self.physics:resolve(position, self.collider_radius, self.collider_height)
+    -- The ground probe is passed only while NOT moving upward. The engine
+    -- reports grounded without snapping us down, so a probe during the first
+    -- frame of a jump would report grounded while we are still within probe
+    -- range of the floor - and the `if grounded then velocity_y = 0` below
+    -- would cancel the jump on the frame it started.
+    local probe = 0.0
+    if self.velocity_y <= 0.0 then
+        probe = self.ground_distance
+    end
+    local resolved, grounded = self.physics:resolve(
+        position, self.collider_radius, self.collider_height, self.step_height, probe)
     position = resolved
     self.grounded = grounded
     if grounded then

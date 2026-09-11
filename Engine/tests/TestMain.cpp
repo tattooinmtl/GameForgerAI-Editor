@@ -670,6 +670,199 @@ void testColliderPrimitiveBlocksWhenChecked()
 	TEST_ASSERT(std::abs(open.position.x - 1.2F) < 0.001F, "Unchecked Collider must not block");
 }
 
+// A staircase step, as an authored scene would build it: a box whose top is
+// `topY` high, sitting in front of a mover at the origin.
+namespace
+{
+	void buildStep(EditorScene& scene, const char* name, const float topY, const float centerX)
+	{
+		TEST_ASSERT(
+			scene.execute(CreateEntityCommand{name, PrimitiveType::Cube, glm::vec3(centerX, 0.0F, 0.0F)}).success,
+			"create step");
+		SceneEntity* step = scene.findEntityMutable(scene.findEntity(name)->id);
+		// Cube spans position +/- scale, so half the height is the top.
+		step->scale = glm::vec3(0.5F, topY, 0.5F);
+		step->position.y = 0.0F;
+		TEST_ASSERT(scene.execute(SetPropertyCommand{name, "Collider", "enabled", true}).success, "step solid");
+	}
+}
+
+void testScriptFieldOverridesRoundTrip()
+{
+	const std::filesystem::path scenePath =
+		std::filesystem::temp_directory_path() / "gf_script_field_overrides.gfprod";
+
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Player", PrimitiveType::Empty, glm::vec3(0.0F)}).success,
+		"create player");
+	SceneEntity* player = scene.findEntityMutable(scene.findEntity("Player")->id);
+	player->scripts.push_back("Game/Scripts/fps_controller.lua");
+	player->scriptFieldOverrides.push_back(
+		{"Game/Scripts/fps_controller.lua", "walk_speed", ScriptFieldOverride::Type::Number, 7.25F, false, ""});
+	player->scriptFieldOverrides.push_back(
+		{"Game/Scripts/fps_controller.lua", "can_sprint", ScriptFieldOverride::Type::Bool, 0.0F, true, ""});
+	player->scriptFieldOverrides.push_back(
+		{"Game/Scripts/fps_controller.lua", "label", ScriptFieldOverride::Type::String, 0.0F, false, "hero"});
+
+	TEST_ASSERT(saveScene(scenePath, scene.entities()).success, "save scene with overrides");
+
+	const SceneLoadResult loadedScene = loadScene(scenePath);
+	TEST_ASSERT(loadedScene.success, "load scene with overrides");
+	const SceneEntity* reloaded = nullptr;
+	for (const SceneEntity& candidate : loadedScene.entities)
+	{
+		if (candidate.name == "Player")
+		{
+			reloaded = &candidate;
+		}
+	}
+	TEST_ASSERT(reloaded != nullptr, "player survived the round-trip");
+	TEST_ASSERT(reloaded->scriptFieldOverrides.size() == 3, "all three overrides survived");
+
+	const auto find = [reloaded](const std::string& name) -> const ScriptFieldOverride*
+	{
+		for (const ScriptFieldOverride& field : reloaded->scriptFieldOverrides)
+		{
+			if (field.fieldName == name)
+			{
+				return &field;
+			}
+		}
+		return nullptr;
+	};
+	const ScriptFieldOverride* speed = find("walk_speed");
+	TEST_ASSERT(speed != nullptr && speed->type == ScriptFieldOverride::Type::Number, "walk_speed is a number");
+	TEST_ASSERT(std::abs(speed->numberValue - 7.25F) < 0.0001F, "walk_speed value survived");
+	const ScriptFieldOverride* sprint = find("can_sprint");
+	TEST_ASSERT(sprint != nullptr && sprint->type == ScriptFieldOverride::Type::Bool, "can_sprint is a bool");
+	TEST_ASSERT(sprint->boolValue, "can_sprint value survived");
+	const ScriptFieldOverride* label = find("label");
+	TEST_ASSERT(label != nullptr && label->type == ScriptFieldOverride::Type::String, "label is a string");
+	TEST_ASSERT(label->stringValue == "hero", "label value survived");
+	TEST_ASSERT(speed->scriptPath == "Game/Scripts/fps_controller.lua", "the owning script survived");
+
+	std::error_code removeError;
+	std::filesystem::remove(scenePath, removeError);
+}
+
+void testScriptFieldTypeNamesAreStableAndForgiving()
+{
+	// Serialized by name, never by ordinal - reordering the enum must not
+	// reinterpret every saved scene.
+	TEST_ASSERT(std::string(scriptFieldTypeName(ScriptFieldOverride::Type::Number)) == "Number", "Number name");
+	TEST_ASSERT(std::string(scriptFieldTypeName(ScriptFieldOverride::Type::Bool)) == "Bool", "Bool name");
+	TEST_ASSERT(std::string(scriptFieldTypeName(ScriptFieldOverride::Type::String)) == "String", "String name");
+
+	TEST_ASSERT(scriptFieldTypeFromName("Bool") == ScriptFieldOverride::Type::Bool, "Bool round-trips");
+	TEST_ASSERT(scriptFieldTypeFromName("String") == ScriptFieldOverride::Type::String, "String round-trips");
+	// A type written by a newer build must not stop the scene loading.
+	TEST_ASSERT(scriptFieldTypeFromName("Quaternion") == ScriptFieldOverride::Type::Number,
+		"an unknown type falls back to Number rather than refusing the scene");
+}
+
+void testStepUpClimbsStairsButNotWalls()
+{
+	EditorScene scene(".");
+	// Ground, so there is something under the raised position to land on -
+	// the condition that separates a stair from a wall.
+	TEST_ASSERT(
+		scene.execute(CreateEntityCommand{"Ground", PrimitiveType::Cube, glm::vec3(0.0F, -1.0F, 0.0F)}).success,
+		"create ground");
+	SceneEntity* ground = scene.findEntityMutable(scene.findEntity("Ground")->id);
+	ground->scale = glm::vec3(20.0F, 1.0F, 20.0F);
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Ground", "Collider", "enabled", true}).success, "ground solid");
+
+	// A 0.2-high step spanning x=[0.5,1.5]. Mover half-width 0.4, so from
+	// x=0.25 its leading edge is 0.15 into the step.
+	buildStep(scene, "Step", 0.2F, 1.0F);
+
+	CharacterMoveOptions stepping;
+	stepping.stepHeight = 0.3F;
+
+	// The 0.15 horizontal penetration must be SHALLOWER than the step's 0.2
+	// height, or the box solver's minimum-penetration rule resolves on Y and
+	// pops the mover up on its own - which is not step-up, just a deeply
+	// overlapping box being ejected upward. A mover actually walking into the
+	// step is always in the shallow case: at 5 m/s and 60 fps it advances
+	// 0.083 per frame and is pushed back every frame, never accumulating the
+	// 0.2 penetration that would eject it. That is the stair-is-a-wall bug.
+	const BoxCollisionResult blocked =
+		resolveBoxCollision(scene, 999, glm::vec3(0.25F, 0.0F, 0.0F), 0.4F, 2.0F);
+	TEST_ASSERT(blocked.position.x < 0.25F, "without stepHeight a 0.2 step must block like a wall");
+	TEST_ASSERT(blocked.position.y < 0.1F, "without stepHeight the mover must not rise");
+
+	// With step-up it climbs onto the step instead.
+	const BoxCollisionResult climbed =
+		resolveBoxCollision(scene, 999, glm::vec3(0.25F, 0.0F, 0.0F), 0.4F, 2.0F, {}, stepping);
+	TEST_ASSERT(std::abs(climbed.position.y - 0.2F) < 0.01F,
+		"stepHeight 0.3 must place the mover's feet on the 0.2-high step top");
+	TEST_ASSERT(std::abs(climbed.position.x - 0.25F) < 0.01F, "the horizontal move must survive the step-up");
+	TEST_ASSERT(climbed.grounded, "landing on a step is grounded");
+
+	// A step taller than stepHeight stays a wall. This is the half that makes
+	// the feature safe: without it, step-up is just wall-climbing.
+	EditorScene tall(".");
+	TEST_ASSERT(
+		tall.execute(CreateEntityCommand{"Ground", PrimitiveType::Cube, glm::vec3(0.0F, -1.0F, 0.0F)}).success,
+		"create ground");
+	SceneEntity* tallGround = tall.findEntityMutable(tall.findEntity("Ground")->id);
+	tallGround->scale = glm::vec3(20.0F, 1.0F, 20.0F);
+	TEST_ASSERT(tall.execute(SetPropertyCommand{"Ground", "Collider", "enabled", true}).success, "ground solid");
+	buildStep(tall, "Wall", 0.5F, 1.0F);
+
+	const BoxCollisionResult refused =
+		resolveBoxCollision(tall, 999, glm::vec3(0.25F, 0.0F, 0.0F), 0.4F, 2.0F, {}, stepping);
+	TEST_ASSERT(refused.position.y < 0.1F, "a 0.5 obstacle must NOT be climbed with stepHeight 0.3");
+	TEST_ASSERT(refused.position.x < 0.25F, "an unclimbable obstacle must still push the mover back");
+}
+
+void testGroundProbeReportsWithoutSnapping()
+{
+	EditorScene scene(".");
+	TEST_ASSERT(
+		scene.execute(CreateEntityCommand{"Ground", PrimitiveType::Cube, glm::vec3(0.0F, -1.0F, 0.0F)}).success,
+		"create ground");
+	SceneEntity* ground = scene.findEntityMutable(scene.findEntity("Ground")->id);
+	ground->scale = glm::vec3(20.0F, 1.0F, 20.0F);
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Ground", "Collider", "enabled", true}).success, "ground solid");
+
+	// Feet 5 cm above a floor whose top is y=0.
+	const glm::vec3 hovering(0.0F, 0.05F, 0.0F);
+
+	const BoxCollisionResult noProbe = resolveBoxCollision(scene, 999, hovering, 0.4F, 2.0F);
+	TEST_ASSERT(!noProbe.grounded, "without a probe, hovering 5cm up is not grounded");
+
+	CharacterMoveOptions probing;
+	probing.groundProbeDistance = 0.1F;
+	const BoxCollisionResult probed = resolveBoxCollision(scene, 999, hovering, 0.4F, 2.0F, {}, probing);
+	TEST_ASSERT(probed.grounded, "a 10cm probe must find a floor 5cm below");
+	// The no-snap contract: the caller owns its own vertical motion, so a
+	// probe that moved the mover would cancel the first frame of a jump.
+	TEST_ASSERT(std::abs(probed.position.y - 0.05F) < 0.0001F,
+		"the ground probe must REPORT only - it must never snap the mover down");
+
+	CharacterMoveOptions tooShort;
+	tooShort.groundProbeDistance = 0.02F;
+	TEST_ASSERT(!resolveBoxCollision(scene, 999, hovering, 0.4F, 2.0F, {}, tooShort).grounded,
+		"a 2cm probe must not reach a floor 5cm below");
+}
+
+void testCharacterOptionsDefaultToOriginalBehaviour()
+{
+	// The regression guard for every scene authored before this existed:
+	// default-constructed options must be byte-for-byte the old behaviour.
+	EditorScene scene(".");
+	TEST_ASSERT(scene.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(0.0F, 1.0F, 0.0F)}).success,
+		"create wall");
+	TEST_ASSERT(scene.execute(SetPropertyCommand{"Wall", "Collider", "enabled", true}).success, "wall solid");
+
+	const glm::vec3 start(1.2F, 0.0F, 0.0F);
+	const BoxCollisionResult legacy = resolveBoxCollision(scene, 999, start, 0.4F, 2.0F);
+	const BoxCollisionResult defaulted = resolveBoxCollision(scene, 999, start, 0.4F, 2.0F, {}, {});
+	TEST_ASSERT(legacy.position == defaulted.position && legacy.grounded == defaulted.grounded,
+		"default CharacterMoveOptions must reproduce the original solve exactly");
+}
+
 void testImportedMeshColliderUsesTrianglesNotScaleBox()
 {
 	EditorScene scene(".");
@@ -2680,6 +2873,11 @@ int main()
 	RUN_TEST(testMaterialSerialization);
 	RUN_TEST(testScriptPropertyReflection);
 	RUN_TEST(testColliderPrimitiveBlocksWhenChecked);
+	RUN_TEST(testScriptFieldOverridesRoundTrip);
+	RUN_TEST(testScriptFieldTypeNamesAreStableAndForgiving);
+	RUN_TEST(testStepUpClimbsStairsButNotWalls);
+	RUN_TEST(testGroundProbeReportsWithoutSnapping);
+	RUN_TEST(testCharacterOptionsDefaultToOriginalBehaviour);
 	RUN_TEST(testImportedMeshColliderUsesTrianglesNotScaleBox);
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testLightCameraUiRoundTrip);

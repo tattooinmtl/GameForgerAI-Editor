@@ -72,7 +72,9 @@ Each item verified as stated — builds, tests and live runs actually executed.
 | `d7f6d8f` | **Animation panel audit** — twelve items, §4b. | — |
 | `902310b` | **Animation panel: frames, retiming, preview fix.** Preview used to permanently overwrite the authored transform; now snapshot/restore. FPS grid + frame/key stepping (times stay in seconds — the grid is an authoring aid). Per-row retime, re-sorting on release. Copy key. | 3 configs; 33/33; editor runs clean |
 | `d430aad` | **Mind Graph plan** authored. | — |
-| *(pending)* | **Mind Graph plan amended** — §13 catalog/pin contract, §14 literal refresh (correcting the review's GUID recommendation), §15 breadcrumb wrapper, §16 amended phases. This file created. | — |
+| `aaff04d` | **Mind Graph plan amended** — §13 catalog/pin contract, §14 literal refresh (correcting the review's GUID recommendation), §15 breadcrumb wrapper, §16 amended phases. This file created. | — |
+| `307fddf` | **§1b parity: five defects fixed by removing the cause.** All eight GameplayState/AudioEngine-backed `ScriptRuntime` callbacks now bind once in Engine (`bindSharedScriptCallbacks`), called by both hosts, so a callback is bound in both **by construction**. Deleted ~6.8 KB of duplicated binding. Two *new* instances of the class surfaced while fixing the first three: `projectilesFiredThisTick` never reset in the Runtime, and the Runtime firing only `OnPlayStart` audio hooks. | 3 configs; 34/34; **test verified by reintroducing the real defect** and confirming it fails |
+| `1acc01b` | **§1b.4 HUD — the last one.** Moved HUD drawing out of the Editor's ImGui path into `ViewportRenderer`, which both hosts share. New `OverlayFont` in Engine (extracted, not copied — GameMenu and TextMesh each already had one). Two bugs only visible by running it: the UI host was `followedEntity` (the *player*, not a camera), and text was centred on its anchor so top-left labels spilled off-screen. `UIElementData::fontPath` now actually works. | 3 configs; 34/34; editor clean; **crosshair + both text lines verified in a standalone Runtime run** |
 
 **Also shipped:** 37 GLB models imported to `Game/Models/kit/`; four reusable script presets
 (Weapons System, Door, Keypad Panel, Key Item) registered in the Add Script dropdown; the
@@ -89,9 +91,9 @@ Each item verified as stated — builds, tests and live runs actually executed.
 
 | Priority | Work | Notes |
 |---|---|---|
-| P0 | **§1b Runtime parity fix** | Move `heldItemEntityName`, `playerOperatingCatapult` and the gravity-projectile list into `GameplayState`, which the Runtime already owns and ticks. **Plus the parity test** asserting every `ScriptRuntime::Config` callback is non-trivially bound in both hosts — that test is what stops a fifth. |
-| P0 | **§1b.4 — HUD does not draw in a shipped game** | I created this one. UI elements render via ImGui; the Runtime does not link ImGui. Fix: extract `GameMenu.cpp`'s ortho quad + baked font atlas into Engine so both hosts share one 2D path. |
-| P1 | **Mind Graph Phase 0 + 0.5** | Pin the imgui-node-editor commit; prove the §14 literal-refresh contract in 30 minutes. |
+| ~~P0~~ | ~~§1b Runtime parity fix~~ | **DONE** (`307fddf`) — and the state never needed moving; it had always been in `GameplayState`. The callbacks were simply never wired to it. |
+| ~~P0~~ | ~~§1b.4 HUD~~ | **DONE** (`1acc01b`). §1b now has zero remaining defects. |
+| **P1** | **Mind Graph Phase 0 + 0.5** | *In progress.* Pin the imgui-node-editor commit and verify its real file layout before writing CMake paths; then prove the §14 literal-refresh contract in 30 minutes. |
 | P1 | **Serialized script fields** | Read `self.*` back after `on_start`, store per-entity overrides, re-apply on Play. Makes `weapons_system.lua`'s slot table editable without opening the file. |
 | P2 | **Animation 4b.4** — property tracks | Key light intensity, camera FOV, lens layers, `active`, UI opacity. The largest animation item and the one that unlocks real cutscenes. |
 | P2 | **Animation 4b.5** — interpolation modes | Ease in/out and **stepped** — stepped is what frame-by-frame is built on. |
@@ -140,14 +142,15 @@ Standing bar for every phase:
    Editor's code. Every §1b defect was found that way and none were found any other way.
 5. No frame-time regression on the reference scene vs the Phase 0 baseline.
 
-**Last full run (2026-09-11, `902310b`):** 3 configs clean · **33/33 tests** · editor launches
-with empty stderr · FPS demo and lens layers verified live in the standalone Runtime.
+**Last full run (2026-09-11, `1acc01b`):** 3 configs clean · **34/34 tests** · editor launches
+with empty stderr · FPS demo, lens layers **and the full HUD** verified live in the standalone
+Runtime. The parity test was additionally verified by reintroducing the real 1b.3 defect and
+confirming it fails — a test nobody has seen fail is not yet a test.
 
 ---
 
 ## 9. Next action
 
-Awaiting approval on which of the P0/P1 items to start. My recommendation: **the §1b parity
-fix plus its test**, because it is the only category where the editor actively misleads you —
-you build a game that works in Play and ships broken — and the test is what prevents the next
-one.
+§1b is closed. Proceeding through the approved run: **Mind Graph Phase 0** (pin the
+dependency), then 0.5 (literal-refresh spike), then 1–2 (model + compiler, both fully
+testable with no UI), then the panel.

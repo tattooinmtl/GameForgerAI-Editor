@@ -122,6 +122,236 @@ script debugging, script CPU budget, plaintext API keys.
 
 ---
 
+## 5b. PROPOSED — `physicsExpanded`, an all-in-one physics controller
+
+**Status: awaiting approval (`docs/CLAUDE.md` §1). No code written.**
+
+### 5b.1 What was inspected
+
+| Read | What it established |
+|---|---|
+| `EditorScene.hpp:280-390` | Ten additive traits already follow one shape: `bool isX` + `XData`. A physics trait is the eleventh, not a new pattern. |
+| `ViewportRenderer.cpp:1069-1165` | `createGizmoMeshes()` already builds a unit-radius wireframe sphere (the point light's three orthogonal rings), scaled to the light's range at draw time. The sphere the request asks for already exists; it needs colours and a second draw pass. |
+| `ViewportRenderer.cpp:1661-1740` | The gizmo pass is gated on `isGizmoOnlyEntity(entity)` — so it **skips anything with a mesh**. A brick cannot get a gizmo through this path. A second pass is required. |
+| `main.cpp:9046-9048` | Three renderer instances: `viewportRenderer`, `gameViewRenderer`, `cineCameraRenderer`. **None calls `setShowEditorGizmos(false)`.** |
+| `Runtime/src/main.cpp:418` | Only the Runtime turns gizmos off. |
+| `GameplayLoop.hpp:225` | `tickProjectiles(scene, commandBus, gameplay, isPlaying, deltaTime)` — the engine already owns simulated motion for both hosts. `tickPhysicsBodies` belongs beside it. |
+| `Collision.hpp:40` | `resolveBoxCollision` is the one collision query; `rigidbody.lua` reaches it via `self.physics:resolve()`. |
+| `Game/Scripts/rigidbody.lua` | Current gravity is ~40 lines of Lua per object: one axis, no rotation, no fields, no mass. |
+| `MindGraph/NodeCatalog.cpp` | 12 nodes across `event.` / `flow.` / `audio.` / `world.`. A `physics.` category is additive. |
+
+### 5b.2 Discovered — an existing defect this work must fix
+
+**Editor gizmos are visible in the editor's Game view and cine preview.** `setShowEditorGizmos`
+defaults true and only `GameForgerRuntime` turns it off, so light, camera, Empty and UI
+wireframes draw into both in-editor play surfaces today. The request ("we don't see those
+wireframes in game") cannot be satisfied for physics without fixing this for every gizmo.
+Two lines, and it corrects existing behaviour — recorded as audit item **1c.6**.
+
+### 5b.3 Intended change
+
+**One trait, one struct, one script.** `bool hasPhysicsBody` + `PhysicsBodyData physics` on
+`SceneEntity`, additive exactly like `hasCollider`/`isCastle`.
+
+`PhysicsBodyData` — three groups:
+
+**Body** (how this object moves): `bodyType` (Static/Kinematic/Dynamic), `mass`,
+`centerOfMassOffset` (local vec3 — the centre of gravity), `centerOfMassRadius` (its gizmo
+size), `gravityScale`, `useCustomGravity` + `customGravity` (a space scene has no global
+down), `linearDrag`, `angularDrag`, `restitution`, `friction`,
+`freezePositionX/Y/Z` + `freezeRotationX/Y/Z`, `maxSpeed`, `canSleep` + `sleepThreshold`,
+`initialVelocity`, `initialAngularVelocity`, `continuousCollision`.
+
+**Field** (how this object pulls and pushes others — the planet/asteroid case):
+`fieldEnabled`, `attractionEnabled` + `attractionRadius` + `attractionStrength`,
+`repulsionEnabled` + `repulsionRadius` + `repulsionStrength`, `falloff`
+(Constant / Linear / InverseSquare), `affectsTag` (empty = everything).
+
+**Linkage:** `inheritFieldFromParent` (default **true**) — a child with the trait shares its
+parent's field values; untick it and the child becomes an independent well with its own
+push/pull, which is the rule the request states.
+
+**Three coloured wireframes**, built from the existing `ring()` helper, drawn in a new pass:
+
+| Gizmo | Colour | Radius from |
+|---|---|---|
+| Centre of gravity | amber `(1.00, 0.80, 0.25)` | `centerOfMassRadius`, positioned at `centerOfMassOffset` |
+| Attraction (pull) | cyan `(0.30, 0.70, 1.00)` | `attractionRadius` |
+| Repulsion (push) | red `(1.00, 0.35, 0.30)` | `repulsionRadius` |
+
+Cool = inward, warm = outward, and neither collides with the warm yellows already used by
+lights or with the selection outline.
+
+**Simulation lives in Engine, not Lua** (decision D12 below): `tickPhysicsBodies()` in
+`GameplayLoop.cpp`, called by both hosts beside `tickProjectiles`. Semi-implicit Euler with
+fixed substeps, contact through the existing `resolveBoxCollision`.
+
+**`physics_expanded.lua`** is then the authoring and scripting surface — preset #15, exposing
+the trait to gameplay through new `self.physics:` bindings (`applyForce`, `applyImpulse`,
+`getVelocity`, `setVelocity`, `setGravityScale`, `setFieldEnabled`, `setFieldStrength`,
+`setFieldRadius`). It does not integrate motion itself.
+
+**Mind Graph** gains a `physics.` category addressing wells **by entity tag**, reusing the
+existing tag system rather than introducing a second namespace: `physics.set_field`,
+`physics.apply_impulse`, `physics.set_gravity_scale`, `physics.freeze`.
+
+### 5b.4 Two calls I made that are worth overruling if wrong
+
+1. **Gizmos draw for selected entities only.** A scene of 50 bricks with three always-on
+   spheres each is unreadable, and Unity shows this class of gizmo on selection. The
+   alternative is always-on with a global toggle.
+2. **Mind Graph addresses wells by the existing entity tag**, not a new `physicsTag` field.
+   One tag namespace, already serialized, already in the Inspector, already used by zone
+   nodes. The alternative is a dedicated field that cannot collide with gameplay tags.
+
+### 5b.5 Honest limit
+
+This delivers gravity, directional fields, drag, bounce, mass, per-axis constraints and
+sleep, with AABB contact. It is **not** a constraint-solving rigid-body engine: no contact
+manifolds, no friction cones, no joints, no inertia tensor. Bricks, boxes, planks and crates
+will fall, bounce, settle, and be pulled and pushed correctly; a twenty-brick wall will not
+stack with perfect stability. Saying so now is worth more than discovering it at the demo.
+
+### 5b.6 Files likely to change (~14)
+
+`AICommand.hpp` (struct, enums, name helpers, `SetPropertyCommand` component `"Physics"`) ·
+`EditorScene.hpp` (trait) · `AICommandBus.cpp` (validation/routing) · `SceneSerializer.cpp`
+(nested `"physics"`, additive, **enums by name**) · `GameplayLoop.hpp/.cpp`
+(`tickPhysicsBodies`) · `ViewportRenderer.hpp/.cpp` (3 sphere gizmos + selected-only pass) ·
+`ScriptRuntime.cpp` (bindings) · `MindGraph/NodeCatalog.cpp` + `GraphCompiler.cpp` ·
+`Editor/src/main.cpp` (Inspector Physics section; `setShowEditorGizmos(false)` on the game
+and cine renderers) · `Editor/src/ScriptsPanel.cpp` (preset #15) · `Runtime/src/main.cpp`
+(call the tick) · `Game/Scripts/physics_expanded.lua` (new) · `Engine/tests/`.
+
+No new third-party dependency. No new build step.
+
+### 5b.7 Risks
+
+| Risk | Mitigation |
+|---|---|
+| Physics is the classic place a demo scene silently diverges between hosts | It lives in Engine and ships with a parity test — the §1b rule applied *before* the defect, not after |
+| An unstable integrator makes objects explode or sink at low frame rates | Fixed substeps independent of frame time; `maxSpeed` clamp; a test asserting a dropped box settles and stays settled |
+| O(bodies × wells) per frame | Wells are few by nature; radius rejection before force maths; a frame-time check against the Phase 0 baseline, which is already in the validation bar |
+| Serializing new enums by ordinal would silently corrupt scenes on reorder | Project rule already: by name, with an unknown-value-to-default test |
+| `SceneEntity` grows again | It is the established pattern; the alternative (a side table keyed by name) is worse given identity **is** the name |
+
+### 5b.8 Validation
+
+Debug + Release + `all-release` clean, no new warnings · 40 → ~46 tests green, built with
+`--target GameForgerTests` · no frame-time regression on the reference scene · and driven
+live: drop a stack of bricks, pull them into orbit around an asteroid with attraction on and
+repulsion off, confirm all three wireframes are adjustable in the Viewport and **absent from
+the Game view and the Runtime**.
+
+New tests: field falloff (inverse-square at 2r is exactly ¼) · child inherits parent field,
+and does not when unticked · frozen axis never moves · serialization round-trip including
+unknown enum → default · a dropped body settles and sleeps · **both hosts reach
+`tickPhysicsBodies`** (the parity test).
+
+### 5b.9 Proposed decision to add to §3
+
+| # | Decision | Why |
+|---|---|---|
+| D12 | Physics integration lives in Engine (`tickPhysicsBodies`), called by both hosts; `physics_expanded.lua` is the authoring surface, not the simulator | Same reasoning as D9. Field accumulation is O(bodies × wells) per frame — interpreted Lua caps that at a handful of objects — and `tickProjectiles` already set the precedent that the engine owns simulated motion. It is also testable without a Lua VM. |
+
+---
+
+## 5c. PROPOSED — the FPS viewmodel: hands, rifle, bullets, impacts
+
+**Status: awaiting approval. Asset copied in (no code changed).**
+
+Requested: the Weapons System preset should build a hand set from
+`animated_fps_hands_rifle_animation.glb`, use its rifle as the gun, and make it
+"work perfectly with bullets shooting out and impacts".
+
+### 5c.1 What the asset actually is
+
+Probed by parsing the GLB's own JSON chunk (`asset.extras` carries the credit):
+
+- **Animated FPS hands (rifle animation pack)** by **Cransh**, **CC-BY-4.0** — attribution
+  is a licence obligation, recorded in `Game/Models/viewmodel/CREDITS.md` and owed a line in
+  the game's credits screen, not just a file in the repo.
+- 5 meshes (arms + ACR rifle, silencer, scope, pmag), **26,694 triangles**, one skin with
+  **81 joints**, 16 embedded textures (~11.8 MB of the 14.5 MB).
+- **8 animation clips**: Idle, Walk, Run, Draw, Shoot, Reload_Fast, rifle_inspect, OneShot.
+
+Copied to `Game/Models/viewmodel/`. Loose-tree only for now; `.gfpak` is Phase 6.
+
+### 5c.2 Four blockers between this asset and "works perfectly"
+
+| # | Blocker | Evidence |
+|---|---|---|
+| B1 | **Only one animation clip is imported.** `ImportedModel` keeps the file's *first* `aiAnimation` and auto-loops it. Here that is `Draw` — so the hands would loop a weapon-raise forever, and Idle/Walk/Run/Shoot/Reload are in the file but unreachable. | `ModelImport.hpp:78` states it outright |
+| B2 | **No muzzle exists.** `weapons_system.lua` already looks for an entity tagged `gun_muzzle` (`muzzle_tag = "gun_muzzle"`, line 32) and falls back to the player's own position — nothing in the project ever creates that entity, so every shot currently leaves the player's chest. | `weapons_system.lua:28-33, 82-94` |
+| B3 | **Bullets are invisible.** `GameplayState::Projectile` is simulated, moved and despawned, but never drawn by anything. | `GameplayLoop.cpp:180-262`; no projectile case in `ViewportRenderer` |
+| B4 | **There are no impacts, and bullets pass through walls.** On a hit `tickProjectiles` does `++projectilesHitThisTick` and discards the position — nothing marks where it landed. Worse, a straight `fireProjectile` only tests entities that carry the damage tag, so a bullet flies through walls, floors and terrain and only ever stops on something tagged `Enemy`. | `GameplayLoop.cpp:236-262` |
+
+B1 and B4 are the two that make "perfectly" impossible today; neither is a script change.
+
+### 5c.3 Intended change
+
+**1 — Multi-clip import (engine).** Import every `aiAnimation`, keyed by name.
+`ImportedMeshData` gains `clipName`, `clipSpeed`, `clipLoop` (serialized, additive; empty
+`clipName` keeps today's "first clip" behaviour so no existing scene changes). Inspector gets
+a dropdown listing the file's real clip names. New binding
+`self.entity:playClip(name, loop)` plus `clipFinished()`, so a script can drive Shoot on
+fire, Reload on reload, Walk/Run from movement speed, Idle otherwise.
+
+**2 — Viewmodel rig (preset).** Applying **Weapons System** now also: imports the GLB if it
+is not already in the scene, parents it to the Main Camera (D6), sets the viewmodel offset,
+and creates a child Empty tagged **`gun_muzzle`** at the barrel tip — the tag the script has
+always been asking for. One click gets hands + rifle in front of the camera.
+
+**3 — Visible bullets.** Each projectile draws as a short tracer in the line pass the gizmos
+already use. Cheap, no new geometry, and it reads correctly at speed — a sphere at 60 m/s is
+a strobe, a tracer is a streak.
+
+**4 — Impacts and honest collision (engine).** `Projectile` records its hit point and the
+surface normal. `fireProjectile` stops on **any** collider, not only tagged entities —
+tag-gating stays, but only for *damage*, not for whether the bullet exists. On impact,
+`tickProjectiles` spawns a short-lived impact marker at the hit point, oriented to the
+normal, despawned on a timer. Both hosts get it: it lives in `GameplayLoop`.
+
+### 5c.4 The call worth overruling
+
+**B4 changes existing behaviour.** Today a bullet passing through a wall is what
+`enemy_ai.lua` and `ranged_attacker.lua` rely on — an enemy shooting from behind cover still
+hits. Making bullets stop on geometry is correct for a shooter and will make those two
+presets miss shots they currently land. I intend to change it anyway and fix the presets,
+because "bullets go through walls" is not a behaviour worth preserving. Say so if you would
+rather keep it opt-in per weapon.
+
+### 5c.5 Honest limits
+
+- 26,694 triangles and 81 joints on screen every frame, skinned on the GPU. Fine alone;
+  it will show up in the frame-time budget and gets measured against the Phase 0 baseline.
+- 16 embedded textures at up to 1.8 MB each — the model is 14.5 MB in a repo that was 1.6 MB
+  of models before it. Worth knowing before `.gfpak` (Phase 6) has to carry it.
+- Impact *decals* are not in scope: a decal needs projected geometry the renderer has no pass
+  for. The impact marker is a small oriented effect entity, which is what the existing
+  renderer can do honestly.
+
+### 5c.6 Files likely to change
+
+`ModelImport.hpp/.cpp` (all clips, lookup by name) · `EditorScene.hpp` (`clipName`/
+`clipSpeed`/`clipLoop`) · `SceneSerializer.cpp` · `ViewportRenderer.cpp` (clip selection in
+skinning; tracer pass) · `ScriptRuntime.cpp` (`playClip`, `clipFinished`) ·
+`GameplayLoop.hpp/.cpp` (hit point + normal, collider-stop, impact spawn) ·
+`Editor/src/ScriptsPanel.cpp` (Weapons System preset builds the rig) ·
+`Game/Scripts/weapons_system.lua` (clip driving, muzzle, recoil) ·
+`enemy_ai.lua` + `ranged_attacker.lua` (adjust for B4) · `Engine/tests/`.
+
+### 5c.7 Validation
+
+Debug + Release + `all-release` clean · tests green plus new ones: all 8 clips import and
+are addressable by name · unknown clip name falls back rather than crashing · a projectile
+stops on an untagged collider · impact position is recorded at the surface, not the entity
+centre · round-trip of the new fields · **both hosts spawn impacts** (parity). Then driven
+live: apply the preset, see hands and rifle, fire, watch tracers leave the muzzle and impacts
+appear on a wall — in the editor Game view **and** the standalone Runtime.
+
+---
+
 ## 6. BLOCKED
 
 Nothing is blocked on an external dependency.

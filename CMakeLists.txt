@@ -74,6 +74,24 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
+    imgui_node_editor
+    GIT_REPOSITORY https://github.com/thedmd/imgui-node-editor.git
+    # Pinned to a raw commit, NOT the v0.9.3 tag. Verified by compiling both
+    # against this project's own ImGui (IMGUI_VERSION_NUM 19230, v1.92.3):
+    # v0.9.3 dates from 2023-10-14 and FAILS - ImGui 1.92 defines operator==
+    # and operator!= for ImVec2 itself, which that tag redefines
+    # ("function already has a body", then a cascade of C2264/C2088 through
+    # imgui_node_editor.cpp). This commit compiles clean. Re-run that check
+    # before ever moving this pin.
+    #
+    # NOT shallow, for the same reason ImGuizmo below is not: GIT_SHALLOW does
+    # `git clone --depth 1 --branch <ref>`, which can only resolve a branch or
+    # a tag, never a raw SHA.
+    GIT_TAG 021aa0ea4da13fed864bafb2a92d4c5205076866
+    GIT_SHALLOW FALSE
+)
+
+FetchContent_Declare(
     lua
     GIT_REPOSITORY https://github.com/lua/lua.git
     GIT_TAG v5.4.8
@@ -113,7 +131,7 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui imguizmo lua assimp miniaudio)
+FetchContent_MakeAvailable(glfw glm glad imgui imgui_node_editor imguizmo lua assimp miniaudio)
 
 if(NOT TARGET miniaudio)
     add_library(miniaudio INTERFACE)
@@ -154,6 +172,24 @@ target_link_libraries(GameForgerImGui
 
 target_compile_definitions(GameForgerImGui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD2)
 set_target_properties(GameForgerImGui PROPERTIES FOLDER "Dependencies")
+
+
+# imgui-node-editor ships no CMakeLists of its own (verified, Phase 0), so its
+# four sources are compiled here the same way ImGui's own are above.
+add_library(GameForgerNodeEditor STATIC
+    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor.cpp
+    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor_api.cpp
+    ${imgui_node_editor_SOURCE_DIR}/imgui_canvas.cpp
+    ${imgui_node_editor_SOURCE_DIR}/crude_json.cpp
+)
+
+target_include_directories(GameForgerNodeEditor
+    PUBLIC
+        ${imgui_node_editor_SOURCE_DIR}
+)
+
+target_link_libraries(GameForgerNodeEditor PUBLIC GameForgerImGui)
+target_compile_features(GameForgerNodeEditor PUBLIC cxx_std_20)
 
 add_library(GameForgerImGuizmo STATIC
     ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp

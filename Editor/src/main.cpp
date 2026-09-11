@@ -52,6 +52,7 @@
 #include "GameForger/Editor/AICommandPlanner.hpp"
 #include "GameForger/Editor/AICockpit.hpp"
 #include "GameForger/Editor/AIProviderClient.hpp"
+#include "GameForger/Editor/MindGraphPanel.hpp"
 #include "GameForger/Editor/Animation.hpp"
 #include "GameForger/Editor/BlenderClient.hpp"
 #include "GameForger/Editor/BlenderLauncher.hpp"
@@ -87,6 +88,9 @@ namespace
     using gameforger::editor::AIProviderResponse;
     using gameforger::editor::AnimatedPose;
     using gameforger::editor::AICockpitState;
+    using gameforger::editor::MindGraphPanelState;
+    using gameforger::editor::drawMindGraphPanel;
+    using gameforger::editor::shutdownMindGraphPanel;
     using gameforger::editor::BlenderClient;
     using gameforger::editor::BlenderLauncher;
     using gameforger::editor::CockpitChatMessage;
@@ -2297,7 +2301,8 @@ namespace
         BlenderLauncher& blenderLauncher,
         BlenderClient& blenderClient,
         BlenderPanelState& blenderPanel,
-        AICockpitState& cockpit)
+        AICockpitState& cockpit,
+        MindGraphPanelState& mindGraph)
     {
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
@@ -2635,6 +2640,10 @@ namespace
             if (ImGui::MenuItem("Open AI Cockpit", nullptr, cockpit.panelOpen))
             {
                 cockpit.panelOpen = !cockpit.panelOpen;
+            }
+            if (ImGui::MenuItem("Open Mind Graph", nullptr, mindGraph.panelOpen))
+            {
+                mindGraph.panelOpen = !mindGraph.panelOpen;
             }
             ImGui::EndMenu();
         }
@@ -9484,6 +9493,7 @@ int main()
     BlenderPanelState blenderPanel;
     // Phase C. Owns worker thread + message queue for the agent loop.
     AICockpitState aiCockpit;
+    MindGraphPanelState mindGraph;
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
@@ -9555,10 +9565,11 @@ int main()
         blenderClient.pumpMainThread();
 
         gameforger::editor::pumpCockpit(aiCockpit);
+        drawMindGraphPanel(mindGraph);
         drawMainMenu(
             scene, projectSettingsBus, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, audioEngine, projectRoot, console,
             settings, history, storyboard, currentScenePath, nativeWindowHandle, resetLayout,
-            blenderLauncher, blenderClient, blenderPanel, aiCockpit);
+            blenderLauncher, blenderClient, blenderPanel, aiCockpit, mindGraph);
         drawBlenderPanel(blenderLauncher, blenderClient, blenderPanel, console);
         drawCockpitPanel(
             aiCockpit, projectSettingsBus, aiProviderClient, aiSetup, blenderClient, scene, commandBus);
@@ -9743,6 +9754,7 @@ int main()
 
     aiProviderClient.requestCancel();
     blenderClient.requestCancel();
+    shutdownMindGraphPanel(mindGraph);
     gameforger::editor::joinCockpitWorker(aiCockpit);
     if (scriptCreator.worker.joinable())
     {

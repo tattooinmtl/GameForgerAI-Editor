@@ -28,6 +28,7 @@
     # because it needs imgui_internal.h for DockBuilder, whose ImGuiInputSource
     # enum collides with this project's class of the same name in main.cpp.
     src/EditorLayout.cpp
+    src/MindGraphPanel.cpp
     # Track view over a storyboard shot: camera keyframes and audio cues on
     # one shared clock, with scrub/drag/delete. Its own TU like the other
     # panels rather than growing main.cpp.
@@ -69,6 +70,7 @@ target_link_libraries(GameForgerEditor
         GameForger::Engine
         GameForgerImGui
         GameForgerImGuizmo
+        GameForgerNodeEditor
         GameForgerGLAD
         glfw
         glm::glm

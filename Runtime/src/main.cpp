@@ -474,56 +474,12 @@ int main()
 			{
 				std::fprintf(stderr, "%s%s\n", isError ? "[script error] " : "[script] ", message.c_str());
 			};
-		scriptConfig.projectileSpawnCallback =
-			[&gameplay](
-				const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
-			{
-				const glm::vec3 direction = to - from;
-				const float distance = glm::length(direction);
-				const glm::vec3 velocity =
-					distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
-				gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
-			};
-		scriptConfig.heldItemQueryCallback = []() { return false; };
-		scriptConfig.aimingCatapultQueryCallback = []() { return false; };
-		scriptConfig.operatingCatapultSetCallback = [](const bool) { /* no-op: Runtime has no catapult UI */ };
-		scriptConfig.gravityProjectileSpawnCallback =
-			[](const glm::vec3&, const glm::vec3&, const float, const std::string&)
-			{
-				/* no-op: Runtime does not spawn gravity projectiles */
-			};
-		// Same manager-driven cursor lock as the Editor, so a scene behaves
-		// identically standalone.
-		scriptConfig.cursorLockSetCallback =
-			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
-		scriptConfig.audioCommandCallback =
-			[&audioEngine, &projectRoot](
-				const ScriptRuntime::AudioCommand command,
-				const std::string& clipPath,
-				const float value,
-				const bool loop)
-			{
-				switch (command)
-				{
-					case ScriptRuntime::AudioCommand::Play:
-						(void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
-						break;
-					case ScriptRuntime::AudioCommand::Stop:
-						audioEngine.stop(clipPath);
-						break;
-					case ScriptRuntime::AudioCommand::StopAll:
-						audioEngine.stopAll();
-						break;
-					case ScriptRuntime::AudioCommand::SetMasterVolume:
-						audioEngine.setMasterVolume(value);
-						break;
-				}
-			};
-		scriptConfig.audioQueryCallback =
-			[&audioEngine](const std::string& clipPath)
-			{
-				return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
-			};
+		// Every gameplay- and audio-backed callback comes from Engine, bound
+		// once for both hosts. See bindSharedScriptCallbacks in GameplayLoop.hpp
+		// for why: these used to be hand-bound in each host and four of them
+		// were stubbed here, so catapult firing, catapult aiming and held-item
+		// state worked on Play and were dead in the shipped game.
+		bindSharedScriptCallbacks(scriptConfig, gameplay, audioEngine, projectRoot);
 		scriptRuntime.initialize(scene, commandBus, inputSource, std::move(scriptConfig));
 		for (const SceneEntity& entity : scene.entities())
 		{
@@ -583,6 +539,7 @@ int main()
 		// drawEditorPanels (main.cpp) - `!menuOpen` in place of
 		// playMode.isPlaying (Runtime has no Play/Stop toggle, it's
 		// "playing" its entire lifetime except while paused for the menu).
+		beginGameplayFrame(gameplay);
 		applyParentConstraints(scene, commandBus);
 		tickPlayModeAnimations(scene, commandBus, gameplay, !menuOpen, deltaTime);
 		tickScripts(scene, scriptRuntime, !menuOpen, deltaTime);
@@ -595,6 +552,22 @@ int main()
 		syncMainCameraToPlayView(scene, scriptRuntime, gameCameraLookYawDegrees, gameCameraLookPitchDegrees);
 		applyParentConstraints(scene, commandBus);
 		tickProjectiles(scene, commandBus, gameplay, !menuOpen, deltaTime);
+
+		// Per-frame audio hooks. The Editor fired OnProjectileFire and
+		// OnProjectileHit; this host fired only OnPlayStart, so a project's
+		// authored fire and impact sounds were silent in the shipped game.
+		// Same defect shape as MissingFunctions section 1b - real in the
+		// Editor, absent here, and nothing reported it.
+		if (gameplay.projectilesFiredThisTick > 0)
+		{
+			fireAudioHooks(
+				audioEngine, projectRoot, projectSettings.audioHooks, AudioHook::Event::OnProjectileFire);
+		}
+		if (gameplay.projectilesHitThisTick > 0)
+		{
+			fireAudioHooks(
+				audioEngine, projectRoot, projectSettings.audioHooks, AudioHook::Event::OnProjectileHit);
+		}
 
 		const SceneEntity* followedEntity =
 			scriptRuntime.hasActiveCamera() ? scene.findEntity(scriptRuntime.activeCameraEntityId()) : nullptr;

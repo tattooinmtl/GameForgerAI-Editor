@@ -12,6 +12,7 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "GameForger/Core/AudioEngine.hpp"
 #include "GameForger/Editor/Animation.hpp"
 #include "GameForger/Editor/Collision.hpp"
 #include "GameForger/Editor/Transform.hpp"
@@ -388,5 +389,94 @@ namespace gameforger::editor
 			boot.running = false;
 			boot.playerInputLocked = false;
 		}
+	}
+}
+
+namespace gameforger::editor
+{
+	void beginGameplayFrame(GameplayState& gameplay) noexcept
+	{
+		// projectilesHitThisTick is reset inside tickProjectiles, which is
+		// already shared. This is its sibling, which was not: the Editor
+		// reset it in its own tick function and the Runtime never did, so in
+		// a shipped game it accumulated forever.
+		gameplay.projectilesFiredThisTick = 0;
+	}
+
+	void bindSharedScriptCallbacks(
+		ScriptRuntime::Config& config,
+		GameplayState& gameplay,
+		core::AudioEngine& audioEngine,
+		const std::filesystem::path& projectRoot)
+	{
+		config.projectileSpawnCallback =
+			[&gameplay](
+				const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
+			{
+				const glm::vec3 direction = to - from;
+				const float distance = glm::length(direction);
+				const glm::vec3 velocity =
+					distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
+				gameplay.projectiles.push_back(
+					GameplayState::Projectile{from, velocity, hitTag, 4.0F, false});
+				++gameplay.projectilesFiredThisTick;
+			};
+
+		config.gravityProjectileSpawnCallback =
+			[&gameplay](
+				const glm::vec3& from, const glm::vec3& direction, const float speed,
+				const std::string& hitTag)
+			{
+				const float length = glm::length(direction);
+				const glm::vec3 velocity =
+					length > 0.0001F ? (direction / length) * speed : glm::vec3(0.0F, 0.0F, speed);
+				// 6 seconds, not 4: an arced shot spends longer in the air
+				// than a straight one and would otherwise despawn mid-flight.
+				gameplay.projectiles.push_back(
+					GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
+				++gameplay.projectilesFiredThisTick;
+			};
+
+		config.heldItemQueryCallback =
+			[&gameplay]() { return !gameplay.heldItemEntityName.empty(); };
+
+		config.aimingCatapultQueryCallback =
+			[&gameplay]() { return gameplay.playerOperatingCatapult; };
+
+		config.operatingCatapultSetCallback =
+			[&gameplay](const bool value) { gameplay.playerOperatingCatapult = value; };
+
+		config.cursorLockSetCallback =
+			[&gameplay](const bool locked) { gameplay.cursorLockDesired = locked; };
+
+		config.audioCommandCallback =
+			[&audioEngine, projectRoot](
+				const ScriptRuntime::AudioCommand command,
+				const std::string& clipPath,
+				const float value,
+				const bool loop)
+			{
+				switch (command)
+				{
+					case ScriptRuntime::AudioCommand::Play:
+						(void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
+						break;
+					case ScriptRuntime::AudioCommand::Stop:
+						audioEngine.stop(clipPath);
+						break;
+					case ScriptRuntime::AudioCommand::StopAll:
+						audioEngine.stopAll();
+						break;
+					case ScriptRuntime::AudioCommand::SetMasterVolume:
+						audioEngine.setMasterVolume(value);
+						break;
+				}
+			};
+
+		config.audioQueryCallback =
+			[&audioEngine](const std::string& clipPath)
+			{
+				return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
+			};
 	}
 }

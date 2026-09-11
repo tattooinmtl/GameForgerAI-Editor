@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,15 @@
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ProjectSettings.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
+
+namespace gameforger::core
+{
+	// Forward-declared rather than including AudioEngine.hpp: only
+	// bindSharedScriptCallbacks needs it, and it takes a reference, so pulling
+	// miniaudio's header into everything that includes GameplayLoop.hpp would
+	// be a real compile-time cost for one signature.
+	class AudioEngine;
+}
 
 namespace gameforger::editor
 {
@@ -134,6 +144,37 @@ namespace gameforger::editor
 		};
 		BootSequenceState bootSequence;
 	};
+
+	// Per-frame reset of the counters that mean "this happened since the last
+	// tick". Must run BEFORE scripts, because scripts are what increment them.
+	//
+	// This exists because the Editor reset projectilesFiredThisTick in its own
+	// tick and the Runtime never did - so in a shipped game the counter
+	// accumulated forever. Putting it in Engine, called by both hosts, is what
+	// stops the next per-frame counter repeating the mistake.
+	void beginGameplayFrame(GameplayState& gameplay) noexcept;
+
+	// Binds every ScriptRuntime callback that is backed purely by
+	// GameplayState, and every one backed purely by the AudioEngine.
+	//
+	// WHY THIS EXISTS. Both hosts used to bind these by hand, and the bodies
+	// were meant to be identical. They were not: the Runtime stubbed four of
+	// them - returning false, discarding the value, doing nothing - so
+	// catapult firing, catapult aiming and held-item state all worked on Play
+	// and were silently inert in the shipped game (MissingFunctions.md 1b).
+	// Nothing caught it, because both hosts compiled and both passed tests.
+	//
+	// Binding them once, here, makes that class of defect structurally
+	// impossible rather than merely tested for: a callback added to
+	// ScriptRuntime::Config and bound here is bound in both hosts by
+	// construction. Only logCallback stays host-specific, because it genuinely
+	// differs - the Editor routes to its Console panel, the Runtime to stderr.
+	void bindSharedScriptCallbacks(
+		ScriptRuntime::Config& config,
+		GameplayState& gameplay,
+		core::AudioEngine& audioEngine,
+		const std::filesystem::path& projectRoot);
+
 
 	// Call once when Play starts. Arms the sequence and locks player input if
 	// there is anything to run; with no steps the player has control

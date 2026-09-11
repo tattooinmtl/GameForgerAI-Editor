@@ -20,12 +20,15 @@ Status key: **MISSING** (does not exist) · **PARTIAL** (exists but short of par
 
 ### Verdict
 
-**Nothing here is rotten. Three things are genuinely broken, and they share one cause.**
+**Nothing here is rotten. Six things were genuinely broken, they shared one cause, and five
+are now fixed — by removing the cause rather than patching the instances.**
 
-- **Broken — ships wrong, user is not told: 3.** All of §1b, all the same root cause: the
-  Runtime stubs `ScriptRuntime` callbacks the Editor implements for real. Catapult firing,
-  catapult aiming, held-item state. Confined to catapult/siege and carry mechanics; the FPS
-  path is unaffected. One parity test prevents the whole class.
+- **Broken — ships wrong, user is not told: 1 remaining** (§1b.4, the HUD). Originally 3;
+  two more (1b.5, 1b.6) surfaced *while fixing the first three*, which is itself the evidence
+  that this was a class and not three incidents. All six had one root cause: each host bound
+  the `ScriptRuntime` callbacks by hand and the bodies were only *meant* to match. They now
+  bind once in Engine, so a callback is bound in both hosts by construction, guarded by
+  `testSharedScriptCallbackParity`.
 - **Wired but inert — announced as working, does nothing: 1.** `RequestAnimationCommand`
   (1c.4). Validated, described to the user, never executed. Currently unreachable because no
   parser op emits it, so it is a trap set for later rather than a live failure.
@@ -40,7 +43,9 @@ Status key: **MISSING** (does not exist) · **PARTIAL** (exists but short of par
 **The pattern worth naming:** every real defect found is a *seam* defect — Editor vs Runtime,
 validator vs executor. Nothing is wrong inside any single subsystem. The code is disciplined;
 the joins between the two hosts and between the command layers are where it leaks, because
-nothing tests a seam.
+nothing tested a seam. The durable answer is not more tests at the seam but fewer seams:
+where both hosts need the same behaviour, it now lives in Engine and is called twice rather
+than written twice.
 
 ---
 
@@ -91,16 +96,33 @@ missing are not. Do not rebuild these:
 
 This is the most dangerous category in the codebase, because nothing reports it. The Editor's
 Play mode and `GameForgerRuntime.exe` configure the **same** `ScriptRuntime` callback set —
-but the Runtime stubs three of them out. A script calling these behaves correctly when you
-press Play and is silently inert in the built game. No warning, no log, no failed build.
+but the Runtime used to stub several of them out. A script calling those behaved correctly
+when you pressed Play and was silently inert in the built game — no warning, no log, no
+failed build. Five of the six below are now fixed; the table is kept as the record of what
+the class looked like, because the lesson outlives the bugs.
 
 | # | Defect | Editor | Runtime | Evidence |
 |---|---|---|---|---|
-| 1b.1 | **Catapult firing is dead in a shipped game.** `gravityProjectileSpawnCallback` computes a real ballistic velocity and pushes a projectile in the Editor; the Runtime's lambda body is a comment. A castle-siege scene ships unplayable. | real | `/* no-op */` | `main.cpp:2531-2537` vs `Runtime/src/main.cpp:484-488` |
-| 1b.2 | **Catapult aiming state is dead.** `aimingCatapultQueryCallback` always returns `false`; `operatingCatapultSetCallback` discards the value. A script can never enter or detect catapult mode. | real | `false` / no-op | `main.cpp:2527-2530` vs `Runtime/src/main.cpp:482-483` |
-| 1b.3 | **Held-item state is dead.** `heldItemQueryCallback` always returns `false`, so any script branching on "am I carrying something" takes the wrong branch for the whole game. | real | `false` | `main.cpp:2525-2526` vs `Runtime/src/main.cpp:481` |
+| 1b.1 | ~~Catapult firing is dead in a shipped game.~~ **FIXED.** | — | — | now via `bindSharedScriptCallbacks` |
+| 1b.2 | ~~Catapult aiming state is dead.~~ **FIXED.** | — | — | same |
+| 1b.3 | ~~Held-item state is dead.~~ **FIXED.** | — | — | same |
+| 1b.4 | **Authored HUD does not draw in a shipped game.** UI elements render through ImGui; `GameForgerRuntime` does not link ImGui. Still open. The fix is to extract `Runtime/src/GameMenu.cpp`'s orthographic tinted/textured-quad shader and baked stb_truetype atlas into Engine so both hosts share one 2D path. | real | nothing draws | `main.cpp` `drawUIElementOverlays` vs `Runtime/CMakeLists.txt:15-21` |
+| 1b.5 | ~~`projectilesFiredThisTick` never reset in the Runtime~~ — **FIXED.** Found while fixing 1b.1-3. The Editor reset it in its own tick; the Runtime never did, so it accumulated forever. Now `beginGameplayFrame()` in Engine, called by both. | — | — | — |
+| 1b.6 | ~~Runtime fired only the `OnPlayStart` audio hook~~ — **FIXED.** Found the same way. `OnProjectileFire` and `OnProjectileHit` were Editor-only, so a project's authored fire and impact sounds were silent in a shipped game. | — | — | — |
 
-| 1b.4 | **Authored HUD does not draw in a shipped game.** UI elements (crosshair / text / image / panel) parented to a camera render in the Editor's Game view via `drawUIElementOverlays` (`main.cpp`), which is ImGui-based. `GameForgerRuntime` does not link ImGui at all, so nothing draws them there. **Found and recorded while building the feature, not after shipping it** — the fix is a small 2D overlay renderer, and the machinery already exists in `Runtime/src/GameMenu.cpp` (an orthographic tinted/textured-quad shader plus a baked stb_truetype atlas); the honest version extracts that into Engine so both hosts share one path instead of the Editor keeping a private one. | BROKEN | `main.cpp` `drawUIElementOverlays` vs `Runtime/CMakeLists.txt:15-21` (no ImGui) |
+**THE STRUCTURAL FIX.** 1b.1-1b.3 were not fixed one at a time. All eight
+GameplayState- and AudioEngine-backed callbacks now bind in ONE place -
+`bindSharedScriptCallbacks` (`GameplayLoop.hpp`), called by both hosts - so a
+callback bound there is bound in both **by construction**. Only `logCallback`
+stays per-host, because it genuinely differs (Editor Console vs stderr). This
+deleted ~6.8 KB of duplicated binding code across the two `main.cpp` files.
+
+`testSharedScriptCallbackParity` guards it, and was itself verified by
+reintroducing the real 1b.3 defect and confirming the test fails on it:
+`FAIL: heldItemQueryCallback must read GameplayState, not return a constant`.
+It asserts not just that each callback is bound, but that each actually reads
+and writes the shared state - a stub returning `false` is also "bound", and
+that is precisely what shipped before.
 
 **Why this exists:** the Runtime has no inventory UI and no catapult UI, so the callbacks were
 stubbed rather than backed by Runtime-side state. The fix is not UI — it is moving the

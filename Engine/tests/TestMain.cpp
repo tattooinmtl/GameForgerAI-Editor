@@ -891,6 +891,79 @@ void testEntityForwardMatchesForwardConvention()
 	TEST_ASSERT(glm::length(zeroForward) > 0.5F, "Zero scale must still yield a usable direction");
 }
 
+// THE PARITY TEST. MissingFunctions.md section 1b records four defects of one
+// shape: a ScriptRuntime callback the Editor implements for real and the
+// Runtime stubs out, so a game works on Play and is silently inert once
+// shipped. Both hosts compiled, both passed tests, and nothing reported it.
+//
+// bindSharedScriptCallbacks is the structural fix - one binding site both hosts
+// call, so a callback bound there is bound in both by construction. This test
+// is the guard on that: it asserts every callback the shared binder is
+// responsible for is actually bound and actually reaches GameplayState.
+//
+// If someone adds a callback to ScriptRuntime::Config and forgets the binder,
+// the "every field is non-null" assertion below fails. That is the whole point.
+void testSharedScriptCallbackParity()
+{
+	GameplayState gameplay;
+	gameforger::core::AudioEngine audio; // not initialize()d - no device needed for binding
+	ScriptRuntime::Config config;
+	bindSharedScriptCallbacks(config, gameplay, audio, std::filesystem::path("."));
+
+	// Every callback the shared binder owns must be bound. logCallback is
+	// deliberately excluded: it genuinely differs per host (Editor Console vs
+	// stderr) and is the only one each host still binds itself.
+	TEST_ASSERT(config.projectileSpawnCallback != nullptr, "projectileSpawnCallback must be bound");
+	TEST_ASSERT(config.gravityProjectileSpawnCallback != nullptr, "gravityProjectileSpawnCallback must be bound");
+	TEST_ASSERT(config.heldItemQueryCallback != nullptr, "heldItemQueryCallback must be bound");
+	TEST_ASSERT(config.aimingCatapultQueryCallback != nullptr, "aimingCatapultQueryCallback must be bound");
+	TEST_ASSERT(config.operatingCatapultSetCallback != nullptr, "operatingCatapultSetCallback must be bound");
+	TEST_ASSERT(config.cursorLockSetCallback != nullptr, "cursorLockSetCallback must be bound");
+	TEST_ASSERT(config.audioCommandCallback != nullptr, "audioCommandCallback must be bound");
+	TEST_ASSERT(config.audioQueryCallback != nullptr, "audioQueryCallback must be bound");
+
+	// Bound is not enough - a stub returning false is also "bound". Each one
+	// must actually read and write the shared GameplayState. These are exactly
+	// the three 1b defects, asserted directly.
+	TEST_ASSERT(!config.heldItemQueryCallback(), "No held item yet");
+	gameplay.heldItemEntityName = "Crate";
+	TEST_ASSERT(config.heldItemQueryCallback(), "heldItemQueryCallback must read GameplayState, not return a constant");
+
+	TEST_ASSERT(!config.aimingCatapultQueryCallback(), "Not aiming yet");
+	config.operatingCatapultSetCallback(true);
+	TEST_ASSERT(gameplay.playerOperatingCatapult, "operatingCatapultSetCallback must write GameplayState");
+	TEST_ASSERT(config.aimingCatapultQueryCallback(), "aimingCatapultQueryCallback must read GameplayState");
+	config.operatingCatapultSetCallback(false);
+	TEST_ASSERT(!gameplay.playerOperatingCatapult, "operatingCatapultSetCallback must clear too");
+
+	config.cursorLockSetCallback(true);
+	TEST_ASSERT(gameplay.cursorLockDesired, "cursorLockSetCallback must write GameplayState");
+
+	// Straight-line projectile: velocity points from->to, no gravity.
+	config.projectileSpawnCallback(glm::vec3(0.0F), glm::vec3(0.0F, 0.0F, 10.0F), 5.0F, "Enemy");
+	TEST_ASSERT(gameplay.projectiles.size() == 1, "projectileSpawnCallback must push a projectile");
+	TEST_ASSERT(!gameplay.projectiles[0].useGravity, "Straight projectile must not use gravity");
+	TEST_ASSERT(std::abs(gameplay.projectiles[0].velocity.z - 5.0F) < 0.001F, "Velocity must be normalized then scaled");
+	TEST_ASSERT(gameplay.projectiles[0].hitTag == "Enemy", "hitTag must carry through");
+	TEST_ASSERT(gameplay.projectilesFiredThisTick == 1, "Firing must bump the per-tick counter");
+
+	// Arced projectile: gravity on, and a longer lifetime because an arc
+	// spends more time in the air than a straight shot.
+	config.gravityProjectileSpawnCallback(glm::vec3(0.0F), glm::vec3(0.0F, 1.0F, 0.0F), 20.0F, "Castle");
+	TEST_ASSERT(gameplay.projectiles.size() == 2, "gravityProjectileSpawnCallback must push a projectile");
+	TEST_ASSERT(gameplay.projectiles[1].useGravity, "Gravity projectile must set useGravity");
+	TEST_ASSERT(
+		gameplay.projectiles[1].remainingLifetimeSeconds > gameplay.projectiles[0].remainingLifetimeSeconds,
+		"An arced shot must outlive a straight one or it despawns mid-flight");
+	TEST_ASSERT(gameplay.projectilesFiredThisTick == 2, "Both spawn paths must bump the counter");
+
+	// beginGameplayFrame resets the per-tick counter. The Editor did this and
+	// the Runtime did not, so in a shipped game it accumulated forever.
+	beginGameplayFrame(gameplay);
+	TEST_ASSERT(gameplay.projectilesFiredThisTick == 0, "beginGameplayFrame must reset projectilesFiredThisTick");
+	TEST_ASSERT(gameplay.projectiles.size() == 2, "beginGameplayFrame must NOT discard live projectiles");
+}
+
 // applyCameraPoseToEntity is what makes a weapon parented to the camera into a
 // viewmodel: the entity must end up AT the eye, FACING the way the player
 // looks. Get the yaw flip wrong and the gun points behind the player; get the
@@ -2115,6 +2188,7 @@ int main()
 	RUN_TEST(testParentColliderSolidsChildren);
 	RUN_TEST(testLightCameraUiRoundTrip);
 	RUN_TEST(testEntityForwardMatchesForwardConvention);
+	RUN_TEST(testSharedScriptCallbackParity);
 	RUN_TEST(testCameraPoseDrivesEntityForward);
 	RUN_TEST(testGizmoOnlyEntityClassification);
 	RUN_TEST(testColliderBoxMeshConvexTypes);

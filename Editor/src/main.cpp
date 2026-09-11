@@ -114,6 +114,8 @@ namespace
     using gameforger::editor::DetachScriptCommand;
     using gameforger::editor::DuplicateEntityCommand;
     using gameforger::editor::applyParentConstraints;
+    using gameforger::editor::bindSharedScriptCallbacks;
+    using gameforger::editor::beginGameplayFrame;
     using gameforger::editor::bootSequenceBlocksInput;
     using gameforger::editor::resetBootSequence;
     using gameforger::editor::tickBootSequence;
@@ -2697,67 +2699,14 @@ namespace
                     {
                         logMessage(console, isError ? LogLevel::Error : LogLevel::Info, message);
                     };
-                scriptConfig.projectileSpawnCallback =
-                    [&playMode](
-                        const glm::vec3& from, const glm::vec3& to, const float speed, const std::string& hitTag)
-                    {
-                        const glm::vec3 direction = to - from;
-                        const float distance = glm::length(direction);
-                        const glm::vec3 velocity =
-                            distance > 0.0001F ? (direction / distance) * speed : glm::vec3(0.0F, 0.0F, speed);
-                        playMode.gameplay.projectiles.push_back(GameplayState::Projectile{from, velocity, hitTag, 4.0F});
-                        ++playMode.gameplay.projectilesFiredThisTick;
-                    };
-                scriptConfig.heldItemQueryCallback =
-                    [&playMode]() { return !playMode.gameplay.heldItemEntityName.empty(); };
-                scriptConfig.aimingCatapultQueryCallback =
-                    [&playMode]() { return playMode.gameplay.playerOperatingCatapult; };
-                scriptConfig.operatingCatapultSetCallback =
-                    [&playMode](const bool value) { playMode.gameplay.playerOperatingCatapult = value; };
-                scriptConfig.gravityProjectileSpawnCallback =
-                    [&playMode](
-                        const glm::vec3& from, const glm::vec3& direction, const float speed,
-                        const std::string& hitTag)
-                    {
-                        const float length = glm::length(direction);
-                        const glm::vec3 velocity =
-                            length > 0.0001F ? (direction / length) * speed : glm::vec3(0.0F, 0.0F, speed);
-                        playMode.gameplay.projectiles.push_back(
-                            GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
-                        ++playMode.gameplay.projectilesFiredThisTick;
-                    };
-                // Cursor lock now comes from whichever script calls
-                // self.gameManager:setCursorLock(), not a per-entity checkbox.
-                scriptConfig.cursorLockSetCallback =
-                    [&playMode](const bool locked) { playMode.gameplay.cursorLockDesired = locked; };
-            scriptConfig.audioCommandCallback =
-                [&audioEngine, &projectRoot](
-                        const ScriptRuntime::AudioCommand command,
-                        const std::string& clipPath,
-                        const float value,
-                        const bool loop)
-                {
-                        switch (command)
-                        {
-                            case ScriptRuntime::AudioCommand::Play:
-                                    (void)audioEngine.play(projectRoot, clipPath, value, 1.0F, loop);
-                                    break;
-                            case ScriptRuntime::AudioCommand::Stop:
-                                    audioEngine.stop(clipPath);
-                                    break;
-                            case ScriptRuntime::AudioCommand::StopAll:
-                                    audioEngine.stopAll();
-                                    break;
-                            case ScriptRuntime::AudioCommand::SetMasterVolume:
-                                    audioEngine.setMasterVolume(value);
-                                    break;
-                        }
-                };
-            scriptConfig.audioQueryCallback =
-                [&audioEngine](const std::string& clipPath)
-                {
-                        return clipPath.empty() ? audioEngine.isAnyPlaying() : audioEngine.isPlaying(clipPath);
-                };
+                // Every gameplay- and audio-backed callback comes from Engine,
+                // bound once for both hosts. See bindSharedScriptCallbacks in
+                // GameplayLoop.hpp: these used to be hand-bound per host and
+                // four of them were stubbed in the Runtime, so catapult
+                // firing, catapult aiming and held-item state worked on Play
+                // and were dead in the shipped game.
+                bindSharedScriptCallbacks(
+                    scriptConfig, playMode.gameplay, audioEngine, projectRoot);
                 scriptRuntime.initialize(scene, commandBus, imguiInputSource, std::move(scriptConfig));
                 for (const SceneEntity& entity : scene.entities())
                 {
@@ -8880,7 +8829,7 @@ namespace
     {
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
-        playMode.gameplay.projectilesFiredThisTick = 0;
+        beginGameplayFrame(playMode.gameplay);
         playMode.audioPickupThisFrame = false;
 
         applyParentConstraints(scene, commandBus);

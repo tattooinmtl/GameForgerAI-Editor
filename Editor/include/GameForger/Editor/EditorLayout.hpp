@@ -27,4 +27,19 @@ namespace gameforger::editor
 	// dockWindowBetween: no splits, no resizes, only this window's tab index
 	// changes, and the caller stops asking once it returns true.
 	bool dockWindowAfter(const char* newWindow, const char* anchorWindow);
+
+	// Builds the whole default arrangement into `dockspaceId`, docking every
+	// panel the editor has.
+	//
+	// This did not exist before, and its absence was a real defect rather
+	// than a missing nicety: a fresh clone has no layout ini, and
+	// Edit > Reset Editor Layout only cleared the ini in memory, so in both
+	// cases every panel floated loose and overlapping. The editor then SAVED
+	// that arrangement, which made it repeat on the next launch - the only
+	// escape being a Reset that produced the same mess again.
+	//
+	// The arrangement is the one a Unity or Godot user expects: Hierarchy and
+	// Project down the left, Inspector and Toolbox down the right, the log and
+	// authoring tabs across the bottom, and the 3D views filling the centre.
+	void buildDefaultDockLayout(ImGuiID dockspaceId);
 }

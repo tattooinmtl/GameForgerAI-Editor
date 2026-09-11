@@ -1,5 +1,7 @@
 #include "GameForger/Editor/EditorLayout.hpp"
 
+#include <initializer_list>
+
 #include <imgui.h>
 // FindWindowByName / DockBuilder* are not part of the public API. See the
 // header for why this is its own translation unit.
@@ -168,5 +170,56 @@ namespace gameforger::editor
 		}
 		ImGui::TabBarQueueReorder(tabBar, &tabBar->Tabs[newIndex], offset);
 		return false;
+	}
+
+	void buildDefaultDockLayout(const ImGuiID dockspaceId)
+	{
+		// Start from nothing. Without the remove/add the split calls operate
+		// on whatever the previous session left behind, which is how a
+		// "reset" ends up reproducing the mess it was meant to clear.
+		ImGui::DockBuilderRemoveNode(dockspaceId);
+		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+
+		// Split off the outer columns first, then the bottom strip from what
+		// is left, so the side columns run full height like every editor this
+		// is modelled on rather than stopping short above the log.
+		ImGuiID centre = dockspaceId;
+		const ImGuiID leftColumn = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.19F, nullptr, &centre);
+		const ImGuiID rightColumn = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.24F, nullptr, &centre);
+		const ImGuiID bottomStrip = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.30F, nullptr, &centre);
+
+		ImGuiID leftTop = leftColumn;
+		const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(leftTop, ImGuiDir_Down, 0.42F, nullptr, &leftTop);
+		ImGuiID rightTop = rightColumn;
+		const ImGuiID rightBottom =
+			ImGui::DockBuilderSplitNode(rightTop, ImGuiDir_Down, 0.38F, nullptr, &rightTop);
+
+		// Left: what is in the scene, and what is on disk.
+		ImGui::DockBuilderDockWindow("Hierarchy", leftTop);
+		ImGui::DockBuilderDockWindow("Project", leftBottom);
+
+		// Right: what the selection is, and what you can make.
+		ImGui::DockBuilderDockWindow("Inspector", rightTop);
+		ImGui::DockBuilderDockWindow("Toolbox", rightBottom);
+
+		// Centre: every view of the world. Mind Graph belongs here and not in
+		// a side strip - a node graph needs the big pane, which is exactly
+		// where the plan puts it.
+		ImGui::DockBuilderDockWindow("Viewport", centre);
+		ImGui::DockBuilderDockWindow("Game", centre);
+		ImGui::DockBuilderDockWindow("Mind Graph", centre);
+		ImGui::DockBuilderDockWindow("Cine Camera Preview", centre);
+
+		// Bottom: everything you read or scrub rather than look at. Ordered
+		// so the two most-used (Console, AI Forge) are the leftmost tabs.
+		for (const char* window : {"Console", "AI Forge", "Animation", "Timeline", "Audio",
+								   "Storyboard", "Project Settings", "Performance", "Blender MCP",
+								   "AI Cockpit"})
+		{
+			ImGui::DockBuilderDockWindow(window, bottomStrip);
+		}
+
+		ImGui::DockBuilderFinish(dockspaceId);
 	}
 }

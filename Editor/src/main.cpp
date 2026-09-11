@@ -52,6 +52,7 @@
 #include "GameForger/Editor/AICommandPlanner.hpp"
 #include "GameForger/Editor/AICockpit.hpp"
 #include "GameForger/Editor/AIProviderClient.hpp"
+#include "GameForger/Editor/EditorLayout.hpp"
 #include "GameForger/Editor/MindGraphPanel.hpp"
 #include "GameForger/Editor/Animation.hpp"
 #include "GameForger/Editor/BlenderClient.hpp"
@@ -87,6 +88,7 @@ namespace
     using gameforger::editor::AIProviderRequest;
     using gameforger::editor::AIProviderResponse;
     using gameforger::editor::AnimatedPose;
+    using gameforger::editor::buildDefaultDockLayout;
     using gameforger::editor::AICockpitState;
     using gameforger::editor::MindGraphPanelState;
     using gameforger::editor::drawMindGraphPanel;
@@ -9527,6 +9529,11 @@ int main()
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
+    // True when there is no saved layout to restore - a fresh clone, or right
+    // after Edit > Reset Editor Layout. ImGui writes the ini on shutdown, so
+    // "does the file exist" is the honest test for "has this editor ever been
+    // arranged", and it is read before ImGui loads it.
+    bool layoutNeedsDefault = !std::filesystem::exists("GameForgerEditorLayout.ini");
     // What "Save Scene" (Ctrl+R) writes to and "Open Scene..." reads from most
     // recently; "Save Scene As..." and "Open Scene..." both update this.
     std::filesystem::path currentScenePath = projectRoot / "Game" / "Scenes" / "Castle.gfprod";
@@ -9549,16 +9556,31 @@ int main()
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
 
+        // Reset used to only clear the ini, which left every panel floating
+        // loose - and the editor then saved that, so the mess repeated on the
+        // next launch. Clearing now also rebuilds the real default
+        // arrangement (see buildDefaultDockLayout).
         if (resetLayout)
         {
             ImGui::LoadIniSettingsFromMemory("", 0);
+            layoutNeedsDefault = true;
             resetLayout = false;
         }
 
-        ImGui::DockSpaceOverViewport(
+        const ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(
             0,
             ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
+
+        // First run of a fresh clone has no layout ini at all, which used to
+        // produce the same floating mess. Build the default once, after the
+        // dockspace exists but before any panel is submitted, so the panels
+        // land in it on their very first frame.
+        if (layoutNeedsDefault)
+        {
+            buildDefaultDockLayout(dockspaceId);
+            layoutNeedsDefault = false;
+        }
 
         // Blender MCP: run completed async callbacks on the main thread
         // before drawing anything that might read the panel's cache.

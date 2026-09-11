@@ -352,6 +352,94 @@ appear on a wall — in the editor Game view **and** the standalone Runtime.
 
 ---
 
+## 5d. PROPOSED — Empty-based player + a real character controller
+
+**Status: awaiting approval. The Inspector button bug in it is already FIXED (`6edd6c5`).**
+
+Requested: build the player from an **Empty** rather than a capsule — collider on the Empty,
+tagged `Player`, with FPS Controller + Weapons System + Inventory attached; expose **ground
+distance** and a **step height** so a staircase is walked up instead of jumped; make the
+terrain hold a collider; and return the Inspector to its real job — adjusting values and
+seeing the change live — now that scripts are attached from the Scripts panel.
+
+### 5d.1 What already works (verified, not assumed)
+
+| Claim | Reality |
+|---|---|
+| An Empty can carry a collider | **Yes.** `generatePrimitiveMesh` handles `PrimitiveType::Empty` explicitly (no geometry, no out-of-bounds — the trap that bit the renderer does not exist here), and a Box collider uses `colliderWorldAabb` = position ± scale, which an Empty has. |
+| The FPS controller works on a non-capsule | **Yes.** `fps_controller.lua:29-30` hardcodes `collider_radius = 0.4` / `collider_height = 2.0`; it never reads the entity's mesh or scale. |
+| Terrain can be collided with | **Yes, already.** `Collision.cpp:744-767` samples the heightmap and grounds you on it. It is gated on `hasCollider`, and the Inspector's "Solid" checkbox (`main.cpp:6467`) is not hidden for terrain — so this is a tick-the-box, not a missing feature. |
+
+So the Empty player is mostly reachable today. Three things genuinely are not.
+
+### 5d.2 The three real gaps
+
+| # | Gap | Evidence |
+|---|---|---|
+| G1 | **No step-up. This is the headline request.** `resolveBoxCollision` pushes a box *out* of what it hits. Walking into a 20 cm stair is identical to walking into a wall — you stop, and the only way up is Space. There is no step offset anywhere in the collision code. | `Collision.cpp:735+`, no step term |
+| G2 | **Ground distance is not a tunable.** `resolve()` returns a `grounded` bool decided inside the engine; nothing exposes how far below the collider still counts as ground. On a slope or a stair edge that is the difference between walking and stuttering. | `Collision.hpp:40-46` |
+| G3 | **The Inspector cannot edit script values outside Play.** Exposed script fields read `prop.defaultNumber` when `scriptRuntime.isRunning()` is false, and the write is inside `if (scriptRuntime.isRunning())` — so in edit mode you drag a slider and the value is **silently discarded**. That is precisely the "adjust values and see the change live" the request is asking for, and it does not work. | `main.cpp:~7050-7100` |
+
+### 5d.3 Intended change
+
+**1 — Character controller in Engine.** `resolveBoxCollision` gains `stepHeight` and
+`groundProbeDistance`. Step-up is the standard sweep: when a horizontal move is blocked,
+retry it raised by `stepHeight`, and accept the result only if the raised position is clear
+**and** there is ground under it — which is what stops a character climbing a wall one step
+at a time. Both defaults are 0, so every existing caller behaves exactly as it does now.
+Surfaced to Lua as `self.physics:resolve(pos, radius, height, stepHeight, groundDistance)`
+with the extra arguments optional.
+
+**2 — A Player preset.** One tick in the Scripts panel builds it: an **Empty** named Player,
+Box collider sized to the controller, tag `Player`, and FPS Controller + Weapons System +
+Inventory attached together. That is the object the request describes, without assembling it
+by hand each time.
+
+**3 — Serialized script fields (the Inspector's real job).** Per-entity overrides stored on
+`SceneEntity`, serialized, applied to the script instance at Play start, and editable in
+**edit mode** — where the change is written to the entity, not thrown away. This is the P1
+"Serialized script fields" item already in §5; the request is the reason to do it now.
+
+**4 — Terrain collider, made obvious.** The mechanism exists; what is missing is that nothing
+tells you to tick it. The Terrain section gets the Solid checkbox inline with a one-line note,
+and the Player preset warns when no collider-enabled ground exists in the scene.
+
+### 5d.4 The call worth overruling
+
+**`stepHeight` and `groundProbeDistance` default to 0**, i.e. every existing script keeps
+today's behaviour until it opts in, and `fps_controller.lua` opts in with Unity-like values
+(0.3 m step, 0.1 m probe). The alternative is making step-up the default for everyone, which
+is friendlier but silently changes how every existing scene's movement feels.
+
+### 5d.5 Honest limit
+
+Step-up on an **AABB** is not a capsule sweep. It will climb stairs and curbs reliably and
+will not climb walls, but on a steep ramp an AABB still behaves like a box on a slope — it
+steps up in discrete jumps rather than sliding smoothly. A true slope limit needs the surface
+normal, which `resolveBoxCollision` does not currently return. I would add the normal in the
+same pass if you want slope handling too; without it, "walkable slope angle" is not something
+I can honestly claim.
+
+### 5d.6 Files likely to change
+
+`Collision.hpp/.cpp` (step sweep, ground probe, optionally the contact normal) ·
+`ScriptRuntime.cpp` (`resolve` extra args) · `fps_controller.lua` +
+`third_person_controller.lua` (opt in) · `EditorScene.hpp` + `SceneSerializer.cpp` (script
+field overrides) · `Editor/src/main.cpp` (Inspector edit-mode writes; Terrain Solid note) ·
+`Editor/src/ScriptsPanel.cpp` (Player preset).
+
+### 5d.7 Validation
+
+New tests: a box walks up a `stepHeight` stair and does **not** walk up one a millimetre
+taller · step-up is refused when nothing is under the raised position (no wall-climbing) ·
+`grounded` honours the probe distance · zero-defaults reproduce current behaviour exactly
+(regression guard for every existing scene) · script-field overrides round-trip and reach the
+running instance. Then driven live: build the Player preset on an Empty, walk a staircase
+without jumping, and change a script value in the Inspector **while not in Play** and see it
+persist.
+
+---
+
 ## 6. BLOCKED
 
 Nothing is blocked on an external dependency.

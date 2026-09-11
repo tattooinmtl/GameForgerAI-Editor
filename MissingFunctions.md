@@ -288,6 +288,7 @@ cameras and lens layers that now exist), then 4b.5.
 | 7.1 | **No brand theme.** Stock `ImGui::StyleColorsDark()` with a few tweaks — nothing of the yellow/black logo identity. | MISSING | `main.cpp:2922-2930` | 7 |
 | 7.2 | **Splash is a still image;** `Game/Branding/intro.mp4` (1.2 MB) ships unused. | PARTIAL | `SplashScreen.hpp` | 7 |
 | 7.3 | **Default dock layout is not laid out like a known editor,** and there is no Information tab beside Hierarchy. | PARTIAL | `EditorLayout.cpp` | 7 |
+| 7.3b | **The default layout does not place every panel, and the mess it produces is self-perpetuating.** Deleting `GameForgerEditorLayout.ini` (or a fresh clone, which has none) leaves Timeline, Audio, Project Settings, Performance and Mind Graph floating and overlapping rather than docked — `EditorLayout.cpp`'s default only places the panels that existed when it was written. Worse, the editor then *saves* that floating arrangement, so the next launch repeats it: the only way out is Edit > Reset Editor Layout. Found by deleting the ini during Phase 0 verification. | BROKEN | `EditorLayout.cpp` vs the panel list in `main.cpp` | 7 |
 | 7.4 | **No icons on Hierarchy rows** — a light, a camera and a cube all read as plain text. | MISSING | `drawHierarchyPanel` | 7 |
 | 7.5 | **No in-app help, shortcut list, or onboarding.** | MISSING | — | later |
 

@@ -22,6 +22,7 @@
 
 #include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
+#include "GameForger/Editor/OverlayFont.hpp"
 #include "GameForger/Editor/PrimitiveMeshes.hpp"
 #include "GameForger/Editor/Terrain.hpp"
 #include "GameForger/Editor/TerrainTexture.hpp"
@@ -893,6 +894,10 @@ void main()
 		// shadow slots when shadowAtlasTexture_ is non-zero, so the editor
 		// falls back to unshadowed lighting rather than refusing to open on a
 		// driver that won't give us a depth-only FBO.
+		if (!createOverlayResources())
+		{
+			std::fprintf(stderr, "HUD overlay unavailable - UI elements will not draw.\n");
+		}
 		if (!createShadowResources())
 		{
 			std::fprintf(stderr, "Shadow atlas unavailable - lighting will render without shadows.\n");
@@ -1766,6 +1771,12 @@ void main()
 		{
 			runPostProcess();
 		}
+		// HUD last, into the presented buffer - after the lens layers, so a
+		// heavy grain or vignette does not chew up the crosshair and the
+		// readouts the player needs to read.
+		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+		glViewport(0, 0, width_, height_);
+		drawUIOverlay(entities);
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	}
 
@@ -2999,5 +3010,429 @@ void main()
 		width_ = complete ? width : 0;
 		height_ = complete ? height : 0;
 		return complete;
+	}
+}
+
+namespace gameforger::editor
+{
+	namespace
+	{
+		// One shader for both jobs: a flat tinted rect (useTexture=0) or a
+		// glyph/image modulated by the tint (useTexture=1). Same single-program
+		// trick GameMenu uses - a HUD draws far more solid rects than glyphs,
+		// so a second program would earn nothing.
+		constexpr const char* overlayVertexShaderSource = R"glsl(
+#version 460 core
+layout (location = 0) in vec2 position;
+layout (location = 1) in vec2 uv;
+out vec2 fragUv;
+uniform mat4 projection;
+
+void main()
+{
+	fragUv = uv;
+	gl_Position = projection * vec4(position, 0.0, 1.0);
+}
+)glsl";
+
+		constexpr const char* overlayFragmentShaderSource = R"glsl(
+#version 460 core
+in vec2 fragUv;
+out vec4 fragColor;
+uniform sampler2D atlas;
+uniform vec4 tintColor;
+uniform int useTexture;
+// Glyphs come from a single-channel atlas (coverage in .r); an imported image
+// is full RGBA. One flag rather than two shaders.
+uniform int textureIsAlphaOnly;
+
+void main()
+{
+	if (useTexture == 0)
+	{
+		fragColor = tintColor;
+		return;
+	}
+	vec4 sampled = texture(atlas, fragUv);
+	if (textureIsAlphaOnly != 0)
+	{
+		fragColor = vec4(tintColor.rgb, tintColor.a * sampled.r);
+	}
+	else
+	{
+		fragColor = sampled * tintColor;
+	}
+}
+)glsl";
+	}
+
+	const ViewportRenderer::OverlayFontEntry* ViewportRenderer::ensureOverlayFont(
+		const std::string& relativeFontPath)
+	{
+		const auto existing = overlayFonts_.find(relativeFontPath);
+		if (existing != overlayFonts_.end())
+		{
+			return existing->second.font.success ? &existing->second : nullptr;
+		}
+
+		OverlayFontEntry entry;
+		entry.attempted = true;
+
+		std::filesystem::path fontFile;
+		if (!relativeFontPath.empty())
+		{
+			fontFile = uiProjectRoot_ / relativeFontPath;
+		}
+		else
+		{
+			// No authored font: take the first usable one in Game/Fonts.
+			// TrueType is preferred because stb_truetype cannot rasterise
+			// CFF/PostScript-flavoured OTF, so a .ttf is far more likely to
+			// bake than an .otf sitting beside it.
+			const std::filesystem::path fontsDirectory = uiProjectRoot_ / "Game" / "Fonts";
+			std::error_code error;
+			std::filesystem::path firstAnyFont;
+			for (const auto& item : std::filesystem::directory_iterator(fontsDirectory, error))
+			{
+				if (!item.is_regular_file())
+				{
+					continue;
+				}
+				std::string extension = item.path().extension().string();
+				std::transform(
+					extension.begin(), extension.end(), extension.begin(),
+					[](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				if (extension == ".ttf")
+				{
+					fontFile = item.path();
+					break;
+				}
+				if ((extension == ".otf" || extension == ".ttc") && firstAnyFont.empty())
+				{
+					firstAnyFont = item.path();
+				}
+			}
+			if (fontFile.empty())
+			{
+				fontFile = firstAnyFont;
+			}
+		}
+
+		if (!fontFile.empty())
+		{
+			entry.font = bakeOverlayFont(fontFile);
+		}
+		if (entry.font.success)
+		{
+			glGenTextures(1, &entry.texture);
+			glBindTexture(GL_TEXTURE_2D, entry.texture);
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+			glTexImage2D(
+				GL_TEXTURE_2D, 0, GL_R8, OverlayFont::kAtlasWidth, OverlayFont::kAtlasHeight, 0, GL_RED,
+				GL_UNSIGNED_BYTE, entry.font.alphaPixels.data());
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+			glBindTexture(GL_TEXTURE_2D, 0);
+			// The pixels are on the GPU now; keep the glyph metrics, drop the
+			// atlas bitmap. At 512x512 per font that is a quarter megabyte
+			// each, held for nothing.
+			entry.font.alphaPixels.clear();
+			entry.font.alphaPixels.shrink_to_fit();
+		}
+		else
+		{
+			std::fprintf(
+				stderr, "HUD text: no usable font%s - add a .ttf under Game/Fonts.\n",
+				relativeFontPath.empty() ? "" : (" at " + relativeFontPath).c_str());
+		}
+
+		const auto inserted = overlayFonts_.emplace(relativeFontPath, std::move(entry)).first;
+		return inserted->second.font.success ? &inserted->second : nullptr;
+	}
+
+	bool ViewportRenderer::createOverlayResources()
+	{
+		overlayShaderProgram_ = compileProgram(overlayVertexShaderSource, overlayFragmentShaderSource);
+		if (overlayShaderProgram_ == 0)
+		{
+			return false;
+		}
+
+		glGenVertexArrays(1, &overlayVertexArray_);
+		glGenBuffers(1, &overlayVertexBuffer_);
+		glBindVertexArray(overlayVertexArray_);
+		glBindBuffer(GL_ARRAY_BUFFER, overlayVertexBuffer_);
+		// 6 vertices per quad, position(2) + uv(2). Re-uploaded per quad: a HUD
+		// is a handful of quads, not a performance-sensitive path.
+		glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(
+			1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<const void*>(2 * sizeof(float)));
+		glEnableVertexAttribArray(1);
+		glBindVertexArray(0);
+		return true;
+	}
+
+	void ViewportRenderer::setUIOverlay(
+		const int hostCameraId, const std::filesystem::path& projectRoot) noexcept
+	{
+		uiHostCameraId_ = hostCameraId;
+		uiProjectRoot_ = projectRoot;
+	}
+
+	void ViewportRenderer::drawUIOverlay(const std::vector<SceneEntity>& entities)
+	{
+		if (overlayShaderProgram_ == 0 || uiHostCameraId_ < 0 || width_ <= 0 || height_ <= 0)
+		{
+			return;
+		}
+
+		// An element draws only if the host camera is anywhere up its parent
+		// chain - not just its immediate parent - so a HUD can be organised
+		// under an Empty ("Camera > HUD > HealthText") the way anyone would lay
+		// one out. Depth-capped rather than cycle-tracked: applyParentConstraints
+		// already tolerates cycles, and a fixed cap keeps this allocation-free
+		// on a path that runs every frame.
+		const auto findEntityByName = [&entities](const std::string& name) -> const SceneEntity*
+		{
+			for (const SceneEntity& candidate : entities)
+			{
+				if (candidate.name == name)
+				{
+					return &candidate;
+				}
+			}
+			return nullptr;
+		};
+		const auto descendsFromHost = [&](const SceneEntity& element)
+		{
+			constexpr int kMaxParentDepth = 32;
+			const SceneEntity* walk = &element;
+			for (int depth = 0; depth < kMaxParentDepth; ++depth)
+			{
+				if (walk->parentName.empty())
+				{
+					return false;
+				}
+				const SceneEntity* parent = findEntityByName(walk->parentName);
+				if (parent == nullptr)
+				{
+					return false;
+				}
+				if (parent->id == uiHostCameraId_)
+				{
+					return true;
+				}
+				walk = parent;
+			}
+			return false;
+		};
+
+		bool anyToDraw = false;
+		for (const SceneEntity& element : entities)
+		{
+			if (element.isUIElement && element.active && descendsFromHost(element))
+			{
+				anyToDraw = true;
+				break;
+			}
+		}
+		if (!anyToDraw)
+		{
+			return;
+		}
+
+		const float viewWidth = static_cast<float>(width_);
+		const float viewHeight = static_cast<float>(height_);
+		// Y-down screen space, matching how anchors and pixel offsets are
+		// authored and how every 2D UI system expresses them.
+		const glm::mat4 projection = glm::ortho(0.0F, viewWidth, viewHeight, 0.0F, -1.0F, 1.0F);
+
+		glDisable(GL_DEPTH_TEST);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glUseProgram(overlayShaderProgram_);
+		glUniformMatrix4fv(
+			glGetUniformLocation(overlayShaderProgram_, "projection"), 1, GL_FALSE,
+			glm::value_ptr(projection));
+		glBindVertexArray(overlayVertexArray_);
+		glBindBuffer(GL_ARRAY_BUFFER, overlayVertexBuffer_);
+
+		const GLint tintLocation = glGetUniformLocation(overlayShaderProgram_, "tintColor");
+		const GLint useTextureLocation = glGetUniformLocation(overlayShaderProgram_, "useTexture");
+		const GLint alphaOnlyLocation = glGetUniformLocation(overlayShaderProgram_, "textureIsAlphaOnly");
+		glUniform1i(glGetUniformLocation(overlayShaderProgram_, "atlas"), 0);
+
+		const auto drawQuad = [&](const float x, const float y, const float w, const float h,
+								  const float u0, const float v0, const float u1, const float v1)
+		{
+			const std::array<float, 24> vertices{
+				x,     y,     u0, v0,
+				x + w, y,     u1, v0,
+				x + w, y + h, u1, v1,
+				x,     y,     u0, v0,
+				x + w, y + h, u1, v1,
+				x,     y + h, u0, v1};
+			glBufferSubData(
+				GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data());
+			glDrawArrays(GL_TRIANGLES, 0, 6);
+		};
+		const auto setTint = [&](const glm::vec3& color, const float alpha)
+		{ glUniform4f(tintLocation, color.r, color.g, color.b, alpha); };
+		const auto drawRect =
+			[&](const float x, const float y, const float w, const float h, const glm::vec3& color,
+				const float alpha)
+		{
+			setTint(color, alpha);
+			glUniform1i(useTextureLocation, 0);
+			drawQuad(x, y, w, h, 0.0F, 0.0F, 1.0F, 1.0F);
+		};
+
+		for (const SceneEntity& element : entities)
+		{
+			if (!element.isUIElement || !element.active || !descendsFromHost(element))
+			{
+				continue;
+			}
+
+			float anchorX = viewWidth * 0.5F;
+			float anchorY = viewHeight * 0.5F;
+			switch (element.ui.anchor)
+			{
+				case UIAnchor::TopLeft:      anchorX = 0.0F;             anchorY = 0.0F;             break;
+				case UIAnchor::TopCenter:    anchorX = viewWidth * 0.5F; anchorY = 0.0F;             break;
+				case UIAnchor::TopRight:     anchorX = viewWidth;        anchorY = 0.0F;             break;
+				case UIAnchor::MiddleLeft:   anchorX = 0.0F;             anchorY = viewHeight * 0.5F; break;
+				case UIAnchor::MiddleRight:  anchorX = viewWidth;        anchorY = viewHeight * 0.5F; break;
+				case UIAnchor::BottomLeft:   anchorX = 0.0F;             anchorY = viewHeight;       break;
+				case UIAnchor::BottomCenter: anchorX = viewWidth * 0.5F; anchorY = viewHeight;       break;
+				case UIAnchor::BottomRight:  anchorX = viewWidth;        anchorY = viewHeight;       break;
+				case UIAnchor::Center: break;
+			}
+			const float centerX = anchorX + element.ui.offsetPixels.x;
+			const float centerY = anchorY + element.ui.offsetPixels.y;
+			const float alpha = std::clamp(element.ui.opacity, 0.0F, 1.0F);
+
+			switch (element.ui.kind)
+			{
+				case UIElementKind::Crosshair:
+				{
+					const float arm = std::max(element.ui.sizePixels.x, 1.0F);
+					const float gap = std::max(element.ui.gapPixels, 0.0F);
+					const float thickness = std::max(element.ui.thicknessPixels, 1.0F);
+					const float half = thickness * 0.5F;
+					drawRect(centerX - gap - arm, centerY - half, arm, thickness, element.ui.color, alpha);
+					drawRect(centerX + gap, centerY - half, arm, thickness, element.ui.color, alpha);
+					drawRect(centerX - half, centerY - gap - arm, thickness, arm, element.ui.color, alpha);
+					drawRect(centerX - half, centerY + gap, thickness, arm, element.ui.color, alpha);
+					break;
+				}
+				case UIElementKind::Panel:
+				{
+					drawRect(
+						centerX - element.ui.sizePixels.x * 0.5F, centerY - element.ui.sizePixels.y * 0.5F,
+						element.ui.sizePixels.x, element.ui.sizePixels.y, element.ui.color, alpha);
+					break;
+				}
+				case UIElementKind::Image:
+				{
+					const GLuint texture =
+						element.ui.imagePath.empty() ? 0U : ensureGradientTextureGpu(element.ui.imagePath);
+					const float w = element.ui.sizePixels.x;
+					const float h = element.ui.sizePixels.y;
+					const float x = centerX - w * 0.5F;
+					const float y = centerY - h * 0.5F;
+					if (texture != 0)
+					{
+						glActiveTexture(GL_TEXTURE0);
+						glBindTexture(GL_TEXTURE_2D, texture);
+						setTint(element.ui.color, alpha);
+						glUniform1i(useTextureLocation, 1);
+						glUniform1i(alphaOnlyLocation, 0);
+						drawQuad(x, y, w, h, 0.0F, 0.0F, 1.0F, 1.0F);
+					}
+					else
+					{
+						// No image, or it failed to load. An outline beats
+						// drawing nothing: a missing path then reads as a
+						// missing path rather than as a broken HUD.
+						constexpr float kEdge = 1.0F;
+						drawRect(x, y, w, kEdge, element.ui.color, alpha);
+						drawRect(x, y + h - kEdge, w, kEdge, element.ui.color, alpha);
+						drawRect(x, y, kEdge, h, element.ui.color, alpha);
+						drawRect(x + w - kEdge, y, kEdge, h, element.ui.color, alpha);
+					}
+					break;
+				}
+				case UIElementKind::Text:
+				{
+					// The shared baked atlas, scaled. A UI element's own
+					// authored fontPath still round-trips through the scene
+					// file but does not change rendering yet - honouring it
+					// needs one atlas per font, a cache with its own lifetime
+					// rules rather than a one-line change.
+					const OverlayFontEntry* fontEntry = ensureOverlayFont(element.ui.fontPath);
+					if (fontEntry == nullptr)
+					{
+						break;
+					}
+					const float pixelHeight = std::max(element.ui.fontSizePixels, 1.0F);
+					const float scale = pixelHeight / OverlayFont::kBakedPixelHeight;
+					const float textWidth = fontEntry->font.measure(element.ui.text, pixelHeight);
+					// Alignment follows the anchor rather than always centring.
+					// A top-LEFT label centred on its anchor point spills half
+					// its width off the left edge of the screen, which is
+					// exactly what the demo's instruction line did.
+					float penX = centerX - textWidth * 0.5F;
+					switch (element.ui.anchor)
+					{
+						case UIAnchor::TopLeft:
+						case UIAnchor::MiddleLeft:
+						case UIAnchor::BottomLeft:
+							penX = centerX;
+							break;
+						case UIAnchor::TopRight:
+						case UIAnchor::MiddleRight:
+						case UIAnchor::BottomRight:
+							penX = centerX - textWidth;
+							break;
+						default:
+							break;
+					}
+					const float baselineY = centerY + pixelHeight * 0.35F;
+
+					glActiveTexture(GL_TEXTURE0);
+					glBindTexture(GL_TEXTURE_2D, fontEntry->texture);
+					setTint(element.ui.color, alpha);
+					glUniform1i(useTextureLocation, 1);
+					glUniform1i(alphaOnlyLocation, 1);
+					for (const char character : element.ui.text)
+					{
+						const int index =
+							static_cast<int>(static_cast<unsigned char>(character)) - OverlayFont::kFirstChar;
+						if (index < 0 || index >= OverlayFont::kCharCount)
+						{
+							continue;
+						}
+						const OverlayGlyph& glyph = fontEntry->font.glyphs[static_cast<std::size_t>(index)];
+						drawQuad(
+							penX + glyph.xOffset * scale, baselineY + glyph.yOffset * scale,
+							glyph.width * scale, glyph.height * scale, glyph.u0, glyph.v0, glyph.u1, glyph.v1);
+						penX += glyph.xAdvance * scale;
+					}
+					break;
+				}
+			}
+		}
+
+		glBindVertexArray(0);
+		glUseProgram(0);
+		glDisable(GL_BLEND);
+		glEnable(GL_DEPTH_TEST);
+		glActiveTexture(GL_TEXTURE0);
 	}
 }

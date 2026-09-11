@@ -20,15 +20,17 @@ Status key: **MISSING** (does not exist) · **PARTIAL** (exists but short of par
 
 ### Verdict
 
-**Nothing here is rotten. Six things were genuinely broken, they shared one cause, and five
-are now fixed — by removing the cause rather than patching the instances.**
+**Nothing here is rotten. Six things were genuinely broken, they shared one cause, and all
+six are now fixed — by removing the cause rather than patching the instances.**
 
-- **Broken — ships wrong, user is not told: 1 remaining** (§1b.4, the HUD). Originally 3;
+- **Broken — ships wrong, user is not told: 0 remaining.** All six are fixed. Originally 3;
   two more (1b.5, 1b.6) surfaced *while fixing the first three*, which is itself the evidence
   that this was a class and not three incidents. All six had one root cause: each host bound
   the `ScriptRuntime` callbacks by hand and the bodies were only *meant* to match. They now
   bind once in Engine, so a callback is bound in both hosts by construction, guarded by
-  `testSharedScriptCallbackParity`.
+  `testSharedScriptCallbackParity`. The HUD (1b.4) had a second cause - it lived in one host
+  rather than in the renderer both hosts share - and was fixed the same way: by moving it to
+  the shared layer, not by writing it twice.
 - **Wired but inert — announced as working, does nothing: 1.** `RequestAnimationCommand`
   (1c.4). Validated, described to the user, never executed. Currently unreachable because no
   parser op emits it, so it is a trap set for later rather than a live failure.
@@ -98,15 +100,15 @@ This is the most dangerous category in the codebase, because nothing reports it.
 Play mode and `GameForgerRuntime.exe` configure the **same** `ScriptRuntime` callback set —
 but the Runtime used to stub several of them out. A script calling those behaved correctly
 when you pressed Play and was silently inert in the built game — no warning, no log, no
-failed build. Five of the six below are now fixed; the table is kept as the record of what
-the class looked like, because the lesson outlives the bugs.
+failed build. All six below are now fixed; the table is kept as the record of what the class looked
+like, because the lesson outlives the bugs.
 
 | # | Defect | Editor | Runtime | Evidence |
 |---|---|---|---|---|
 | 1b.1 | ~~Catapult firing is dead in a shipped game.~~ **FIXED.** | — | — | now via `bindSharedScriptCallbacks` |
 | 1b.2 | ~~Catapult aiming state is dead.~~ **FIXED.** | — | — | same |
 | 1b.3 | ~~Held-item state is dead.~~ **FIXED.** | — | — | same |
-| 1b.4 | **Authored HUD does not draw in a shipped game.** UI elements render through ImGui; `GameForgerRuntime` does not link ImGui. Still open. The fix is to extract `Runtime/src/GameMenu.cpp`'s orthographic tinted/textured-quad shader and baked stb_truetype atlas into Engine so both hosts share one 2D path. | real | nothing draws | `main.cpp` `drawUIElementOverlays` vs `Runtime/CMakeLists.txt:15-21` |
+| 1b.4 | ~~Authored HUD does not draw in a shipped game.~~ **FIXED.** The HUD now draws in `ViewportRenderer` - which both hosts already share - instead of in the Editor with ImGui. Crosshair, text, image and panel all render in `GameForgerRuntime`. Two real bugs were found doing it: the UI host was `followedEntity`, which is the **player**, not a camera, so a crosshair parented to the Main Camera failed the parent-chain test the moment a controller script was attached; and text was always centred on its anchor, so a top-left label spilled half its width off-screen. Alignment now follows the anchor. | — | — | — |
 | 1b.5 | ~~`projectilesFiredThisTick` never reset in the Runtime~~ — **FIXED.** Found while fixing 1b.1-3. The Editor reset it in its own tick; the Runtime never did, so it accumulated forever. Now `beginGameplayFrame()` in Engine, called by both. | — | — | — |
 | 1b.6 | ~~Runtime fired only the `OnPlayStart` audio hook~~ — **FIXED.** Found the same way. `OnProjectileFire` and `OnProjectileHit` were Editor-only, so a project's authored fire and impact sounds were silent in a shipped game. | — | — | — |
 
@@ -217,6 +219,7 @@ Checked directly, not assumed:
 | 4.4 | **No script API for lights, cameras, UI, animation or cine shots** — because none of those objects exist yet. | MISSING | binding list, `ScriptRuntime.cpp:253-259, 506-630, 761-770` | 4 |
 | 4.5 | **Scripts cannot spawn or configure other entities.** Projectiles had to be built as an engine-side special case because of this. | PARTIAL | `PlayModeState::Projectile`, `fireProjectile` binding | 4 |
 | 4.6 | **AI-generated scripts get user-typed names, with no convention.** `Game/Scripts/` already holds `FPSController.lua`, `PlayerFPS.lua`, `fps_controller.lua`, `player_fps.lua`, `controller.lua`, `player_controller.lua`, `Script.lua`, `Script_2.lua`, `test.lua` — nine files, several of them the same thing. | MISSING | `ls Game/Scripts/`; `scriptCreator.scriptName`, `main.cpp:6527` | 4 |
+| 4.6b | **`UIElementData::fontPath` now works.** It used to round-trip through the scene file and change nothing on screen. HUD text bakes one atlas per authored font, cached, falling back to the first usable font in `Game/Fonts` (preferring `.ttf`, since stb_truetype cannot rasterise CFF/PostScript OTF). | FIXED | `ensureOverlayFont` |
 | 4.7 | **The AI prompt is not in the script window.** It lives in the Inspector's Add-Script flow, can only create, and cannot modify an existing script. | PARTIAL | `main.cpp:6525-6560`, `ScriptGenerator.hpp` | 4 |
 | 4.8 | **No script error line reporting in the editor**, no breakpoints, no watch. | MISSING | — | later |
 | 4.9 | **No instruction-count budget on a running script.** An infinite loop in Lua hangs the editor; the sandbox closes the filesystem-escape vector but not the hang vector. | DEBT | noted in the 0.51 sandboxing work | later |

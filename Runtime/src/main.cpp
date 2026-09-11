@@ -757,6 +757,24 @@ int main()
 		// as the Editor's Game view. A grade authored in the editor that did
 		// not survive into the shipped game would be the same class of defect
 		// as MissingFunctions section 1b, so this is not optional.
+		// The HUD hangs off the MAIN CAMERA, always - never off the followed
+		// entity. `followedEntity` is the PLAYER whose script claimed the
+		// camera, not a camera at all, so hosting the UI on it meant a
+		// crosshair parented to the Main Camera failed the parent-chain test
+		// and drew nothing the moment a controller script was attached.
+		//
+		// This is the same rule the viewmodel already uses - weapons are
+		// children of the Main Camera, and syncMainCameraToPlayView drives
+		// that camera to follow the live view. HUD and viewmodel therefore
+		// hang off one object, which is what makes the rule teachable:
+		// parent it to the Main Camera and it becomes part of the view.
+		const SceneEntity* uiHostCamera = mainCameraEntity;
+
+		// The authored HUD, drawn by the shared renderer. This is what
+		// MissingFunctions 1b.4 was: UI elements used to be an ImGui overlay
+		// in the Editor only, and this host does not link ImGui, so a
+		// crosshair or HUD authored in the editor simply vanished once built.
+		viewportRenderer.setUIOverlay(uiHostCamera != nullptr ? uiHostCamera->id : -1, projectRoot);
 		viewportRenderer.setCameraEffects(
 			mainCameraEntity != nullptr ? mainCameraEntity->camera.effects
 										: gameforger::editor::CameraEffects{},

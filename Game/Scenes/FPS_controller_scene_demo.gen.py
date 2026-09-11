@@ -140,7 +140,7 @@ add("Crosshair", parent="MainCamera",
     ui={"kind": "crosshair", "anchor": "center", "offset": [0, 0], "size": [9, 9],
         "color": [1, 1, 1], "opacity": 0.85, "thickness": 2.0, "gap": 5.0})
 add("HudTitle", parent="MainCamera",
-    ui={"kind": "text", "anchor": "top_left", "offset": [190, 30], "size": [10, 10],
+    ui={"kind": "text", "anchor": "top_left", "offset": [18, 30], "size": [10, 10],
         "color": [1.0, 0.82, 0.30], "opacity": 1.0,
         "text": "WASD move  -  Mouse look  -  LMB attack  -  Wheel or 1-4 switch  -  E interact  -  I inventory",
         "fontSize": 18.0})

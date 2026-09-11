@@ -46,6 +46,7 @@ add_library(GameForgerEngine STATIC
     src/Editor/Collision.cpp
     src/Editor/TerrainTexture.cpp
     src/Editor/StbImageImpl.cpp
+    src/Editor/OverlayFont.cpp
     src/Editor/StbTrueTypeImpl.cpp
     src/Editor/Animation.cpp
     # Embeds/runs entity Lua scripts (see ScriptRuntime.hpp) - moved here

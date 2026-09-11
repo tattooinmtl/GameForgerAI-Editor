@@ -13,6 +13,7 @@
 
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
+#include "GameForger/Editor/OverlayFont.hpp"
 
 namespace gameforger::editor
 {
@@ -55,6 +56,21 @@ namespace gameforger::editor
 		// Defaults true so the Editor is unaffected; GameForgerRuntime turns
 		// it off, because a shipped game must not show authoring furniture.
 		void setShowEditorGizmos(bool show) noexcept { showEditorGizmos_ = show; }
+		// Draws the authored HUD - every isUIElement entity whose parent chain
+		// reaches `hostCameraId` - as a screen-space overlay on top of the
+		// rendered frame.
+		//
+		// This lives in the RENDERER, not in either host, on purpose. The
+		// Editor previously drew it with ImGui and the Runtime could not draw
+		// it at all (it does not link ImGui), so an authored crosshair or HUD
+		// simply vanished in a shipped game - MissingFunctions 1b.4, the last
+		// of that defect class. Both hosts already share this renderer, so
+		// putting it here means the HUD is drawn by the same code in both by
+		// construction.
+		//
+		// Pass -1 for hostCameraId to draw nothing (nobody is looking through
+		// a camera), which is what the authoring Viewport does.
+		void setUIOverlay(int hostCameraId, const std::filesystem::path& projectRoot) noexcept;
 		// The "lens layers" - grade, named filter, gradient map, grain,
 		// flicker, scanlines, vignette - applied as one full-screen pass over
 		// the rendered image. Set from the active camera's CameraEffects each
@@ -384,6 +400,34 @@ namespace gameforger::editor
 		float cameraDistance_ = 4.0F;
 		glm::vec3 cameraTarget_{0.0F};
 		bool showEditorGizmos_ = true;
+		// HUD overlay. One shader that draws either a flat-tinted rect or a
+		// glyph from a baked atlas, same single-program trick GameMenu uses.
+		GLuint overlayShaderProgram_ = 0;
+		GLuint overlayVertexArray_ = 0;
+		GLuint overlayVertexBuffer_ = 0;
+		// One baked atlas per font, keyed by the element's authored fontPath
+		// ("" means the project default). Honouring the authored path is why
+		// this is a cache rather than a single atlas: a HUD can mix fonts, and
+		// a UI element's fontPath previously round-tripped through the scene
+		// file while changing nothing on screen.
+		struct OverlayFontEntry
+		{
+			OverlayFont font;
+			GLuint texture = 0;
+			// Set after the first bake attempt, success or not. Without it a
+			// missing or unbakeable font is re-read every single frame - the
+			// same trap the mesh caches hit before they tracked "was a build
+			// attempted" separately from "did it succeed".
+			bool attempted = false;
+		};
+		std::unordered_map<std::string, OverlayFontEntry> overlayFonts_;
+		// Resolves and bakes on first use. Returns nullptr when the font
+		// cannot be baked, and the caller draws no text rather than failing.
+		[[nodiscard]] const OverlayFontEntry* ensureOverlayFont(const std::string& relativeFontPath);
+		int uiHostCameraId_ = -1;
+		std::filesystem::path uiProjectRoot_;
+		[[nodiscard]] bool createOverlayResources();
+		void drawUIOverlay(const std::vector<SceneEntity>& entities);
 		float cameraFieldOfViewDegrees_ = 50.0F;
 		float cameraNearClip_ = 0.1F;
 		float cameraFarClip_ = 200.0F;

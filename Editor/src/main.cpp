@@ -3744,180 +3744,6 @@ namespace
         ImGui::PopID();
     }
 
-    // Screen position an anchor resolves to inside a rect of `size`, before
-    // the element's own pixel offset is added.
-    ImVec2 uiAnchorPoint(const UIAnchor anchor, const ImVec2& origin, const ImVec2& size)
-    {
-        switch (anchor)
-        {
-            case UIAnchor::TopLeft:      return ImVec2(origin.x, origin.y);
-            case UIAnchor::TopCenter:    return ImVec2(origin.x + size.x * 0.5F, origin.y);
-            case UIAnchor::TopRight:     return ImVec2(origin.x + size.x, origin.y);
-            case UIAnchor::MiddleLeft:   return ImVec2(origin.x, origin.y + size.y * 0.5F);
-            case UIAnchor::MiddleRight:  return ImVec2(origin.x + size.x, origin.y + size.y * 0.5F);
-            case UIAnchor::BottomLeft:   return ImVec2(origin.x, origin.y + size.y);
-            case UIAnchor::BottomCenter: return ImVec2(origin.x + size.x * 0.5F, origin.y + size.y);
-            case UIAnchor::BottomRight:  return ImVec2(origin.x + size.x, origin.y + size.y);
-            case UIAnchor::Center: break;
-        }
-        return ImVec2(origin.x + size.x * 0.5F, origin.y + size.y * 0.5F);
-    }
-
-    // Draws every isUIElement entity whose parent chain reaches `hostCamera`,
-    // as a 2D overlay inside the Game view's own on-screen rect.
-    //
-    // Screen-space ImGui draws rather than world geometry, deliberately: this
-    // is the same technique the existing crosshair, pickup hint and detection
-    // icon already use, so a HUD needs no new render pass, no canvas mesh and
-    // no second projection path. The element's 3D transform is ignored -
-    // anchor + offsetPixels place it - which is why a UI element's gizmo in
-    // the Viewport is only a marker for where it sits in the hierarchy.
-    //
-    // `hostCamera` may be null (nothing is looking through a camera), in which
-    // case nothing draws at all - the same as Unity showing no HUD when a
-    // Canvas has no camera.
-    void drawUIElementOverlays(
-        const EditorScene& scene,
-        const SceneEntity* hostCamera,
-        const ImVec2& viewOrigin,
-        const ImVec2& viewSize,
-        const std::filesystem::path& projectRoot)
-    {
-        if (hostCamera == nullptr || viewSize.x <= 0.0F || viewSize.y <= 0.0F)
-        {
-            return;
-        }
-
-        // An element draws if the host camera is anywhere up its parent
-        // chain, not just its immediate parent - so a HUD can be organised
-        // under an Empty ("Camera > HUD > HealthText") the way anyone would
-        // actually lay one out. The walk is depth-capped rather than
-        // cycle-tracked: applyParentConstraints already tolerates cycles, and
-        // a fixed cap keeps this O(depth) with no allocation on a path that
-        // runs for every element every frame.
-        const auto descendsFromHost = [&scene, hostCamera](const SceneEntity& element)
-        {
-            constexpr int kMaxParentDepth = 32;
-            const SceneEntity* walk = &element;
-            for (int depth = 0; depth < kMaxParentDepth; ++depth)
-            {
-                if (walk->parentName.empty())
-                {
-                    return false;
-                }
-                const SceneEntity* parent = scene.findEntity(walk->parentName);
-                if (parent == nullptr)
-                {
-                    return false;
-                }
-                if (parent->id == hostCamera->id)
-                {
-                    return true;
-                }
-                walk = parent;
-            }
-            return false;
-        };
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        // Confine every element to the Game view's rect. Without this a large
-        // panel or a big offset would paint over the Inspector and the menu
-        // bar, which reads as a rendering bug rather than a layout mistake.
-        drawList->PushClipRect(
-            viewOrigin, ImVec2(viewOrigin.x + viewSize.x, viewOrigin.y + viewSize.y), true);
-
-        for (const SceneEntity& element : scene.entities())
-        {
-            if (!element.isUIElement || !element.active || !descendsFromHost(element))
-            {
-                continue;
-            }
-
-            const ImVec2 anchorPoint = uiAnchorPoint(element.ui.anchor, viewOrigin, viewSize);
-            const ImVec2 center(
-                anchorPoint.x + element.ui.offsetPixels.x, anchorPoint.y + element.ui.offsetPixels.y);
-            const float opacity = std::clamp(element.ui.opacity, 0.0F, 1.0F);
-            const ImU32 color = ImGui::ColorConvertFloat4ToU32(
-                ImVec4(element.ui.color.r, element.ui.color.g, element.ui.color.b, opacity));
-
-            switch (element.ui.kind)
-            {
-                case UIElementKind::Crosshair:
-                {
-                    // Four arms around a centre gap - the gap is what makes a
-                    // crosshair readable against a busy scene, and it is the
-                    // control people reach for first.
-                    const float arm = std::max(element.ui.sizePixels.x, 1.0F);
-                    const float gap = std::max(element.ui.gapPixels, 0.0F);
-                    const float thickness = std::max(element.ui.thicknessPixels, 1.0F);
-                    drawList->AddLine(
-                        ImVec2(center.x - gap - arm, center.y), ImVec2(center.x - gap, center.y), color,
-                        thickness);
-                    drawList->AddLine(
-                        ImVec2(center.x + gap, center.y), ImVec2(center.x + gap + arm, center.y), color,
-                        thickness);
-                    drawList->AddLine(
-                        ImVec2(center.x, center.y - gap - arm), ImVec2(center.x, center.y - gap), color,
-                        thickness);
-                    drawList->AddLine(
-                        ImVec2(center.x, center.y + gap), ImVec2(center.x, center.y + gap + arm), color,
-                        thickness);
-                    break;
-                }
-                case UIElementKind::Panel:
-                {
-                    const ImVec2 half(element.ui.sizePixels.x * 0.5F, element.ui.sizePixels.y * 0.5F);
-                    drawList->AddRectFilled(
-                        ImVec2(center.x - half.x, center.y - half.y),
-                        ImVec2(center.x + half.x, center.y + half.y), color, 4.0F);
-                    break;
-                }
-                case UIElementKind::Image:
-                {
-                    const GLuint texture = element.ui.imagePath.empty()
-                        ? 0U
-                        : ensureIconTextureGpu(element.ui.imagePath, projectRoot);
-                    const ImVec2 half(element.ui.sizePixels.x * 0.5F, element.ui.sizePixels.y * 0.5F);
-                    const ImVec2 topLeft(center.x - half.x, center.y - half.y);
-                    const ImVec2 bottomRight(center.x + half.x, center.y + half.y);
-                    if (texture != 0)
-                    {
-                        drawList->AddImage(
-                            static_cast<ImTextureID>(texture), topLeft, bottomRight, ImVec2(0.0F, 0.0F),
-                            ImVec2(1.0F, 1.0F), color);
-                    }
-                    else
-                    {
-                        // No image assigned, or it failed to load. An outline
-                        // beats drawing nothing: the element is visible where
-                        // it was placed, so a missing path reads as a missing
-                        // path rather than as a broken HUD.
-                        drawList->AddRect(topLeft, bottomRight, color, 2.0F, 0, 1.0F);
-                    }
-                    break;
-                }
-                case UIElementKind::Text:
-                {
-                    // The editor's own font, scaled. Loading the element's
-                    // authored fontPath would mean building an ImFont atlas
-                    // per font at runtime, which ImGui only supports between
-                    // frames - so fontPath round-trips through the scene file
-                    // for a later pass but does not change rendering yet.
-                    const float fontSize = std::max(element.ui.fontSizePixels, 1.0F);
-                    const ImVec2 textSize =
-                        ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, element.ui.text.c_str());
-                    drawList->AddText(
-                        ImGui::GetFont(), fontSize,
-                        ImVec2(center.x - textSize.x * 0.5F, center.y - textSize.y * 0.5F), color,
-                        element.ui.text.c_str());
-                    break;
-                }
-            }
-        }
-
-        drawList->PopClipRect();
-    }
-
     void drawGameViewPanel(
         gameforger::editor::ViewportRenderer& renderer,
         const EditorCameraState& gameCamera,
@@ -3992,10 +3818,18 @@ namespace
                 renderer.setLens(50.0F, 0.1F, 200.0F);
             }
 
-            // Whichever camera the player is actually looking through - the
-            // one whose UI children should draw this frame.
-            const SceneEntity* uiHostCamera =
-                followedEntity != nullptr ? followedEntity : mainCameraEntity;
+            // The HUD hangs off the MAIN CAMERA, always - never off the followed
+            // entity. `followedEntity` is the PLAYER whose script claimed the
+            // camera, not a camera at all, so hosting the UI on it meant a
+            // crosshair parented to the Main Camera failed the parent-chain test
+            // and drew nothing the moment a controller script was attached.
+            //
+            // This is the same rule the viewmodel already uses - weapons are
+            // children of the Main Camera, and syncMainCameraToPlayView drives
+            // that camera to follow the live view. HUD and viewmodel therefore
+            // hang off one object, which is what makes the rule teachable:
+            // parent it to the Main Camera and it becomes part of the view.
+            const SceneEntity* uiHostCamera = mainCameraEntity;
 
             // Lens layers come from the Main Camera even when a script has
             // claimed the view: the script drives WHERE the camera is, the
@@ -4015,17 +3849,18 @@ namespace
             const int excludeEntityId = (followedEntity != nullptr && scriptRuntime.activeCameraMode() == "fps")
                 ? followedEntity->id
                 : -1;
+            renderer.setUIOverlay(uiHostCamera != nullptr ? uiHostCamera->id : -1, projectRoot);
             renderer.render(scene.entities(), {}, projectRoot, excludeEntityId);
             const ImVec2 imagePos = ImGui::GetCursorScreenPos();
             ImGui::Image(
                 static_cast<ImTextureID>(renderer.texture()), available, ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
 
-            // Authored HUD (crosshair / text / image / panel) for whatever
-            // camera is being looked through. Drawn immediately after the
-            // scene image so it sits over the 3D view but under the built-in
-            // overlays below (pickup hints, detection icons), which are
-            // engine feedback rather than authored content.
-            drawUIElementOverlays(scene, uiHostCamera, imagePos, available, projectRoot);
+            // The authored HUD is drawn by the RENDERER now (see
+            // ViewportRenderer::setUIOverlay), not here with ImGui. It used to
+            // be an ImGui overlay in this function only, which meant a shipped
+            // game - where there is no ImGui - showed no crosshair and no HUD
+            // at all. MissingFunctions 1b.4, the last of that defect class.
+            // Both hosts share this renderer, so both now draw it identically.
 
             // Source of truth is the followed entity's OWN authored
             // preference (Inspector's Camera Rig > Lock Cursor), not a
@@ -4929,6 +4764,7 @@ namespace
                     ? (liveCamera->isCineCamera ? liveCamera->cineEffects : liveCamera->camera.effects)
                     : CameraEffects{},
                 projectRoot);
+            renderer.setUIOverlay(-1, projectRoot);
             renderer.render(scene.entities(), {}, projectRoot);
             ImGui::Image(
                 static_cast<ImTextureID>(renderer.texture()), available, ImVec2(0.0F, 1.0F), ImVec2(1.0F, 0.0F));
@@ -9256,6 +9092,9 @@ namespace
             // heat map or a heavy vignette. Effects belong to what the PLAYER
             // sees (Game view) and to the cine preview.
             viewportRenderer.setCameraEffects(CameraEffects{}, projectRoot);
+            // No HUD in the authoring Viewport either - you are placing
+            // objects here, not playing.
+            viewportRenderer.setUIOverlay(-1, projectRoot);
             viewportRenderer.render(scene.entities(), selection.multiSelectedIds, projectRoot);
             ImGui::Image(
                 static_cast<ImTextureID>(viewportRenderer.texture()),

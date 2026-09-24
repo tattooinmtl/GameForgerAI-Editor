@@ -1106,6 +1106,102 @@ namespace
 	};
 }
 
+void testFpsDemoThirdPersonStrafe()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	// Regression: in third person (C) the mouse turns only the camera, so
+	// once it swung around, fps_player.lua's A/D (and W/S) went the wrong way
+	// on screen. Checked on screen, through the real third-person camera, at
+	// several camera angles and body facings.
+	const std::filesystem::path projectRoot = "fps_tp_project";
+	std::filesystem::remove_all(projectRoot);
+	const FpsDemoKitImportResult imported =
+		importFpsDemoKit(std::filesystem::path(GAMEFORGER_SOURCE_DIR), projectRoot, false);
+	TEST_ASSERT(imported.success, "import the FPS Demo kit: " + imported.message);
+
+	for (const float bodyYaw : {0.0F, 70.0F, 180.0F})
+	{
+		for (const float lookYaw : {0.0F, 90.0F, 180.0F, -120.0F})
+		{
+			EditorScene scene(projectRoot);
+			AICommandBus bus;
+			bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+			FpsRigOptions options;
+			options.includeGround = true;
+			const FpsRigBuildResult rig = buildFpsPlayerRig(scene, bus, options);
+			TEST_ASSERT(rig.success, "player rig builds: " + rig.message);
+			(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "rotation", glm::vec3(0.0F, bodyYaw, 0.0F)});
+
+			ScriptedInput input;
+			ScriptRuntime runtime;
+			GameplayState gameplay;
+			ensureInventorySlots(gameplay);
+			std::vector<std::string> errors;
+			runtime.initialize(
+				scene, bus, input,
+				[&errors](const bool isError, const std::string& message)
+				{
+					if (isError)
+					{
+						errors.push_back(message);
+					}
+				},
+				nullptr, nullptr, nullptr, nullptr, nullptr);
+			runtime.setGameplayState(&gameplay);
+			for (const SceneEntity& entity : scene.entities())
+			{
+				for (const std::string& script : entity.scripts)
+				{
+					(void)runtime.startScript(entity.id, script, projectRoot);
+				}
+			}
+			const int playerId = scene.findEntity(rig.playerName)->id;
+			const auto frames = [&](const int count)
+			{
+				for (int frame = 0; frame < count; ++frame)
+				{
+					gameplay.lookPitchDegrees = 0.0F;
+					gameplay.lookYawDegrees = lookYaw;
+					applyParentConstraints(scene, bus);
+					tickScripts(scene, runtime, true, 1.0F / 60.0F);
+					input.keysPressed.clear();
+				}
+			};
+			frames(30); // settle on the ground
+			input.keysPressed = {"C"};
+			frames(1);
+			TEST_ASSERT(runtime.activeCameraMode() == "third_person", "C switches to third person");
+
+			// Where each key moves the player, in the third-person camera's screen space.
+			const auto screenMove = [&](const std::string& key)
+			{
+				const SceneEntity* player = scene.findEntity(playerId);
+				const GameCameraState camera = scriptedPlayCamera(*player, "third_person", lookYaw, 0.0F);
+				const glm::vec3 eye = camera.target + camera.distance * yawPitchForward(
+					glm::degrees(camera.yaw), glm::degrees(camera.pitch));
+				const glm::mat4 view = glm::lookAt(eye, camera.target, glm::vec3(0.0F, 1.0F, 0.0F));
+				const glm::vec3 before = player->position;
+				input.keysDown = {key};
+				frames(20);
+				input.keysDown.clear();
+				const glm::vec3 moved = scene.findEntity(playerId)->position - before;
+				return glm::vec3(view * glm::vec4(moved.x, 0.0F, moved.z, 0.0F));
+			};
+			const std::string where = " (body " + std::to_string(bodyYaw) + ", camera " + std::to_string(lookYaw) + ")";
+			TEST_ASSERT(screenMove("D").x > 0.3F, "third person: D moves screen-right" + where);
+			TEST_ASSERT(screenMove("A").x < -0.3F, "third person: A moves screen-left" + where);
+			TEST_ASSERT(screenMove("W").z < -0.3F, "third person: W moves away from the camera" + where);
+			TEST_ASSERT(errors.empty(), "no script errors" + where + (errors.empty() ? std::string() : ": " + errors.front()));
+			runtime.shutdown();
+		}
+	}
+	std::filesystem::remove_all(projectRoot);
+#endif
+}
+
 void testFpsPlayerEndToEnd()
 {
 #ifndef GAMEFORGER_SOURCE_DIR
@@ -1446,6 +1542,7 @@ int main()
 	RUN_TEST(testThirdPersonMouseUpLooksUp);
 	RUN_TEST(testScriptMessagingApi);
 	RUN_TEST(testFpsPlayerEndToEnd);
+	RUN_TEST(testFpsDemoThirdPersonStrafe);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

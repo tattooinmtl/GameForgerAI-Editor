@@ -54,6 +54,14 @@
 
 ---
 
+## 1j. Session Log: 2026-09-24 (FPS Demo third-person strafe - still Alpha 0.86)
+
+The user reported A/D inverted in the FPS Demo after pressing C (third person).
+1. **Cause:** in third person the mouse turns only the camera (it orbits the player), but `fps_player.lua` moved relative to the player's body. Once the camera swung around, A/D (and W/S) went the wrong way on screen. With the camera straight behind it was already right.
+2. **Fix** (`Game/Scripts/FPSDemo/fps_player.lua`, `update_movement`): in third person, forward/right come from `self.camera:getAim()` flattened to the ground, so movement follows the camera. First person unchanged.
+3. **Test** (`Engine/tests/TestMain.cpp`): `testFpsDemoThirdPersonStrafe` - imports the kit, presses C, then checks through the real third-person camera that D goes screen-right, A screen-left and W away from the camera, at 3 body facings x 4 camera angles. It failed before the fix (camera at 90 deg) and passes now. 23 tests.
+* **Not changed (not asked):** the small starter `third_person_controller.lua` has the same body-relative movement. No version bump (script-only fix; the user's editor was open, so the exe couldn't be relinked).
+
 ## 1i. Session Log: 2026-09-24 (default panel layout - Alpha 0.86)
 
 The user picked option 2: put a default panel layout into the code (audit B20). Every change:

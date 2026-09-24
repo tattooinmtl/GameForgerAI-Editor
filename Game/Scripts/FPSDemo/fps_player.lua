@@ -300,6 +300,17 @@ function FpsPlayer:update_movement(dt)
 
     local forward = self.entity:getForward()
     local right = self.entity:getRight()
+    if self.camera_mode == "third_person" then
+        -- In third person the mouse turns only the camera, so move relative
+        -- to where the camera looks - relative to the body, A/D and W/S went
+        -- the wrong way on screen once the camera swung around.
+        local _, aim = self.camera:getAim()
+        local flat = aim and math.sqrt(aim.x * aim.x + aim.z * aim.z) or 0
+        if flat > 1e-4 then
+            forward = v(aim.x / flat, 0, aim.z / flat)
+            right = norm(cross(forward, v(0, 1, 0)))
+        end
+    end
     local mx = forward.x * forward_axis + right.x * strafe_axis
     local mz = forward.z * forward_axis + right.z * strafe_axis
     local ml = math.sqrt(mx * mx + mz * mz)

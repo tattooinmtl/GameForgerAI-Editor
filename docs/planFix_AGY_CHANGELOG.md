@@ -54,6 +54,16 @@
 
 ---
 
+## 1h. Session Log: 2026-09-24 (camera direction fixes - Alpha 0.85)
+
+The user reported the cameras inverted (editor Viewport: up/down and left/right; also in game). Root causes found by checking every camera against glm::lookAt, the view the renderer really uses:
+1. **Editor Viewport camera** (`Editor/src/main.cpp` `updateCamera`, also used by the editor's free Play camera): "right" was `cross(+Y, forward)` = screen-LEFT, and "up" was built from it = screen-DOWN. So A/D were swapped and middle-mouse / Shift+right-drag pan was inverted on both axes. This code was like this in the initial commit (a comment claims it "fixed" pan - same wrong flip as the old getRight). Now uses the new engine helper `cameraBasis(forward)` (`Engine/include/GameForger/Runtime/GameCamera.hpp`, `Engine/src/Runtime/GameCamera.cpp`): right = cross(forward, up), up = cross(right, forward).
+2. **Third-person game camera** (`scriptedPlayCamera`, `GameCamera.cpp` - shared by the Editor Game view and GameForgerRuntime): the look pitch was ADDED to the orbit pitch, so mouse up raised the camera and the view tilted down. Now subtracted: mouse up looks up, same as first person.
+3. **Checked and already correct (no change):** mouse-look left/right in the Viewport (orbit and fly), Viewport mouse-look up/down, first-person look in the Game view and Runtime, W/S/Q/E fly keys, `getRight()`.
+4. **Tests** (`Engine/tests/TestMain.cpp`): `testCameraBasisMatchesScreen` (right/up land screen-right/screen-up at 15 yaw/pitch combos) and `testThirdPersonMouseUpLooksUp`. 22 tests.
+5. **Version** 0.84 -> 0.85.
+* **Verified:** Debug build of all targets, zero new warnings on changed lines, 22/22 tests, editor starts.
+
 ## 1g. Session Log: 2026-09-24 (audit fixes B13, gizmo keys, A3, G1 - Alpha 0.84)
 
 The user asked for everything in 1f's "Not done" list. Every change, in order:

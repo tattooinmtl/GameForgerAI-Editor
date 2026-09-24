@@ -7097,12 +7097,13 @@ namespace
         }
 
         const glm::vec3 offsetDirection = cameraOffsetDirection(camera.yaw, camera.pitch);
-        const glm::vec3 forward = -offsetDirection;
-        // Y up, Z forward (right-handed): right = +X = cross(+Y, forward).
-        // Was cross(forward, +Y) which returned -X and made middle-mouse-pan
-        // feel reversed.
-        const glm::vec3 right = glm::normalize(glm::cross(glm::vec3(0.0F, 1.0F, 0.0F), forward));
-        const glm::vec3 up = glm::cross(right, forward);
+        // Screen-right / screen-up of the rendered view (glm::lookAt). This
+        // used cross(+Y, forward), which is screen-LEFT, so A/D were swapped
+        // and middle-mouse pan went the wrong way on both axes.
+        const gameforger::editor::CameraBasis basis = gameforger::editor::cameraBasis(-offsetDirection);
+        const glm::vec3 forward = basis.forward;
+        const glm::vec3 right = basis.right;
+        const glm::vec3 up = basis.up;
 
         if (camera.dragMode == CameraDragMode::Pan)
         {

@@ -20,6 +20,15 @@ namespace gameforger::editor
 			std::cos(pitchRadians) * std::cos(yawRadians));
 	}
 
+	CameraBasis cameraBasis(const glm::vec3& forward)
+	{
+		CameraBasis basis;
+		basis.forward = glm::normalize(forward);
+		basis.right = glm::normalize(glm::cross(basis.forward, glm::vec3(0.0F, 1.0F, 0.0F)));
+		basis.up = glm::cross(basis.right, basis.forward);
+		return basis;
+	}
+
 	GameCameraState cameraLookingAt(const glm::vec3& eye, const glm::vec3& aimPoint)
 	{
 		const glm::vec3 toEye = eye - aimPoint;
@@ -47,7 +56,10 @@ namespace gameforger::editor
 				glm::degrees(std::atan2(rig.thirdPersonHeight, glm::max(rig.thirdPersonDistance, 0.01F)));
 			const float orbitYawDegrees =
 				entity.rotationEuler.y + 180.0F + rig.thirdPersonYawOffsetDegrees + lookYawDegrees;
-			const float orbitPitchDegrees = glm::clamp(basePitchDegrees + lookPitchDegrees, -80.0F, 80.0F);
+			// lookPitchDegrees > 0 means "look up" (mouse up), same as first
+			// person - so the orbiting eye goes DOWN. It used to add it,
+			// which made mouse up look down in third person.
+			const float orbitPitchDegrees = glm::clamp(basePitchDegrees - lookPitchDegrees, -80.0F, 80.0F);
 			const float orbitDistance = glm::length(glm::vec2(rig.thirdPersonDistance, rig.thirdPersonHeight));
 
 			const glm::vec3 aimPoint = entity.position + glm::vec3(0.0F, rig.thirdPersonAimHeight, 0.0F);

@@ -111,6 +111,12 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **Fixed:** B13 (Ctrl+R no longer saves), A3 (provider list only in `Providers.json`, starts on its `activeProvider`), G1 (Catapult Controller preset greyed out with "file missing" - the script itself is still missing; writing it is the user's call), and the gizmo keys no longer react while Ctrl is held (Ctrl+Y / Ctrl+R used to also switch the gizmo). Details: changelog §1g.
 - **Phase 1 status:** all Phase 1 code is done (B1, B2, B3, B4, B5, B9, G1, A1, A2). Waiting for the user's manual checks listed in Phase 1. Phases 0 and 2-8 not started.
 
+### 2.10 Update 2026-09-24 (Alpha 0.85)
+
+- **NEW B18 🔴 (fixed 0.85) Editor Viewport camera inverted:** A/D swapped, middle-mouse/Shift pan inverted on both axes ("right" was screen-left). Now `cameraBasis()`, regression-tested.
+- **NEW B19 🟠 (fixed 0.85) Third-person camera pitch inverted:** mouse up looked down (Editor Game view + Runtime). Regression-tested.
+- Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
+
 ## 3. Findings — duplication and things that don't make sense
 
 | # | Finding | Where |

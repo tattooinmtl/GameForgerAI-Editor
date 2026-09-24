@@ -959,6 +959,46 @@ return T
 	std::filesystem::remove(script);
 }
 
+void testCameraBasisMatchesScreen()
+{
+	// Regression: the editor Viewport camera used cross(up, forward) as
+	// "right", which is screen-LEFT - A/D were swapped and middle-mouse pan
+	// was inverted on both axes. Check cameraBasis against glm::lookAt.
+	for (const float yawDegrees : {0.0F, 40.0F, 90.0F, 180.0F, -125.0F})
+	{
+		for (const float pitchDegrees : {-60.0F, 0.0F, 35.0F})
+		{
+			const glm::vec3 forward = yawPitchForward(yawDegrees, pitchDegrees);
+			const CameraBasis basis = cameraBasis(forward);
+			const glm::vec3 eye(1.0F, 2.0F, 3.0F);
+			const glm::mat4 view = glm::lookAt(eye, eye + forward, glm::vec3(0.0F, 1.0F, 0.0F));
+			const glm::vec4 rightOnScreen = view * glm::vec4(eye + basis.right, 1.0F);
+			const glm::vec4 upOnScreen = view * glm::vec4(eye + basis.up, 1.0F);
+			const std::string where = " at yaw " + std::to_string(yawDegrees) + " pitch " + std::to_string(pitchDegrees);
+			TEST_ASSERT(rightOnScreen.x > 0.99F, "camera right is screen-right" + where);
+			TEST_ASSERT(upOnScreen.y > 0.99F, "camera up is screen-up" + where);
+		}
+	}
+}
+
+void testThirdPersonMouseUpLooksUp()
+{
+	// Regression: in third person, mouse up (look pitch > 0, same as first
+	// person) swung the camera UP so the view tilted DOWN.
+	SceneEntity player;
+	player.position = glm::vec3(0.0F);
+	const auto viewForwardY = [&](const float lookPitchDegrees)
+	{
+		const GameCameraState camera = scriptedPlayCamera(player, "third_person", 0.0F, lookPitchDegrees);
+		// The renderer's eye is target + distance * dir(yaw, pitch); it looks back at target.
+		return -std::sin(camera.pitch);
+	};
+	TEST_ASSERT(viewForwardY(20.0F) > viewForwardY(0.0F), "third person: looking up tilts the view up");
+	TEST_ASSERT(viewForwardY(-20.0F) < viewForwardY(0.0F), "third person: looking down tilts the view down");
+	const GameCameraState firstPerson = scriptedPlayCamera(player, "fps", 0.0F, 20.0F);
+	TEST_ASSERT(-std::sin(firstPerson.pitch) > 0.0F, "first person: looking up tilts the view up");
+}
+
 void testScriptMessagingApi()
 {
 	const std::string a = "Game/Scripts/test_msg_a.lua";
@@ -1402,6 +1442,8 @@ int main()
 	RUN_TEST(testFpsRigBuilder);
 	RUN_TEST(testWeaponLuaApi);
 	RUN_TEST(testGetRightMatchesScreenRight);
+	RUN_TEST(testCameraBasisMatchesScreen);
+	RUN_TEST(testThirdPersonMouseUpLooksUp);
 	RUN_TEST(testScriptMessagingApi);
 	RUN_TEST(testFpsPlayerEndToEnd);
 

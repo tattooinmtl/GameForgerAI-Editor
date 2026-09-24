@@ -2062,7 +2062,7 @@ namespace gameforger::editor
 			{
 				continue;
 			}
-			// -- @preset FPS Opus | player
+			// -- @preset FPS Demo | player
 			std::string rest = line.substr(tagPos + 7);
 			const std::size_t bar = rest.find('|');
 			const auto trim = [](std::string text)

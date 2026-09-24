@@ -1,4 +1,4 @@
--- Experience and levels for the FPS Opus preset.
+-- Experience and levels for the FPS Demo preset.
 --
 -- Every hit a weapon lands earns XP (fps_player.lua and projectiles.lua send
 -- "on_weapon_hit"). XP goes to two places:
@@ -155,4 +155,4 @@ end
 
 return XpSystem
 
--- @preset FPS Opus | player
+-- @preset FPS Demo | player

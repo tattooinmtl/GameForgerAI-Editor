@@ -55,6 +55,7 @@ add_library(GameForgerEngine STATIC
     # logic standalone, not just the Editor's own Play sandbox.
     src/Runtime/GameplayLoop.cpp
     src/Runtime/GameplayHud.cpp
+    src/Runtime/FpsDemoKit.cpp
     # Scripted-camera math (yaw/pitch/distance framing for the followed
     # entity's self.camera:setMode fps/third_person view) - moved here
     # alongside GameplayLoop.cpp for the same reason.

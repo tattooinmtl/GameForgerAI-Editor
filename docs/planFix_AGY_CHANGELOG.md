@@ -54,13 +54,28 @@
 
 ---
 
-## 1d. Session Log: 2026-09-23 (FPS Opus preset: magic, XP, runtime showcase - Alpha 0.81)
+## 1e. Session Log: 2026-09-24 (strafe fix + FPS Demo kit packaging - Alpha 0.82)
+
+Every change, in order:
+1. **Pushed** all 0.80/0.81 work to GitHub, branch `TattooAI/app-audit-workflow-reorg-cca6a1` (commit `5011473`).
+2. **Strafe fix (commit `053770e`):** `Engine/src/Editor/ScriptRuntime.cpp` `luaEntityGetRight` now returns `cross(forward, up)` (screen-right for the game camera). It had returned `cross(up, forward)` = screen-LEFT since the 2026-08-13 audit item H-Script-1, so D strafed left in `fps_controller.lua`, `third_person_controller.lua` and `FPSController.lua`. `fps_player.lua` dropped its own workaround and uses `getRight()` again. New test `testGetRightMatchesScreenRight` checks it against `glm::lookAt` at 5 yaws.
+3. **Renamed "FPS Opus" to "FPS Demo"** everywhere (code, `@preset` tags, Inspector/Add Script text, docs). "Opus" was a name I made up; the user said demo.
+4. **Kit folders:** `git mv` the 7 demo scripts from `Game/Scripts/` to `Game/Scripts/FPSDemo/`; icons from `Game/Icons/Weapons/` to `Game/Icons/FPSDemo/`; added `Sword.png`, `Axe.png`, `Hammer.png`, `Item.png` (copies of icon-pack `SwordT2`/`AxeT1`/`HammerT1`/`Coin`) so the kit needs no other folder. `items.lua` default icon -> `Game/Icons/FPSDemo/Item.png`.
+5. **Demo enemy:** new `Game/Scripts/FPSDemo/enemy.lua` = the enemy with melee attack + stun (what `enemy_ai.lua` had become in 0.81). `Game/Scripts/enemy_ai.lua` restored to its original small starter version.
+6. **One place for kit paths:** new `Engine/include/GameForger/Runtime/FpsDemoKit.hpp` (`fpsdemo::` constants). Replaced the hard-coded paths in `GameplayLoop.hpp`, `GameplayHud.cpp`, `FpsRigBuilder.{hpp,cpp}`, `Runtime/src/main.cpp`, `Editor/src/main.cpp`, tests. The Game view's red "detected" icon also works for the demo `enemy.lua`.
+7. **Import:** new `Engine/src/Runtime/FpsDemoKit.cpp` (`importFpsDemoKit`, `fpsDemoKitInstalled`, `findFpsDemoKitSource`) + **File > Import FPS Demo Kit into This Project** (copies `Game/Scripts/FPSDemo/` + `Game/Icons/FPSDemo/` from the engine folder the editor was built in; keeps existing files).
+8. **Demo scene** `Game/Scenes/FPSDemo.gfprod`/`.gfai` regenerated with the new paths.
+9. **Version** 0.81 -> 0.82 (`CMakeLists.txt`, `README.md`).
+* **Verified:** Debug build of all targets, zero new warnings on changed lines; `GameForgerTests` 20/20 - the end-to-end test now builds its project ONLY through `importFpsDemoKit`, proving the kit is self-contained.
+* **Not done (not asked):** no auto-import, no kit copy in `New-GameForgerAIProject.ps1`, no kit README.
+
+## 1d. Session Log: 2026-09-23 (FPS Demo preset: magic, XP, runtime showcase - Alpha 0.81)
 
 ### Claude - completed & verified this session
-* **New scripts:** `projectiles.lua`, `effects.lua`, `xp_system.lua`, `game_manager.lua`; `fps_player.lua` (Fire/Frost/Life Casters, XP bonuses, crits, charges), `health.lua` (heal, burn/frost, damage numbers, player mode/respawn), `enemy_ai.lua` (melee attack), `items.lua` (new weapon ids). Every preset script ends with `-- @preset FPS Opus | <role>`.
+* **New scripts:** `projectiles.lua`, `effects.lua`, `xp_system.lua`, `game_manager.lua`; `fps_player.lua` (Fire/Frost/Life Casters, XP bonuses, crits, charges), `health.lua` (heal, burn/frost, damage numbers, player mode/respawn), `enemy_ai.lua` (melee attack), `items.lua` (new weapon ids). Every preset script ends with `-- @preset FPS Demo | <role>`.
 * **Engine:** `GameplayHud.{hpp,cpp}` (shared HUD layout over an abstract canvas), messaging/combat/HUD Lua API in `ScriptRuntime.cpp`, `@preset` + `image` property parsing, `scriptPropertyText`, `loadTextureImageTopDown`, one-frame particles, 3 casters + Game Manager + demo changes in `FpsRigBuilder.cpp`.
 * **Runtime:** `RuntimeHud.{hpp,cpp}` (GL implementation of the HUD canvas + font fallback), Game Manager splash/title, save-to-startup-scene matching (`Game/Saves/save.meta.json`), inventory panel.
-* **Editor:** preset grouping + "Link all" checkbox, FPS Opus group in Add Script, `image` property UI (Change Image...), GameObject > Game Manager, Game view uses the shared HUD.
+* **Editor:** preset grouping + "Link all" checkbox, FPS Demo group in Add Script, `image` property UI (Change Image...), GameObject > Game Manager, Game view uses the shared HUD.
 * **Fixed:** splash screens and 2D icons upside down (global `stbi_set_flip_vertically_on_load` vs. old UV assumptions).
 * **Verified:** Debug build of all targets, zero new warnings on changed lines; `GameForgerTests` 19/19 incl. end-to-end on the real scripts; runtime screenshots (splash, fire, frost, lightning) via a scratch copy of the project.
 

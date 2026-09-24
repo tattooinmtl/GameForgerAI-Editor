@@ -12,7 +12,7 @@ namespace gameforger::editor
 {
 	namespace
 	{
-		constexpr const char* kHealthScriptPath = "Game/Scripts/health.lua";
+		constexpr const char* kHealthScriptPath = fpsdemo::kHealth;
 
 		HudColor withAlpha(const glm::vec3& color, const float alpha)
 		{

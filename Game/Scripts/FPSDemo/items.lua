@@ -8,14 +8,15 @@
 -- Every value below is per object: select the object and edit them in the
 -- Inspector's Scripts section. The icon shows a thumbnail there with a
 -- "Change Icon..." button that picks a new image from your PC (it's copied
--- into Game/Icons/ and saved with this object).
+-- into Game/Icons/ and saved with this object). The kit's own icons are in
+-- Game/Icons/FPSDemo/.
 --
 -- To make it a weapon for fps_player.lua, set item_type = weapon and pick
 -- which weapon it is (lightning/fire/frost/heal are the Storm, Fire, Frost
 -- and Life Casters).
 --
 -- @property item_name string Item
--- @property icon icon Game/Models/iconpack1/128/Coin.png
+-- @property icon icon Game/Icons/FPSDemo/Item.png
 -- @property item_type enum weapon|consumable|ammo|misc misc
 -- @property weapon enum none|sword|axe|hammer|pickaxe|gun|ak47|taser|lightning|fire|frost|heal none
 -- @property stackable bool false
@@ -50,4 +51,4 @@ end
 
 return Item
 
--- @preset FPS Opus | item
+-- @preset FPS Demo | item

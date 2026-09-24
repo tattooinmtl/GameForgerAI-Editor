@@ -10,11 +10,11 @@ namespace gameforger::editor
 {
 	namespace
 	{
-		constexpr const char* kFpsPlayerScript = "Game/Scripts/fps_player.lua";
-		constexpr const char* kItemScript = "Game/Scripts/items.lua";
-		constexpr const char* kHealthScript = "Game/Scripts/health.lua";
-		constexpr const char* kEnemyAiScript = "Game/Scripts/enemy_ai.lua";
-		constexpr const char* kGameManagerScript = "Game/Scripts/game_manager.lua";
+		constexpr const char* kFpsPlayerScript = fpsdemo::kPlayer;
+		constexpr const char* kItemScript = fpsdemo::kItems;
+		constexpr const char* kHealthScript = fpsdemo::kHealth;
+		constexpr const char* kEnemyAiScript = fpsdemo::kEnemy;
+		constexpr const char* kGameManagerScript = fpsdemo::kGameManager;
 
 		// One primitive of a hand or weapon model, in its group's local
 		// space. `scale` is the primitive's half-extent (primitives are
@@ -106,7 +106,7 @@ namespace gameforger::editor
 		std::vector<WeaponSpec> weaponSpecs()
 		{
 			std::vector<WeaponSpec> weapons;
-			weapons.push_back({"sword", "Sword", "Game/Models/iconpack1/128/SwordT2.png", {42.0F, 0.0F, 16.0F},
+			weapons.push_back({"sword", "Sword", "Game/Icons/FPSDemo/Sword.png", {42.0F, 0.0F, 16.0F},
 				{
 					{"Grip", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.055F, 0.012F}, kLeather},
 					{"Pommel", PrimitiveType::Sphere, {0.0F, -0.063F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.017F, 0.017F, 0.017F}, kGold},
@@ -116,7 +116,7 @@ namespace gameforger::editor
 					{"Tip", PrimitiveType::Cone, {0.0F, 0.635F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.019F, 0.035F, 0.0045F}, kSteel},
 				},
 				{}, false, 0.8F});
-			weapons.push_back({"axe", "Axe", "Game/Models/iconpack1/128/AxeT1.png", {36.0F, 0.0F, 12.0F},
+			weapons.push_back({"axe", "Axe", "Game/Icons/FPSDemo/Axe.png", {36.0F, 0.0F, 12.0F},
 				{
 					{"Handle", PrimitiveType::Cylinder, {0.0F, 0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.013F, 0.21F, 0.013F}, kWood},
 					{"Cap", PrimitiveType::Cylinder, {0.0F, -0.075F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.016F, 0.008F, 0.016F}, kDarkSteel},
@@ -125,7 +125,7 @@ namespace gameforger::editor
 					{"Poll", PrimitiveType::Cube, {-0.022F, 0.315F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.022F, 0.011F}, kDarkSteel},
 				},
 				{}, false, 0.85F});
-			weapons.push_back({"hammer", "War Hammer", "Game/Models/iconpack1/128/HammerT1.png", {36.0F, 0.0F, 10.0F},
+			weapons.push_back({"hammer", "War Hammer", "Game/Icons/FPSDemo/Hammer.png", {36.0F, 0.0F, 10.0F},
 				{
 					{"Handle", PrimitiveType::Cylinder, {0.0F, 0.15F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.23F, 0.014F}, kDarkWood},
 					{"Wrap", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.016F, 0.06F, 0.016F}, kLeather},
@@ -134,7 +134,7 @@ namespace gameforger::editor
 					{"FaceR", PrimitiveType::Cylinder, {0.09F, 0.39F, 0.0F}, {0.0F, 0.0F, 90.0F}, {0.050F, 0.010F, 0.050F}, kSteel},
 				},
 				{}, false, 0.78F, {0.0F, 0.0F, 0.0F}, true, {0.0F, 0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, false});
-			weapons.push_back({"pickaxe", "Pickaxe", "Game/Icons/Weapons/Pickaxe.png", {36.0F, 0.0F, 10.0F},
+			weapons.push_back({"pickaxe", "Pickaxe", "Game/Icons/FPSDemo/Pickaxe.png", {36.0F, 0.0F, 10.0F},
 				{
 					{"Handle", PrimitiveType::Cylinder, {0.0F, 0.15F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.23F, 0.012F}, kWood},
 					{"Socket", PrimitiveType::Cube, {0.0F, 0.37F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.022F, 0.024F, 0.020F}, kDarkSteel},
@@ -142,7 +142,7 @@ namespace gameforger::editor
 					{"PickR", PrimitiveType::Cone, {0.095F, 0.355F, 0.0F}, {0.0F, 0.0F, -100.0F}, {0.015F, 0.080F, 0.012F}, kSteel},
 				},
 				{}, false, 0.78F, {0.0F, 0.0F, 0.0F}, true, {0.0F, 0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, false});
-			weapons.push_back({"gun", "Pistol", "Game/Icons/Weapons/Pistol.png", {0.0F, 0.0F, 0.0F},
+			weapons.push_back({"gun", "Pistol", "Game/Icons/FPSDemo/Pistol.png", {0.0F, 0.0F, 0.0F},
 				{
 					{"Grip", PrimitiveType::Cube, {0.0F, -0.005F, -0.004F}, {-14.0F, 0.0F, 0.0F}, {0.014F, 0.045F, 0.021F}, kGunMetal},
 					{"Frame", PrimitiveType::Cube, {0.0F, 0.043F, 0.040F}, {0.0F, 0.0F, 0.0F}, {0.0135F, 0.011F, 0.060F}, kGunMetal},
@@ -153,7 +153,7 @@ namespace gameforger::editor
 					{"SightR", PrimitiveType::Cube, {0.0F, 0.079F, -0.022F}, {0.0F, 0.0F, 0.0F}, {0.008F, 0.004F, 0.003F}, kGunMetal},
 				},
 				{0.0F, 0.064F, 0.142F}, true});
-			weapons.push_back({"ak47", "AK-47", "Game/Icons/Weapons/AK47.png", {0.0F, 0.0F, 0.0F},
+			weapons.push_back({"ak47", "AK-47", "Game/Icons/FPSDemo/AK47.png", {0.0F, 0.0F, 0.0F},
 				{
 					{"PistolGrip", PrimitiveType::Cube, {0.0F, -0.008F, -0.002F}, {-18.0F, 0.0F, 0.0F}, {0.014F, 0.042F, 0.019F}, kDarkWood},
 					{"Receiver", PrimitiveType::Cube, {0.0F, 0.052F, 0.080F}, {0.0F, 0.0F, 0.0F}, {0.021F, 0.030F, 0.150F}, kGunMetal},
@@ -170,7 +170,7 @@ namespace gameforger::editor
 				},
 				{0.0F, 0.058F, 0.578F}, true, 0.8F, {0.0F, 0.0F, 0.08F}, true, {0.0F, 0.020F, 0.300F},
 				{90.0F, 0.0F, 0.0F}, false});
-			weapons.push_back({"taser", "Taser", "Game/Icons/Weapons/Taser.png", {0.0F, 0.0F, 0.0F},
+			weapons.push_back({"taser", "Taser", "Game/Icons/FPSDemo/Taser.png", {0.0F, 0.0F, 0.0F},
 				{
 					{"Grip", PrimitiveType::Cube, {0.0F, -0.004F, -0.004F}, {-14.0F, 0.0F, 0.0F}, {0.015F, 0.044F, 0.021F}, kGunMetal},
 					{"Body", PrimitiveType::Cube, {0.0F, 0.052F, 0.050F}, {0.0F, 0.0F, 0.0F}, {0.020F, 0.024F, 0.068F}, kTaserYellow},
@@ -181,7 +181,7 @@ namespace gameforger::editor
 					{"Laser", PrimitiveType::Cube, {0.0F, 0.024F, 0.100F}, {0.0F, 0.0F, 0.0F}, {0.006F, 0.005F, 0.018F}, {0.8F, 0.1F, 0.1F}},
 				},
 				{0.0F, 0.050F, 0.160F}, true});
-			weapons.push_back({"lightning", "Storm Caster", "Game/Icons/Weapons/ChainLightning.png", {10.0F, 0.0F, 0.0F},
+			weapons.push_back({"lightning", "Storm Caster", "Game/Icons/FPSDemo/ChainLightning.png", {10.0F, 0.0F, 0.0F},
 				{
 					{"Rod", PrimitiveType::Cylinder, {0.0F, 0.10F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.17F, 0.012F}, kStormPurple},
 					{"Wrap", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.015F, 0.05F, 0.015F}, kGold},
@@ -207,11 +207,11 @@ namespace gameforger::editor
 					{"ClawC", PrimitiveType::Cone, {-0.015F, 0.315F, -0.026F}, {-25.0F, 0.0F, 12.0F}, {0.006F, 0.040F, 0.006F}, metal},
 				};
 			};
-			weapons.push_back({"fire", "Fire Caster", "Game/Icons/Weapons/FireCaster.png", {10.0F, 0.0F, 0.0F},
+			weapons.push_back({"fire", "Fire Caster", "Game/Icons/FPSDemo/FireCaster.png", {10.0F, 0.0F, 0.0F},
 				caster({0.38F, 0.09F, 0.06F}, kCopper, {1.0F, 0.42F, 0.08F}), {0.0F, 0.325F, 0.0F}, true});
-			weapons.push_back({"frost", "Frost Caster", "Game/Icons/Weapons/FrostCaster.png", {10.0F, 0.0F, 0.0F},
+			weapons.push_back({"frost", "Frost Caster", "Game/Icons/FPSDemo/FrostCaster.png", {10.0F, 0.0F, 0.0F},
 				caster({0.70F, 0.82F, 0.95F}, kSilver, {0.55F, 0.85F, 1.0F}), {0.0F, 0.325F, 0.0F}, true});
-			weapons.push_back({"heal", "Life Caster", "Game/Icons/Weapons/LifeCaster.png", {10.0F, 0.0F, 0.0F},
+			weapons.push_back({"heal", "Life Caster", "Game/Icons/FPSDemo/LifeCaster.png", {10.0F, 0.0F, 0.0F},
 				caster({0.26F, 0.42F, 0.18F}, kGold, {0.40F, 1.0F, 0.50F}), {0.0F, 0.325F, 0.0F}, true});
 			return weapons;
 		}
@@ -526,8 +526,8 @@ namespace gameforger::editor
 			builder.set(weaponNode, "Entity", "active", false);
 		}
 
-		// The FPS Opus preset on the player.
-		for (const std::string& script : fpsOpusPlayerScripts())
+		// The FPS Demo preset on the player.
+		for (const std::string& script : fpsDemoPlayerScripts())
 		{
 			builder.attach(result.playerName, script);
 		}
@@ -551,8 +551,8 @@ namespace gameforger::editor
 		if (builder.missingScripts() > 0)
 		{
 			result.message += " " + std::to_string(builder.missingScripts()) +
-				" script(s) could not be attached - check Game/Scripts/ has fps_player.lua, projectiles.lua, "
-				"effects.lua, xp_system.lua, health.lua, items.lua, enemy_ai.lua and game_manager.lua.";
+				" script(s) could not be attached - the FPS Demo kit is missing from this project "
+				"(File > Import FPS Demo Kit into This Project).";
 		}
 		return result;
 	}

@@ -1,4 +1,4 @@
--- Visual effects for the FPS Opus preset: a small particle system plus a
+-- Visual effects for the FPS Demo preset: a small particle system plus a
 -- library of named effects (spell casts, trails, elemental impacts, heals,
 -- level-ups, critical hits). Pure visuals - no damage happens here.
 --
@@ -227,4 +227,4 @@ end
 
 return Effects
 
--- @preset FPS Opus | player
+-- @preset FPS Demo | player

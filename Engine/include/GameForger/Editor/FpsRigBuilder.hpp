@@ -7,6 +7,7 @@
 
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
 
 namespace gameforger::editor
 {
@@ -62,11 +63,10 @@ namespace gameforger::editor
 	// (skipped by raycasts and weapon hits).
 	FpsRigBuildResult buildFpsPlayerRig(EditorScene& scene, AICommandBus& commandBus, const FpsRigOptions& options);
 
-	// The FPS Opus preset: the scripts that go on the player, in attach order.
-	inline const std::vector<std::string>& fpsOpusPlayerScripts()
+	// The FPS Demo preset: the scripts that go on the player, in attach order.
+	inline const std::vector<std::string>& fpsDemoPlayerScripts()
 	{
-		static const std::vector<std::string> scripts{"Game/Scripts/fps_player.lua", "Game/Scripts/projectiles.lua",
-			"Game/Scripts/effects.lua", "Game/Scripts/xp_system.lua", "Game/Scripts/health.lua"};
+		static const std::vector<std::string> scripts(fpsdemo::kPlayerScripts.begin(), fpsdemo::kPlayerScripts.end());
 		return scripts;
 	}
 

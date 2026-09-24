@@ -13,7 +13,7 @@
 -- Create one with GameObject > Game Manager (Create > FPS Demo Arena adds
 -- one for you). File > Build Game makes this scene the one Runtime loads.
 --
--- @property game_title string GameForgerAI - Opus FPS Demo
+-- @property game_title string GameForgerAI - FPS Demo
 -- @property splash_logo image Game/Branding/logo.jpg
 -- @property splash_seconds number 2.5
 -- @property intro_message string Grab a weapon (E), open your bag (I), level up to unlock the Fire, Frost and Life Casters!
@@ -35,4 +35,4 @@ end
 
 return GameManager
 
--- @preset FPS Opus | manager
+-- @preset FPS Demo | manager

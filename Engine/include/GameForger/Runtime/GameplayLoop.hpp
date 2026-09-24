@@ -10,6 +10,7 @@
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
 
 namespace gameforger::editor
 {
@@ -223,7 +224,7 @@ namespace gameforger::editor
 	// stored in the inventory - its item name/icon/type/weapon come from
 	// the script's own @property values (per object, see
 	// SceneEntity::scriptProperties).
-	inline constexpr const char* kItemScriptPath = "Game/Scripts/items.lua";
+	inline constexpr const char* kItemScriptPath = fpsdemo::kItems;
 	inline constexpr int kInventorySlotCount = 24;
 	inline constexpr int kHotbarSlotCount = 8;
 

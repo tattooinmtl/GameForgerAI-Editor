@@ -612,9 +612,9 @@ void testScriptPropertySerialization()
 {
 	SceneEntity entity;
 	entity.name = "Pickup \"One\"";
-	entity.scripts.push_back("Game/Scripts/items.lua");
-	entity.scriptProperties.push_back({"Game/Scripts/items.lua", "icon", "Game/Icons/My Icon.png"});
-	entity.scriptProperties.push_back({"Game/Scripts/items.lua", "item_name", "Axe \"of\" Doom"});
+	entity.scripts.push_back("Game/Scripts/FPSDemo/items.lua");
+	entity.scriptProperties.push_back({"Game/Scripts/FPSDemo/items.lua", "icon", "Game/Icons/My Icon.png"});
+	entity.scriptProperties.push_back({"Game/Scripts/FPSDemo/items.lua", "item_name", "Axe \"of\" Doom"});
 	const std::filesystem::path path = "test_script_properties.gfprod";
 	TEST_ASSERT(saveScene(path, {entity}).success, "save scene with script properties");
 	const SceneLoadResult loaded = loadScene(path);
@@ -747,9 +747,9 @@ return Item
 void testFpsRigBuilder()
 {
 	const std::vector<std::string> stubScripts{
-		"Game/Scripts/fps_player.lua", "Game/Scripts/items.lua", "Game/Scripts/health.lua", "Game/Scripts/enemy_ai.lua",
-		"Game/Scripts/projectiles.lua", "Game/Scripts/effects.lua", "Game/Scripts/xp_system.lua",
-		"Game/Scripts/game_manager.lua"};
+		"Game/Scripts/FPSDemo/fps_player.lua", "Game/Scripts/FPSDemo/items.lua", "Game/Scripts/FPSDemo/health.lua", "Game/Scripts/FPSDemo/enemy.lua",
+		"Game/Scripts/FPSDemo/projectiles.lua", "Game/Scripts/FPSDemo/effects.lua", "Game/Scripts/FPSDemo/xp_system.lua",
+		"Game/Scripts/FPSDemo/game_manager.lua"};
 	std::vector<std::string> createdStubs;
 	for (const std::string& path : stubScripts)
 	{
@@ -783,11 +783,11 @@ void testFpsRigBuilder()
 
 	const SceneEntity* player = fx.find(result.playerName);
 	TEST_ASSERT(player != nullptr && hasTag(*player, "Player"), "player tagged Player");
-	for (const std::string& script : fpsOpusPlayerScripts())
+	for (const std::string& script : fpsDemoPlayerScripts())
 	{
-		TEST_ASSERT(hasScript(*player, script), "player has the FPS Opus script " + script);
+		TEST_ASSERT(hasScript(*player, script), "player has the FPS Demo script " + script);
 	}
-	const ScriptPropertyOverride* rigName = findScriptProperty(*player, "Game/Scripts/fps_player.lua", "rig_name");
+	const ScriptPropertyOverride* rigName = findScriptProperty(*player, "Game/Scripts/FPSDemo/fps_player.lua", "rig_name");
 	TEST_ASSERT(rigName != nullptr && rigName->value == result.rigName, "player points at its rig");
 	TEST_ASSERT(player->cameraRig.lockCursor, "cursor lock on for mouse look");
 
@@ -1028,7 +1028,7 @@ return B
 }
 
 // ----------------------------------------------------------------------------
-// End-to-end: the REAL fps_player.lua / items.lua / health.lua / enemy_ai.lua
+// End-to-end: the REAL FPS Demo kit scripts (fps_player / items / health / enemy ...)
 // (from the source tree) driving a real demo arena for a few hundred frames
 // with simulated input - walking, picking up weapons, switching, firing,
 // melee. Catches Lua runtime errors the C++ build can't.
@@ -1072,18 +1072,13 @@ void testFpsPlayerEndToEnd()
 	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
 	return;
 #else
-	const std::filesystem::path sourceScripts = std::filesystem::path(GAMEFORGER_SOURCE_DIR) / "Game" / "Scripts";
+	// A fresh project that gets the FPS Demo kit the same way any other
+	// project does - by importing the kit folder, nothing else.
 	const std::filesystem::path projectRoot = "fps_e2e_project";
 	std::filesystem::remove_all(projectRoot);
-	std::filesystem::create_directories(projectRoot / "Game" / "Scripts");
-	for (const char* name : {"fps_player.lua", "items.lua", "health.lua", "enemy_ai.lua", "projectiles.lua",
-			 "effects.lua", "xp_system.lua", "game_manager.lua"})
-	{
-		std::error_code copyError;
-		std::filesystem::copy_file(sourceScripts / name, projectRoot / "Game" / "Scripts" / name,
-			std::filesystem::copy_options::overwrite_existing, copyError);
-		TEST_ASSERT(!copyError, std::string("copy real script ") + name);
-	}
+	const FpsDemoKitImportResult imported =
+		importFpsDemoKit(std::filesystem::path(GAMEFORGER_SOURCE_DIR), projectRoot, false);
+	TEST_ASSERT(imported.success && imported.filesCopied >= 8, "import the FPS Demo kit: " + imported.message);
 
 	EditorScene scene(projectRoot);
 	AICommandBus bus;
@@ -1124,13 +1119,13 @@ return D
 	const SceneEntity* managerEntity = nullptr;
 	for (const SceneEntity& entity : scene.entities())
 	{
-		if (hasScript(entity, "Game/Scripts/game_manager.lua"))
+		if (hasScript(entity, "Game/Scripts/FPSDemo/game_manager.lua"))
 		{
 			managerEntity = &entity;
 		}
 	}
 	TEST_ASSERT(managerEntity != nullptr, "demo arena has a Game Manager");
-	TEST_ASSERT(ScriptRuntime::scriptPropertyText(*managerEntity, "Game/Scripts/game_manager.lua", "splash_logo", projectRoot) ==
+	TEST_ASSERT(ScriptRuntime::scriptPropertyText(*managerEntity, "Game/Scripts/FPSDemo/game_manager.lua", "splash_logo", projectRoot) ==
 			"Game/Branding/logo.jpg",
 		"Game Manager's splash logo readable without running scripts");
 
@@ -1160,7 +1155,7 @@ return D
 	TEST_ASSERT(errors.empty(), "no errors starting scripts: " + (errors.empty() ? std::string() : errors.front()));
 
 	const int playerId = scene.findEntity(rig.playerName)->id;
-	const std::string playerScript = "Game/Scripts/fps_player.lua";
+	const std::string playerScript = "Game/Scripts/FPSDemo/fps_player.lua";
 	std::size_t mostBeams = 0;
 	const auto frames = [&](const int count)
 	{
@@ -1264,17 +1259,17 @@ return D
 	(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "rotation", glm::vec3(0.0F)});
 	input.keysPressed = {"1"};
 	frames(30);
-	const float healthBefore = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/health.lua", "health", -1.0F);
+	const float healthBefore = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/FPSDemo/health.lua", "health", -1.0F);
 	input.leftMouse = true;
 	frames(40);
 	input.leftMouse = false;
 	frames(10);
-	const float healthAfter = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/health.lua", "health", -1.0F);
+	const float healthAfter = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/FPSDemo/health.lua", "health", -1.0F);
 	TEST_ASSERT(healthBefore > 0.0F && healthAfter < healthBefore, "the sword damages the dummy in front of you");
 
 	const std::string driver = "Game/Scripts/test_driver.lua";
-	const std::string health = "Game/Scripts/health.lua";
-	const std::string xpScript = "Game/Scripts/xp_system.lua";
+	const std::string health = "Game/Scripts/FPSDemo/health.lua";
+	const std::string xpScript = "Game/Scripts/FPSDemo/xp_system.lua";
 	const auto slotOf = [&gameplay](const std::string& weapon)
 	{
 		for (int index = 0; index < static_cast<int>(gameplay.inventoryItems.size()); ++index)

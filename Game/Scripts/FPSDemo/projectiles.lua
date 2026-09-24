@@ -1,4 +1,4 @@
--- Spell projectiles for the FPS Opus preset (the Storm, Fire and Frost
+-- Spell projectiles for the FPS Demo preset (the Storm, Fire and Frost
 -- Casters). fps_player.lua launches one with:
 --     self.entity:send("launch_projectile", spec)
 -- spec = {origin=, direction=, element="fire"|"frost"|"electric",
@@ -180,4 +180,4 @@ end
 
 return Projectiles
 
--- @preset FPS Opus | player
+-- @preset FPS Demo | player

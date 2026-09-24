@@ -35,6 +35,7 @@
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
 #include "GameForger/Runtime/GameplayHud.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
 
 #include "GameMenu.hpp"
 #include "RuntimeHud.hpp"
@@ -313,7 +314,7 @@ namespace
 
 namespace
 {
-	constexpr const char* kGameManagerScript = "Game/Scripts/game_manager.lua";
+	constexpr const char* kGameManagerScript = gameforger::editor::fpsdemo::kGameManager;
 
 	// The scene's Game Manager (an object with game_manager.lua) - its
 	// Inspector values configure the built game: window title, boot splash

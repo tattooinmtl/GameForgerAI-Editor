@@ -64,6 +64,7 @@
 #include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Editor/ViewportRenderer.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
 #include "GameForger/Runtime/GameplayHud.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
@@ -134,7 +135,7 @@ namespace
     using gameforger::editor::composeEntityPivotFrame;
     using gameforger::editor::buildFpsPlayerRig;
     using gameforger::editor::createGameManager;
-    using gameforger::editor::fpsOpusPlayerScripts;
+    using gameforger::editor::fpsDemoPlayerScripts;
     using gameforger::editor::dropInventoryItem;
     using gameforger::editor::ensureInventorySlots;
     using gameforger::editor::entityProvidesInventory;
@@ -1426,7 +1427,7 @@ namespace
     };
 
     // Scripts grouped by their `-- @preset <Name> | <role>` tag (see
-    // ScriptRuntime::ScriptPresetTag), e.g. "FPS Opus" -> fps_player.lua
+    // ScriptRuntime::ScriptPresetTag), e.g. "FPS Demo" -> fps_player.lua
     // (player), health.lua (damageable), items.lua (item)... Re-scanned at
     // most once a second.
     struct PresetScript
@@ -1465,7 +1466,7 @@ namespace
 
     // The preset scripts that belong on the same object as a "player" /
     // "damageable" script (everything but items/managers), in the order the
-    // FPS Opus preset lists them when it's that preset.
+    // FPS Demo preset lists them when it's that preset.
     std::vector<std::string> presetLinkableScripts(
         const std::filesystem::path& projectRoot, const std::string& presetName)
     {
@@ -1476,7 +1477,7 @@ namespace
         {
             return paths;
         }
-        for (const std::string& known : fpsOpusPlayerScripts())
+        for (const std::string& known : fpsDemoPlayerScripts())
         {
             for (const PresetScript& script : found->second)
             {
@@ -1762,6 +1763,31 @@ namespace
                 }
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Import FPS Demo Kit into This Project"))
+            {
+                // The kit's source: the engine folder this editor was built
+                // from (found by walking up from the editor executable).
+                std::array<wchar_t, MAX_PATH> exePath{};
+                GetModuleFileNameW(nullptr, exePath.data(), static_cast<DWORD>(exePath.size()));
+                const std::optional<std::filesystem::path> kitSource =
+                    gameforger::editor::findFpsDemoKitSource(std::filesystem::path(exePath.data()).parent_path());
+                if (!kitSource.has_value())
+                {
+                    logMessage(console, LogLevel::Error,
+                        "Could not find the FPS Demo kit (Game/Scripts/FPSDemo) next to or above the editor.");
+                }
+                else
+                {
+                    const gameforger::editor::FpsDemoKitImportResult imported =
+                        gameforger::editor::importFpsDemoKit(*kitSource, projectRoot, false);
+                    logMessage(console, imported.success ? LogLevel::Info : LogLevel::Error, imported.message);
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Copies the FPS Demo scripts (Game/Scripts/FPSDemo) and their icons "
+                    "(Game/Icons/FPSDemo) into this project. Files already here are kept.");
+            }
             if (ImGui::MenuItem("Build Game..."))
             {
                 // "Build" = export the current scene to the .gfai extension
@@ -3034,8 +3060,8 @@ namespace
             {
                 ImDrawList* overlayDrawList = ImGui::GetWindowDrawList();
                 const float timeSeconds = static_cast<float>(ImGui::GetTime());
-                constexpr std::array<const char*, 2> kDetectionScriptPaths{
-                    "Game/Scripts/enemy_ai.lua", "Game/Scripts/ranged_attacker.lua"};
+                constexpr std::array<const char*, 3> kDetectionScriptPaths{
+                    "Game/Scripts/enemy_ai.lua", "Game/Scripts/ranged_attacker.lua", gameforger::editor::fpsdemo::kEnemy};
                 for (const SceneEntity& other : scene.entities())
                 {
                     if (other.scripts.empty())
@@ -4443,7 +4469,7 @@ namespace
         {
             ImGui::Text("Shape: %s", primitiveTypeName(entity.primitive));
         }
-        if (hasScript(entity, "Game/Scripts/game_manager.lua"))
+        if (hasScript(entity, gameforger::editor::fpsdemo::kGameManager))
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98F, 0.62F, 0.1F, 1.0F));
             ImGui::TextWrapped(
@@ -5719,10 +5745,10 @@ namespace
                                 }
                             }
                         }
-                        if (linked && hasScript(entity, "Game/Scripts/fps_player.lua"))
+                        if (linked && hasScript(entity, gameforger::editor::fpsdemo::kPlayer))
                         {
                             (void)commandBus.execute(SetPropertyCommand{entity.name, "ScriptProperty",
-                                std::string("Game/Scripts/health.lua#is_player"), std::string("true")});
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#is_player"), std::string("true")});
                         }
                         logMessage(console, LogLevel::Info,
                             linked ? presetName + ": linked every compatible script to '" + entity.name + "'."
@@ -5895,7 +5921,7 @@ namespace
                 // A plain marker script (items.lua, health.lua) - attaches
                 // without turning the Collider on.
                 Marker,
-                // Several scripts at once (the whole FPS Opus player set).
+                // Several scripts at once (the whole FPS Demo player set).
                 Bundle
             };
             struct ScriptPreset
@@ -5961,8 +5987,8 @@ namespace
                      "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
                      "speeds/power-charge-time are editable in the script itself.",
                      PresetKind::Utility},
-                    // ---- FPS Opus preset (drawn under its own separator) ----
-                    {"FPS Opus - full player set",
+                    // ---- FPS Demo preset (drawn under its own separator) ----
+                    {"FPS Demo - full player set",
                      nullptr,
                      "Everything the player needs, in one go: fps_player.lua (movement, camera, inventory, 11 "
                      "weapons + hands), projectiles.lua (spell projectiles), effects.lua (particles), "
@@ -5970,36 +5996,36 @@ namespace
                      "respawn). The hands rig comes from GameObject > FPS Player (Hands + Weapons).",
                      PresetKind::Bundle},
                     {"FPS Player (fps_player.lua)",
-                     "Game/Scripts/fps_player.lua",
+                     gameforger::editor::fpsdemo::kPlayer,
                      "Movement, camera, inventory (E / I / 1-8) and the weapons with first-person hands. Works "
-                     "alone, but spells, effects, XP and healing need the rest of the FPS Opus set.",
+                     "alone, but spells, effects, XP and healing need the rest of the FPS Demo set.",
                      PresetKind::MovementController},
                     {"Projectiles (projectiles.lua)",
-                     "Game/Scripts/projectiles.lua",
+                     gameforger::editor::fpsdemo::kProjectiles,
                      "Spell projectiles for the Storm/Fire/Frost Casters - chain lightning, explosions + burning, "
                      "freezing. Goes on the player.",
                      PresetKind::Marker},
                     {"Effects (effects.lua)",
-                     "Game/Scripts/effects.lua",
+                     gameforger::editor::fpsdemo::kEffects,
                      "Particles: spell casts, trails, elemental impacts, heals, level-ups, crits. Goes on the player.",
                      PresetKind::Marker},
                     {"XP System (xp_system.lua)",
-                     "Game/Scripts/xp_system.lua",
+                     gameforger::editor::fpsdemo::kXpSystem,
                      "XP from every hit; weapon levels boost damage, fire rate, accuracy, ammo and crits; player "
                      "levels unlock the Fire, Frost and Life Casters. Goes on the player.",
                      PresetKind::Marker},
                     {"Health (health.lua)",
-                     "Game/Scripts/health.lua",
+                     gameforger::editor::fpsdemo::kHealth,
                      "Lets weapons damage this object; health bar, damage numbers, burning/frozen states. On the "
                      "player, tick is_player for the HUD bar, healing and respawn.",
                      PresetKind::Marker},
                     {"Inventory Item (items.lua)",
-                     "Game/Scripts/items.lua",
+                     gameforger::editor::fpsdemo::kItems,
                      "Makes this object pick-up-able with E into the inventory. Set its name, icon (Change "
                      "Icon... picks one from your PC), type and weapon in the Scripts section afterwards.",
                      PresetKind::Marker},
                     {"Game Manager (game_manager.lua)",
-                     "Game/Scripts/game_manager.lua",
+                     gameforger::editor::fpsdemo::kGameManager,
                      "The built game's title, splash logo (Change Image...) and intro message - put it on one "
                      "object per scene (or use GameObject > Game Manager).",
                      PresetKind::Marker},
@@ -6033,7 +6059,7 @@ namespace
                     };
                     if (presets[index].kind == PresetKind::Bundle)
                     {
-                        ImGui::SeparatorText("FPS Opus preset");
+                        ImGui::SeparatorText("FPS Demo preset");
                     }
                     if (ImGui::Checkbox(presets[index].label, &presetSelected[index]) && !wasSelected &&
                         isExclusive(presets[index].kind))
@@ -6206,7 +6232,7 @@ namespace
                         if (preset.kind == PresetKind::Bundle)
                         {
                             int attachedCount = 0;
-                            for (const std::string& script : fpsOpusPlayerScripts())
+                            for (const std::string& script : fpsDemoPlayerScripts())
                             {
                                 if (commandBus.execute(AttachScriptCommand{scriptCreator.targetEntityName, script}).success)
                                 {
@@ -6214,11 +6240,11 @@ namespace
                                 }
                             }
                             (void)commandBus.execute(SetPropertyCommand{scriptCreator.targetEntityName, "ScriptProperty",
-                                std::string("Game/Scripts/health.lua#is_player"), std::string("true")});
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#is_player"), std::string("true")});
                             (void)commandBus.execute(SetPropertyCommand{scriptCreator.targetEntityName, "ScriptProperty",
-                                std::string("Game/Scripts/health.lua#destroy_on_death"), std::string("false")});
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#destroy_on_death"), std::string("false")});
                             result = {attachedCount > 0, false,
-                                "Attached " + std::to_string(attachedCount) + " FPS Opus script(s)."};
+                                "Attached " + std::to_string(attachedCount) + " FPS Demo script(s)."};
                         }
                         else if (preset.kind != PresetKind::ColliderOnly)
                         {

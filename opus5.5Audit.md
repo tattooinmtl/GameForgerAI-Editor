@@ -93,6 +93,12 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **NEW H7 🟠 (fixed) Blank runtime text.** The bundled `Thuast Demo.otf` is CFF-flavoured, which stb_truetype can't bake, so the runtime pause menu never showed any text. It now falls back to a TrueType font.
 - **NEW H8 🟡 (fixed) Stale saves hijacked the startup scene.** A `Game/Saves` save always won over Project.json. It now only resumes when `save.meta.json` names the current startup scene; other saves are ignored, not deleted.
 
+### 2.7 Update 2026-09-24 (Alpha 0.82)
+
+- **B17 fixed** (see its entry above): `getRight()` now points right; regression-tested against the real camera.
+- **Demo scripts packaged:** the FPS Demo kit lives in `Game/Scripts/FPSDemo/` + `Game/Icons/FPSDemo/`, with its own `enemy.lua`, and can be copied into any project with File > Import FPS Demo Kit into This Project. The small starter scripts in `Game/Scripts/` are separate (`enemy_ai.lua` restored to its original).
+- **Plan status:** Phases 0-8 (§6) are still **not started** - waiting for the user's "start Phase 0". Phase 2's menu work should keep the new File menu item next to Build Game.
+
 ## 3. Findings — duplication and things that don't make sense
 
 | # | Finding | Where |

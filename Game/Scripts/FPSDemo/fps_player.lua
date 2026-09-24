@@ -35,10 +35,10 @@
 -- DAMAGE goes to anything with a script that handles on_damage - add
 -- health.lua to enemies, props or rocks. It doesn't need a tag.
 --
--- FPS OPUS PRESET - these scripts work together, all on the player unless
+-- FPS DEMO KIT - these scripts work together, all on the player unless
 -- noted: fps_player.lua, projectiles.lua, effects.lua, xp_system.lua,
 -- health.lua (also on enemies), items.lua (on pickups), game_manager.lua (on
--- the Game Manager). Tick "Link all FPS Opus scripts" in the Inspector to
+-- the Game Manager). Tick "Link all FPS Demo scripts" in the Inspector to
 -- attach the player's set in one go.
 --
 -- @property walk_speed number 4.5
@@ -673,7 +673,7 @@ function FpsPlayer:fire_spell(w, eye, forward)
     if not handled then
         -- Without projectiles.lua the Storm Caster falls back to its original
         -- instant chain lightning; other casters do a plain instant hit.
-        self:warn_once("projectiles", "Attach projectiles.lua to the player (FPS Opus preset) for spell projectiles.")
+        self:warn_once("projectiles", "Attach projectiles.lua to the player (FPS Demo preset) for spell projectiles.")
         if w.element == "electric" then
             self:fire_chain(w, eye, forward)
         else
@@ -875,4 +875,4 @@ end
 
 return FpsPlayer
 
--- @preset FPS Opus | player
+-- @preset FPS Demo | player

@@ -150,7 +150,7 @@ namespace gameforger::editor
 			const std::filesystem::path& fullScriptPath);
 
 		// A script's `-- @preset <Preset Name> | <role>` line - scripts that
-		// belong together (e.g. the "FPS Opus" set). `role` says where the
+		// belong together (e.g. the "FPS Demo" set). `role` says where the
 		// script goes: "player" scripts all go on the player object, others
 		// ("item", "damageable", "manager") on other objects. Empty name =
 		// not part of a preset.

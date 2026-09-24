@@ -211,16 +211,16 @@
         "lockCursor": true
       },
       "scripts": [
-        "Game/Scripts/fps_player.lua",
-        "Game/Scripts/projectiles.lua",
-        "Game/Scripts/effects.lua",
-        "Game/Scripts/xp_system.lua",
-        "Game/Scripts/health.lua"
+        "Game/Scripts/FPSDemo/fps_player.lua",
+        "Game/Scripts/FPSDemo/projectiles.lua",
+        "Game/Scripts/FPSDemo/effects.lua",
+        "Game/Scripts/FPSDemo/xp_system.lua",
+        "Game/Scripts/FPSDemo/health.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/fps_player.lua", "name": "rig_name", "value": "FPSRig"},
-        {"script": "Game/Scripts/health.lua", "name": "is_player", "value": "true"},
-        {"script": "Game/Scripts/health.lua", "name": "destroy_on_death", "value": "false"}
+        {"script": "Game/Scripts/FPSDemo/fps_player.lua", "name": "rig_name", "value": "FPSRig"},
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "is_player", "value": "true"},
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "destroy_on_death", "value": "false"}
       ],
       "animation": {
         "enabled": false,
@@ -14827,13 +14827,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Sword"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Models/iconpack1/128/SwordT2.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "sword"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Sword"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Sword.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "sword"}
       ],
       "animation": {
         "enabled": false,
@@ -15578,13 +15578,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Axe"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Models/iconpack1/128/AxeT1.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "axe"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Axe"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Axe.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "axe"}
       ],
       "animation": {
         "enabled": false,
@@ -16223,13 +16223,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "War Hammer"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Models/iconpack1/128/HammerT1.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "hammer"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "War Hammer"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Hammer.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "hammer"}
       ],
       "animation": {
         "enabled": false,
@@ -16868,13 +16868,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Pickaxe"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/Pickaxe.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "pickaxe"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Pickaxe"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Pickaxe.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "pickaxe"}
       ],
       "animation": {
         "enabled": false,
@@ -17407,13 +17407,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Pistol"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/Pistol.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "gun"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Pistol"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Pistol.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "gun"}
       ],
       "animation": {
         "enabled": false,
@@ -18264,13 +18264,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "AK-47"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/AK47.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "ak47"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "AK-47"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/AK47.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "ak47"}
       ],
       "animation": {
         "enabled": false,
@@ -19651,13 +19651,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Taser"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/Taser.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "taser"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Taser"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/Taser.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "taser"}
       ],
       "animation": {
         "enabled": false,
@@ -20508,13 +20508,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Storm Caster"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/ChainLightning.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "lightning"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Storm Caster"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/ChainLightning.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "lightning"}
       ],
       "animation": {
         "enabled": false,
@@ -21365,13 +21365,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Fire Caster"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/FireCaster.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "fire"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Fire Caster"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/FireCaster.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "fire"}
       ],
       "animation": {
         "enabled": false,
@@ -22222,13 +22222,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Frost Caster"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/FrostCaster.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "frost"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Frost Caster"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/FrostCaster.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "frost"}
       ],
       "animation": {
         "enabled": false,
@@ -23079,13 +23079,13 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/items.lua"
+        "Game/Scripts/FPSDemo/items.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/items.lua", "name": "item_name", "value": "Life Caster"},
-        {"script": "Game/Scripts/items.lua", "name": "icon", "value": "Game/Icons/Weapons/LifeCaster.png"},
-        {"script": "Game/Scripts/items.lua", "name": "item_type", "value": "weapon"},
-        {"script": "Game/Scripts/items.lua", "name": "weapon", "value": "heal"}
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_name", "value": "Life Caster"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "icon", "value": "Game/Icons/FPSDemo/LifeCaster.png"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "item_type", "value": "weapon"},
+        {"script": "Game/Scripts/FPSDemo/items.lua", "name": "weapon", "value": "heal"}
       ],
       "animation": {
         "enabled": false,
@@ -23936,10 +23936,10 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/health.lua"
+        "Game/Scripts/FPSDemo/health.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/health.lua", "name": "max_health", "value": "150"}
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "150"}
       ],
       "animation": {
         "enabled": false,
@@ -24048,10 +24048,10 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/health.lua"
+        "Game/Scripts/FPSDemo/health.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/health.lua", "name": "max_health", "value": "150"}
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "150"}
       ],
       "animation": {
         "enabled": false,
@@ -24160,11 +24160,11 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/health.lua",
-        "Game/Scripts/enemy_ai.lua"
+        "Game/Scripts/FPSDemo/health.lua",
+        "Game/Scripts/FPSDemo/enemy.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/health.lua", "name": "max_health", "value": "100"}
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "100"}
       ],
       "animation": {
         "enabled": false,
@@ -24273,11 +24273,11 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/health.lua",
-        "Game/Scripts/enemy_ai.lua"
+        "Game/Scripts/FPSDemo/health.lua",
+        "Game/Scripts/FPSDemo/enemy.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/health.lua", "name": "max_health", "value": "100"}
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "100"}
       ],
       "animation": {
         "enabled": false,
@@ -24386,10 +24386,10 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/health.lua"
+        "Game/Scripts/FPSDemo/health.lua"
       ],
       "scriptProperties": [
-        {"script": "Game/Scripts/health.lua", "name": "max_health", "value": "120"}
+        {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "120"}
       ],
       "animation": {
         "enabled": false,
@@ -24499,7 +24499,7 @@
         "lockCursor": false
       },
       "scripts": [
-        "Game/Scripts/game_manager.lua"
+        "Game/Scripts/FPSDemo/game_manager.lua"
       ],
       "scriptProperties": [],
       "animation": {

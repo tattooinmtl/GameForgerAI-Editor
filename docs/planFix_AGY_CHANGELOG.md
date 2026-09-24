@@ -54,6 +54,25 @@
 
 ---
 
+## 1f. Session Log: 2026-09-24 (audit fixes B4, B1, B2, B5, A1, A2 - Alpha 0.83)
+
+Every change, in the order the user asked for them:
+1. **B4 script truncation** (`Editor/src/main.cpp`): `ScriptEditorState::buffer` (fixed 16 KB) -> `std::string text`; `ScriptCreatorState::previewBuffer` (fixed 8 KB) -> `std::string previewText`. New helper `inputTextMultilineString()` (ImGui `CallbackResize`, grows as you type). The Project-browser `.lua` open, the Inspector "Edit" button, the Edit Script modal Save and the AI preview "Save & Attach" all use the full string now.
+2. **B1 double shortcuts** (`main.cpp`): removed the Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y branches from `drawMainMenu`. The one handler left is in `drawEditorPanels`: Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo (it used to undo on Ctrl+Shift+Z too). Kept in `drawEditorPanels` rather than a new `handleEditorShortcuts()` function.
+3. **B2 scene file** (`main.cpp`, `Engine/include/GameForger/Editor/SceneSerializer.hpp`, `Engine/src/Editor/SceneSerializer.cpp`):
+   - New `serializeScene(entities)` = the exact JSON `saveScene` writes (`saveScene` now calls it).
+   - New `SceneDocumentState` (scene text at the last New/Open/Save) + `sceneHasUnsavedChanges`, `saveSceneToPath`, `saveSceneAsDialog`, `saveCurrentScene`. During Play the edit-mode copy (`playMode.savedEntities`) is what is compared and saved.
+   - New Scene clears `currentScenePath`. The editor also starts with an empty path (it used to start pointing at `Castle.gfprod` with an empty scene, so Ctrl+S overwrote Castle).
+   - Save Scene (menu, Ctrl+S, Ctrl+R) with no file opens Save As.
+   - New, Open and closing the window show "Unsaved Changes: Save / Don't Save / Cancel" when the scene differs from the last save. A cancelled Save As counts as Cancel.
+   - File > Build Game is disabled (with a tooltip) until the scene has been saved to a file.
+4. **B5 multi-select** (`main.cpp`): `deleteSelected` / `duplicateSelected` act on every id in `multiSelectedIds` (new helper `selectedEntityNames`). All commands run in one frame, so the undo snapshot groups them into one step. Duplicate selects all the copies.
+5. **A1 Endpoint/Model** (`main.cpp`): removed the dead `endpoint`/`model` text boxes (and their arrays in `AISetupState`). Settings > AI Setup now shows the provider's `endpoint`/`model` read from `Game/AI/Providers.json` (read-only, re-read while the page is open) and an **Open Providers.json** button (opens it with the .json app, Notepad if none).
+6. **A2 Test provider** (`main.cpp`): the probe runs on `AISetupState::testWorker` (same pattern as AI Forge); the button is disabled with "Testing..." while it runs; `pollProviderTest()` (called every frame from `drawSettingsWindow`) shows/logs the result; the thread is joined at shutdown.
+7. **Version** 0.82 -> 0.83 (`CMakeLists.txt`, `README.md`).
+* **Verified:** Debug build of Engine, Tests, Editor, Runtime - zero new warnings on changed lines; `GameForgerTests` 20/20; the editor starts and runs. The manual UI checks from Phase 1 (popup, multi-delete + one Ctrl+Z, Test with network off) are for the user.
+* **Not done (not asked):** B13 (Ctrl+R as a second save key) is unchanged - Ctrl+R now just follows the same Save rules. Ctrl+Y / Ctrl+R over the Viewport still also switch the gizmo mode (Y = universal, R = scale) - separate item, not touched. A3 (provider list written twice) unchanged. No other Phase 1 items (B3, B9, G1).
+
 ## 1e. Session Log: 2026-09-24 (strafe fix + FPS Demo kit packaging - Alpha 0.82)
 
 Every change, in order:

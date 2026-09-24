@@ -562,6 +562,22 @@ namespace gameforger::editor
 		}
 	}
 
+	std::string serializeScene(const std::vector<SceneEntity>& entities)
+	{
+		std::string json = "{\n";
+		json += "  \"format\": \"GameForgerScene\",\n";
+		json += "  \"version\": 8,\n";
+		json += "  \"entities\": [";
+		for (std::size_t index = 0; index < entities.size(); ++index)
+		{
+			json += (index == 0 ? "\n" : ",\n");
+			appendEntity(json, entities[index], "    ");
+		}
+		json += entities.empty() ? "]\n" : "\n  ]\n";
+		json += "}\n";
+		return json;
+	}
+
 	SceneSaveResult saveScene(const std::filesystem::path& filePath, const std::vector<SceneEntity>& entities)
 	{
 		if (filePath.has_parent_path() && !filePath.parent_path().empty())
@@ -574,17 +590,7 @@ namespace gameforger::editor
 			}
 		}
 
-		std::string json = "{\n";
-		json += "  \"format\": \"GameForgerScene\",\n";
-		json += "  \"version\": 8,\n";
-		json += "  \"entities\": [";
-		for (std::size_t index = 0; index < entities.size(); ++index)
-		{
-			json += (index == 0 ? "\n" : ",\n");
-			appendEntity(json, entities[index], "    ");
-		}
-		json += entities.empty() ? "]\n" : "\n  ]\n";
-		json += "}\n";
+		const std::string json = serializeScene(entities);
 
 		// Atomic write: serialize into a sibling temp file, flush + close,
 		// then rename it over the destination. A crash, disk-full, or kill

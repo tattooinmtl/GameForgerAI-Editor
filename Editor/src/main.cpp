@@ -51,6 +51,7 @@
 #include "GameForger/Editor/Animation.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/FpsRigBuilder.hpp"
+#include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
@@ -105,6 +106,7 @@ namespace
     using gameforger::editor::ScriptRuntime;
     using gameforger::editor::loadScene;
     using gameforger::editor::saveScene;
+    using gameforger::editor::serializeScene;
     using gameforger::editor::buildTextMesh;
     using gameforger::editor::loadModelMesh;
     using gameforger::editor::ModelImportResult;
@@ -570,7 +572,8 @@ namespace
         bool resultSuccess = false;
         std::string resultContent;
 
-        std::array<char, 8192> previewBuffer{};
+        // std::string (not a fixed array) so long generated scripts are never cut off.
+        std::string previewText;
         bool previewSynced = false;
         bool resultLogged = false;
     };
@@ -579,10 +582,36 @@ namespace
     {
         bool requestOpen = false;
         std::string scriptPath;
-        std::array<char, 16384> buffer{};
+        // Whole file text - grows as needed, so Save never writes a truncated script.
+        std::string text;
         std::string status;
         bool statusSuccess = false;
     };
+
+    // Multi-line text box bound to a std::string that grows as the user types
+    // (ImGuiInputTextFlags_CallbackResize), so there is no size limit.
+    int resizeStringCallback(ImGuiInputTextCallbackData* data)
+    {
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+        {
+            auto* text = static_cast<std::string*>(data->UserData);
+            text->resize(static_cast<std::size_t>(data->BufTextLen));
+            data->Buf = text->data();
+        }
+        return 0;
+    }
+
+    bool inputTextMultilineString(const char* label, std::string& text, const ImVec2& size)
+    {
+        return ImGui::InputTextMultiline(
+            label,
+            text.data(),
+            text.capacity() + 1,
+            size,
+            ImGuiInputTextFlags_CallbackResize,
+            resizeStringCallback,
+            &text);
+    }
 
     struct Ray
     {
@@ -602,8 +631,6 @@ namespace
     struct AISetupState
     {
         int selectedProvider = 0;
-        std::array<char, 256> endpoint{};
-        std::array<char, 128> model{};
         bool calibrated = false;
         bool setupChanged = false;
         // Filled in by the Test provider button: true if a probe request
@@ -612,6 +639,16 @@ namespace
         bool tested = false;
         bool testSucceeded = false;
         std::string testMessage;
+
+        // The probe runs on this worker thread (audit A2) so the editor keeps
+        // drawing while it waits (up to the provider's timeoutSeconds).
+        // pollProviderTest() picks the result up on the UI thread.
+        std::atomic<bool> testing{false};
+        std::thread testWorker;
+        std::mutex testMutex;
+        bool hasTestResult = false;
+        std::string testProviderId;
+        AIProviderResponse testResponse;
     };
 
     enum class ThemeChoice
@@ -772,22 +809,40 @@ namespace
         }
     }
 
+    // Names of every selected entity (the whole multi-selection, audit B5),
+    // taken up front because the commands below change the entity list.
+    std::vector<std::string> selectedEntityNames(const EditorScene& scene, const SelectionState& selection)
+    {
+        std::vector<std::string> names;
+        for (const int id : selection.multiSelectedIds)
+        {
+            if (const SceneEntity* entity = scene.findEntity(id))
+            {
+                names.push_back(entity->name);
+            }
+        }
+        return names;
+    }
+
+    // Duplicates every selected entity and selects the copies. All commands
+    // run in the same frame, so the undo snapshot coalesces them into one step.
     void duplicateSelected(EditorScene& scene, AICommandBus& commandBus, SelectionState& selection)
     {
-        if (!selection.selectedEntityId.has_value())
+        std::vector<int> duplicateIds;
+        for (const std::string& name : selectedEntityNames(scene, selection))
         {
-            return;
+            const AICommandResult result = commandBus.execute(DuplicateEntityCommand{name});
+            if (result.success && !scene.entities().empty())
+            {
+                // DuplicateEntityCommand always appends the new entity at the end.
+                duplicateIds.push_back(scene.entities().back().id);
+            }
         }
-        const SceneEntity* entity = scene.findEntity(*selection.selectedEntityId);
-        if (entity == nullptr)
+        if (!duplicateIds.empty())
         {
-            return;
-        }
-        const AICommandResult result = commandBus.execute(DuplicateEntityCommand{entity->name});
-        if (result.success && !scene.entities().empty())
-        {
-            // DuplicateEntityCommand always appends the new entity at the end.
-            selectOnly(selection, scene.entities().back().id);
+            selection.multiSelectedIds = duplicateIds;
+            selection.shiftAnchorId.reset();
+            syncPrimarySelection(selection);
         }
     }
 
@@ -978,6 +1033,93 @@ namespace
             return std::nullopt;
         }
         return std::filesystem::path(fileBuffer.data());
+    }
+
+    // The open scene file (audit B2): its text at the last New/Open/Save, so
+    // New, Open and closing the window can ask "Save / Don't Save / Cancel"
+    // when there are unsaved changes.
+    struct SceneDocumentState
+    {
+        enum class PendingAction
+        {
+            None,
+            NewScene,
+            OpenScene,
+            Quit
+        };
+
+        std::string savedText;
+        PendingAction pending = PendingAction::None;
+        bool openPrompt = false;    // open the popup on the next drawMainMenu
+        bool quitConfirmed = false; // the user chose to close the editor
+    };
+
+    // The scene as it is in edit mode. During Play the live scene is the
+    // game's state, so the copy taken when Play started is what is saved.
+    const std::vector<SceneEntity>& editModeEntities(const EditorScene& scene, const PlayModeState& playMode)
+    {
+        return playMode.isPlaying ? playMode.savedEntities : scene.entities();
+    }
+
+    bool sceneHasUnsavedChanges(
+        const EditorScene& scene, const PlayModeState& playMode, const SceneDocumentState& document)
+    {
+        return serializeScene(editModeEntities(scene, playMode)) != document.savedText;
+    }
+
+    // Saves to `path`; on success it becomes the current scene file.
+    bool saveSceneToPath(
+        const std::vector<SceneEntity>& entities,
+        const std::filesystem::path& path,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console)
+    {
+        const SceneSaveResult result = saveScene(path, entities);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
+        if (!result.success)
+        {
+            return false;
+        }
+        currentScenePath = path;
+        document.savedText = serializeScene(entities);
+        return true;
+    }
+
+    bool saveSceneAsDialog(
+        const EditorScene& scene,
+        const PlayModeState& playMode,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console,
+        const HWND owner,
+        const std::filesystem::path& scenesDirectory)
+    {
+        const std::optional<std::filesystem::path> picked = showSaveSceneDialog(owner, scenesDirectory);
+        if (!picked.has_value())
+        {
+            return false;
+        }
+        return saveSceneToPath(editModeEntities(scene, playMode), *picked, currentScenePath, document, console);
+    }
+
+    // Save Scene (Ctrl+S / Ctrl+R). A scene that has no file yet (New Scene,
+    // or the empty scene the editor starts with) asks where to save it,
+    // instead of overwriting the file that was open before.
+    bool saveCurrentScene(
+        const EditorScene& scene,
+        const PlayModeState& playMode,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console,
+        const HWND owner,
+        const std::filesystem::path& scenesDirectory)
+    {
+        if (currentScenePath.empty())
+        {
+            return saveSceneAsDialog(scene, playMode, currentScenePath, document, console, owner, scenesDirectory);
+        }
+        return saveSceneToPath(editModeEntities(scene, playMode), currentScenePath, currentScenePath, document, console);
     }
 
     // Native "Open" dialog filtered to font files, for the Toolbox's Text
@@ -1578,27 +1720,29 @@ namespace
         return paths;
     }
 
+    // Deletes every selected entity (audit B5) - one undo step, same
+    // same-frame coalescing as duplicateSelected.
     void deleteSelected(EditorScene& scene, AICommandBus& commandBus, SelectionState& selection)
     {
-        if (!selection.selectedEntityId.has_value())
+        const std::vector<std::string> names = selectedEntityNames(scene, selection);
+        if (names.empty())
         {
             return;
         }
-        const SceneEntity* entity = scene.findEntity(*selection.selectedEntityId);
-        if (entity == nullptr)
+        for (const std::string& name : names)
         {
-            return;
+            // An entity may already be gone if deleting its parent removed it.
+            if (scene.findEntity(name) != nullptr)
+            {
+                (void)commandBus.execute(DeleteEntityCommand{name});
+            }
         }
-        commandBus.execute(DeleteEntityCommand{entity->name});
         clearSelection(selection);
     }
 
     void selectProvider(AISetupState& state, const int providerIndex)
     {
         state.selectedProvider = providerIndex;
-        const AIProvider& provider = providers[static_cast<std::size_t>(providerIndex)];
-        std::snprintf(state.endpoint.data(), state.endpoint.size(), "%s", provider.endpoint);
-        std::snprintf(state.model.data(), state.model.size(), "%s", provider.model);
         state.calibrated = false;
         state.setupChanged = true;
     }
@@ -1675,9 +1819,11 @@ namespace
         SettingsState& settings,
         EditHistoryState& history,
         std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
         const HWND nativeWindowHandle,
         bool& resetLayout)
     {
+        using PendingAction = SceneDocumentState::PendingAction;
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
         const auto newScene = [&]()
@@ -1686,6 +1832,9 @@ namespace
             clearSelection(selection);
             history.undoStack.clear();
             history.redoStack.clear();
+            // No file yet: the next Save asks where (audit B2).
+            currentScenePath.clear();
+            document.savedText = serializeScene(scene.entities());
             logMessage(console, LogLevel::Info, "New scene created.");
         };
         const auto openScene = [&]()
@@ -1696,7 +1845,43 @@ namespace
                 if (loadSceneAndLog(scene, *picked, selection, history, console))
                 {
                     currentScenePath = *picked;
+                    document.savedText = serializeScene(scene.entities());
                 }
+            }
+        };
+        const auto saveCurrent = [&]()
+        {
+            return saveCurrentScene(
+                scene, playMode, currentScenePath, document, console, nativeWindowHandle, scenesDirectory);
+        };
+        const auto runSceneAction = [&](const PendingAction action)
+        {
+            switch (action)
+            {
+            case PendingAction::NewScene:
+                newScene();
+                break;
+            case PendingAction::OpenScene:
+                openScene();
+                break;
+            case PendingAction::Quit:
+                document.quitConfirmed = true;
+                break;
+            case PendingAction::None:
+                break;
+            }
+        };
+        // New and Open come through here: with unsaved changes, ask first.
+        const auto requestSceneAction = [&](const PendingAction action)
+        {
+            if (sceneHasUnsavedChanges(scene, playMode, document))
+            {
+                document.pending = action;
+                document.openPrompt = true;
+            }
+            else
+            {
+                runSceneAction(action);
             }
         };
 
@@ -1705,27 +1890,62 @@ namespace
             const ImGuiIO& io = ImGui::GetIO();
             if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             {
-                newScene();
+                requestSceneAction(PendingAction::NewScene);
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
             {
-                openScene();
+                requestSceneAction(PendingAction::OpenScene);
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                (void)saveCurrent();
             }
-            else if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+            // Undo/redo keys are handled once, in drawEditorPanels (audit B1).
+        }
+
+        // "Save / Don't Save / Cancel" before New, Open or closing the window
+        // (the window's close button sets openPrompt from the main loop).
+        if (document.openPrompt)
+        {
+            ImGui::OpenPopup("Unsaved Changes");
+            document.openPrompt = false;
+        }
+        if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            const std::string sceneName =
+                currentScenePath.empty() ? std::string("the new scene") : currentScenePath.filename().string();
+            ImGui::Text("Save changes to %s?", sceneName.c_str());
+            ImGui::TextDisabled("If you don't save, your changes are lost.");
+            ImGui::Separator();
+            const PendingAction action = document.pending;
+            bool close = false;
+            bool run = false;
+            if (ImGui::Button("Save", ImVec2(110.0F, 0.0F)))
             {
-                performUndo(history, scene, selection);
+                // A cancelled Save As dialog counts as Cancel.
+                run = saveCurrent();
+                close = true;
             }
-            else if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+            ImGui::SameLine();
+            if (ImGui::Button("Don't Save", ImVec2(110.0F, 0.0F)))
             {
-                performRedo(history, scene, selection);
+                run = true;
+                close = true;
             }
-            else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y))
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(110.0F, 0.0F)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
             {
-                performRedo(history, scene, selection);
+                close = true;
+            }
+            if (close)
+            {
+                document.pending = PendingAction::None;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+            if (run)
+            {
+                runSceneAction(action);
             }
         }
 
@@ -1743,24 +1963,20 @@ namespace
         {
             if (ImGui::MenuItem("New Scene", "Ctrl+N"))
             {
-                newScene();
+                requestSceneAction(PendingAction::NewScene);
             }
             if (ImGui::MenuItem("Open Scene...", "Ctrl+O"))
             {
-                openScene();
+                requestSceneAction(PendingAction::OpenScene);
             }
             if (ImGui::MenuItem("Save Scene", "Ctrl+S"))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                (void)saveCurrent();
             }
             if (ImGui::MenuItem("Save Scene As..."))
             {
-                if (const std::optional<std::filesystem::path> picked =
-                        showSaveSceneDialog(nativeWindowHandle, scenesDirectory))
-                {
-                    saveSceneAndLog(scene, *picked, console);
-                    currentScenePath = *picked;
-                }
+                (void)saveSceneAsDialog(
+                    scene, playMode, currentScenePath, document, console, nativeWindowHandle, scenesDirectory);
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Import FPS Demo Kit into This Project"))
@@ -1788,7 +2004,15 @@ namespace
                 ImGui::SetTooltip("Copies the FPS Demo scripts (Game/Scripts/FPSDemo) and their icons "
                     "(Game/Icons/FPSDemo) into this project. Files already here are kept.");
             }
-            if (ImGui::MenuItem("Build Game..."))
+            // Build names the .gfai after the scene file, so the scene must be
+            // saved once first (audit B2).
+            const bool sceneHasFile = !currentScenePath.empty();
+            const bool buildClicked = ImGui::MenuItem("Build Game...", nullptr, false, sceneHasFile);
+            if (!sceneHasFile && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Save the scene first (File > Save Scene As...).");
+            }
+            if (buildClicked)
             {
                 // "Build" = export the current scene to the .gfai extension
                 // the standalone Runtime ("the engine") loads, and point
@@ -2173,9 +2397,99 @@ namespace
         ImGui::EndMainMenuBar();
     }
 
+    // What Game/AI/Providers.json says for one provider - the file
+    // AIProviderClient actually reads (audit A1). Empty strings when missing.
+    struct ProviderFileSettings
+    {
+        bool found = false;
+        std::string endpoint;
+        std::string model;
+    };
+
+    ProviderFileSettings readProviderFileSettings(
+        const std::filesystem::path& providersFile, const std::string& providerId)
+    {
+        namespace json = gameforger::editor::json;
+        ProviderFileSettings settings;
+        std::ifstream input(providersFile, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const std::optional<json::Value> root = json::parse(text);
+        const json::Value* list = root.has_value() ? root->find("providers") : nullptr;
+        if (list == nullptr)
+        {
+            return settings;
+        }
+        for (const json::Value& provider : list->arrayValue)
+        {
+            const json::Value* id = provider.find("id");
+            if (id == nullptr || id->asString() != providerId)
+            {
+                continue;
+            }
+            settings.found = true;
+            if (const json::Value* endpoint = provider.find("endpoint"))
+            {
+                settings.endpoint = endpoint->asString().value_or("");
+            }
+            if (const json::Value* model = provider.find("model"))
+            {
+                settings.model = model->asString().value_or("");
+            }
+            break;
+        }
+        return settings;
+    }
+
+    // Called every frame (even with Settings closed) so a finished provider
+    // test is reported as soon as its worker thread is done.
+    void pollProviderTest(AISetupState& state, ConsoleState& console)
+    {
+        AIProviderResponse probe;
+        std::string providerId;
+        {
+            const std::lock_guard<std::mutex> lock(state.testMutex);
+            if (!state.hasTestResult)
+            {
+                return;
+            }
+            state.hasTestResult = false;
+            probe = std::move(state.testResponse);
+            providerId = state.testProviderId;
+        }
+        if (state.testWorker.joinable())
+        {
+            state.testWorker.join();
+        }
+        state.tested = true;
+        state.testSucceeded = probe.success;
+        // Redact: don't echo back the full body (which can echo the prompt
+        // or carry provider-side debug info). Just report status + truncated
+        // error.
+        std::string message;
+        if (probe.success)
+        {
+            message = "OK (HTTP " + std::to_string(probe.statusCode) + ")";
+        }
+        else
+        {
+            const std::string err = probe.error.empty() ? "no error message" : probe.error;
+            const std::size_t maxLen = 200;
+            message = "HTTP " + std::to_string(probe.statusCode) + " - " +
+                (err.size() > maxLen ? err.substr(0, maxLen) + "..." : err);
+        }
+        state.testMessage = message;
+        state.calibrated = probe.success;
+        state.setupChanged = false;
+        logMessage(
+            console,
+            probe.success ? LogLevel::Info : LogLevel::Error,
+            "Provider test (" + providerId + "): " + message);
+    }
+
     void drawAiSetupSettingsContent(
         AISetupState& state,
         const AIProviderClient& providerClient,
+        const std::filesystem::path& projectRoot,
         ConsoleState& console)
     {
         ImGui::TextUnformatted("Provider and model configuration");
@@ -2198,8 +2512,36 @@ namespace
             ImGui::EndCombo();
         }
 
-        ImGui::InputText("Endpoint", state.endpoint.data(), state.endpoint.size());
-        ImGui::InputText("Model", state.model.data(), state.model.size());
+        // Read-only: these come from Game/AI/Providers.json, the only place
+        // the AI client reads them (audit A1). Re-read while this page is
+        // shown, so edits saved in the file appear here right away.
+        const std::filesystem::path providersFile = projectRoot / "Game" / "AI" / "Providers.json";
+        const ProviderFileSettings fileSettings = readProviderFileSettings(
+            providersFile, providers[static_cast<std::size_t>(state.selectedProvider)].id);
+        if (fileSettings.found)
+        {
+            ImGui::LabelText("Endpoint", "%s", fileSettings.endpoint.c_str());
+            ImGui::LabelText("Model", "%s", fileSettings.model.c_str());
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "This provider is not in Game/AI/Providers.json.");
+        }
+        if (ImGui::Button("Open Providers.json"))
+        {
+            const std::wstring filePath = providersFile.wstring();
+            const HINSTANCE opened =
+                ShellExecuteW(nullptr, L"open", filePath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (reinterpret_cast<INT_PTR>(opened) <= 32)
+            {
+                // No app is set to open .json files - fall back to Notepad.
+                ShellExecuteW(nullptr, L"open", L"notepad.exe", filePath.c_str(), nullptr, SW_SHOWNORMAL);
+            }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Endpoint and model are set in this file. Save it and they update here.");
+        }
         ImGui::Text("API key source: %s", providers[static_cast<std::size_t>(state.selectedProvider)].keySource);
         ImGui::TextUnformatted("Secrets: Game/AI/Providers.local.json");
 
@@ -2207,39 +2549,42 @@ namespace
         // sending anything - the user saw "Configuration ready" while the
         // editor never asked the provider if it was reachable. Send a tiny
         // probe (a minimal completion request) and surface the real result.
+        // The probe runs on a worker thread (audit A2); pollProviderTest()
+        // reports the result.
+        const bool testing = state.testing.load();
+        if (testing)
+        {
+            ImGui::BeginDisabled();
+        }
         if (ImGui::Button("Calibrate / Test provider"))
         {
+            if (state.testWorker.joinable())
+            {
+                state.testWorker.join();
+            }
             const std::string providerId =
                 providers[static_cast<std::size_t>(state.selectedProvider)].id;
-            const AIProviderResponse probe = providerClient.send(
-                providerId,
-                AIProviderRequest{"Reply with the single word: pong", ""});
-            state.tested = true;
-            state.testSucceeded = probe.success;
-            // Redact: don't echo back the full body (which can echo the prompt
-            // or carry provider-side debug info). Just report status + truncated
-            // error.
-            std::string message;
-            if (probe.success)
-            {
-                message = "OK (HTTP " + std::to_string(probe.statusCode) + ")";
-            }
-            else
-            {
-                const std::string err = probe.error.empty() ? "no error message" : probe.error;
-                const std::size_t maxLen = 200;
-                message = "HTTP " + std::to_string(probe.statusCode) + " - " +
-                    (err.size() > maxLen ? err.substr(0, maxLen) + "..." : err);
-            }
-            state.testMessage = message;
-            state.calibrated = probe.success;
-            state.setupChanged = false;
-            logMessage(
-                console,
-                probe.success ? LogLevel::Info : LogLevel::Error,
-                "Provider test (" + providerId + "): " + message);
+            state.testing = true;
+            state.testWorker = std::thread(
+                [&state, &providerClient, providerId]()
+                {
+                    AIProviderResponse probe = providerClient.send(
+                        providerId,
+                        AIProviderRequest{"Reply with the single word: pong", ""});
+                    const std::lock_guard<std::mutex> lock(state.testMutex);
+                    state.testResponse = std::move(probe);
+                    state.testProviderId = providerId;
+                    state.hasTestResult = true;
+                    state.testing = false;
+                });
         }
-        if (state.tested)
+        if (testing)
+        {
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("Testing...");
+        }
+        else if (state.tested)
         {
             ImGui::SameLine();
             ImGui::TextColored(
@@ -2391,6 +2736,7 @@ namespace
         const AIProviderClient& providerClient,
         ConsoleState& console)
     {
+        pollProviderTest(aiSetup, console);
         if (!settings.open)
         {
             return;
@@ -2418,7 +2764,7 @@ namespace
         ImGui::BeginChild("SettingsContent", ImVec2(0.0F, 0.0F));
         switch (settings.selectedCategory)
         {
-            case 0: drawAiSetupSettingsContent(aiSetup, providerClient, console); break;
+            case 0: drawAiSetupSettingsContent(aiSetup, providerClient, projectRoot, console); break;
             case 1: drawProjectSettingsContent(projectRoot, scene); break;
             case 2: drawAppearanceSettingsContent(appearance); break;
             case 3: drawLanguageSettingsContent(language); break;
@@ -2558,9 +2904,7 @@ namespace
                     std::ifstream scriptFile(file.path(), std::ios::binary);
                     const std::string content(
                         (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                    scriptEditor.buffer.fill('\0');
-                    const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                    std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
+                    scriptEditor.text = content;
                     scriptEditor.scriptPath = toProjectRootError ? name : relativeToRoot.generic_string();
                     scriptEditor.status.clear();
                     scriptEditor.requestOpen = true;
@@ -5423,9 +5767,7 @@ namespace
                 std::ifstream scriptFile(projectRoot / scriptPath, std::ios::binary);
                 std::string content(
                     (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                scriptEditor.buffer.fill('\0');
-                const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
+                scriptEditor.text = content;
                 scriptEditor.scriptPath = scriptPath;
                 scriptEditor.status.clear();
                 scriptEditor.requestOpen = true;
@@ -6167,24 +6509,16 @@ namespace
                 {
                     if (!scriptCreator.previewSynced)
                     {
-                        std::snprintf(
-                            scriptCreator.previewBuffer.data(),
-                            scriptCreator.previewBuffer.size(),
-                            "%s",
-                            resultContentNow.c_str());
+                        scriptCreator.previewText = resultContentNow;
                         scriptCreator.previewSynced = true;
                     }
-                    ImGui::InputTextMultiline(
-                        "##GeneratedScript",
-                        scriptCreator.previewBuffer.data(),
-                        scriptCreator.previewBuffer.size(),
-                        ImVec2(480.0F, 220.0F));
+                    inputTextMultilineString("##GeneratedScript", scriptCreator.previewText, ImVec2(480.0F, 220.0F));
 
                     if (ImGui::Button("Save & Attach"))
                     {
                         const std::string path = makeUniqueScriptPath(projectRoot, scriptCreator.scriptName.data());
                         const AICommandResult createResult = commandBus.execute(
-                            CreateScriptCommand{path, "lua", std::string(scriptCreator.previewBuffer.data())});
+                            CreateScriptCommand{path, "lua", scriptCreator.previewText});
                         if (createResult.success)
                         {
                             (void)commandBus.execute(AttachScriptCommand{scriptCreator.targetEntityName, path});
@@ -6298,16 +6632,12 @@ namespace
         {
             ImGui::Text("File: %s", scriptEditor.scriptPath.c_str());
             ImGui::Separator();
-            ImGui::InputTextMultiline(
-                "##EditScriptContent",
-                scriptEditor.buffer.data(),
-                scriptEditor.buffer.size(),
-                ImVec2(560.0F, 320.0F));
+            inputTextMultilineString("##EditScriptContent", scriptEditor.text, ImVec2(560.0F, 320.0F));
 
             if (ImGui::Button("Save"))
             {
                 const AICommandResult saveResult = commandBus.execute(
-                    CreateScriptCommand{scriptEditor.scriptPath, "lua", std::string(scriptEditor.buffer.data())});
+                    CreateScriptCommand{scriptEditor.scriptPath, "lua", scriptEditor.text});
                 scriptEditor.status = saveResult.message;
                 scriptEditor.statusSuccess = saveResult.success;
                 if (saveResult.success)
@@ -7201,7 +7531,8 @@ namespace
         ConsoleState& console,
         ProjectBrowserState& projectBrowser,
         EditHistoryState& history,
-        const std::filesystem::path& currentScenePath,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& sceneDocument,
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
         const float deltaTime,
@@ -7271,17 +7602,21 @@ namespace
         if (!playMode.isPlaying && !ImGui::GetIO().WantCaptureKeyboard && !ImGuizmo::IsUsing())
         {
             const ImGuiIO& shortcutIo = ImGui::GetIO();
-            if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z))
+            // The only undo/redo key handler: Ctrl+Z undo, Ctrl+Shift+Z or Ctrl+Y redo.
+            if (shortcutIo.KeyCtrl && !shortcutIo.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
             {
                 performUndo(history, scene, selection);
             }
-            else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y))
+            else if (shortcutIo.KeyCtrl &&
+                     ((shortcutIo.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)) || ImGui::IsKeyPressed(ImGuiKey_Y)))
             {
                 performRedo(history, scene, selection);
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                (void)saveCurrentScene(
+                    scene, playMode, currentScenePath, sceneDocument, console, nativeWindowHandle,
+                    projectRoot / "Game" / "Scenes");
             }
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
@@ -7994,9 +8329,13 @@ int main()
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
-    // What "Save Scene" (Ctrl+R) writes to and "Open Scene..." reads from most
-    // recently; "Save Scene As..." and "Open Scene..." both update this.
-    std::filesystem::path currentScenePath = projectRoot / "Game" / "Scenes" / "Castle.gfprod";
+    // The scene file "Save Scene" writes to; set by Open and Save As. Empty
+    // until the scene has a file (the editor starts with an empty, unsaved
+    // scene), so the first Save asks where instead of overwriting
+    // Castle.gfprod (audit B2).
+    std::filesystem::path currentScenePath;
+    SceneDocumentState sceneDocument;
+    sceneDocument.savedText = serializeScene(scene.entities());
     double lastFrameTime = glfwGetTime();
 
     while (glfwWindowShouldClose(window) == GLFW_FALSE)
@@ -8007,6 +8346,15 @@ int main()
         lastFrameTime = currentTime;
 
         glfwPollEvents();
+
+        // Closing the window with unsaved changes asks first (audit B2).
+        if (glfwWindowShouldClose(window) == GLFW_TRUE && !sceneDocument.quitConfirmed &&
+            sceneHasUnsavedChanges(scene, playMode, sceneDocument))
+        {
+            glfwSetWindowShouldClose(window, GLFW_FALSE);
+            sceneDocument.pending = SceneDocumentState::PendingAction::Quit;
+            sceneDocument.openPrompt = true;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -8026,7 +8374,11 @@ int main()
 
         drawMainMenu(
             scene, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
-            settings, history, currentScenePath, nativeWindowHandle, resetLayout);
+            settings, history, currentScenePath, sceneDocument, nativeWindowHandle, resetLayout);
+        if (sceneDocument.quitConfirmed)
+        {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
         const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
         drawEditorPanels(
@@ -8050,6 +8402,7 @@ int main()
             projectBrowser,
             history,
             currentScenePath,
+            sceneDocument,
             gizmoOperation,
             terrainSculpt,
             deltaTime,
@@ -8094,6 +8447,10 @@ int main()
     if (aiAnimation.worker.joinable())
     {
         aiAnimation.worker.join();
+    }
+    if (aiSetup.testWorker.joinable())
+    {
+        aiSetup.testWorker.join();
     }
 
     if (trayIconAdded)

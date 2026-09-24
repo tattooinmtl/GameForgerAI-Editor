@@ -29,11 +29,11 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 
 | # | Sev | Finding | Where | Status |
 |---|---|---|---|---|
-| B1 | 🔴 | **Keyboard shortcuts run twice.** Ctrl+Z/Y are handled in `drawMainMenu` and again in `drawEditorPanels` on the same frame. Result: Ctrl+Z undoes 2 steps, Ctrl+Y redoes 2, and Ctrl+Shift+Z redoes and then undoes (net: nothing happens). | `main.cpp:1441-1468` and `main.cpp:6440-6450` | CONFIRMED |
-| B2 | 🔴 | **New Scene keeps the old file path.** `newScene()` clears the entities but not `currentScenePath`. Ctrl+S right after "New Scene" overwrites the scene you had open before (default `Castle.gfprod`) with an empty scene. There is also no "unsaved changes?" prompt on New/Open/Quit. | `main.cpp:1421-1428`, `main.cpp:7168` | CONFIRMED |
+| B1 | 🔴 | **Keyboard shortcuts run twice.** Ctrl+Z/Y are handled in `drawMainMenu` and again in `drawEditorPanels` on the same frame. Result: Ctrl+Z undoes 2 steps, Ctrl+Y redoes 2, and Ctrl+Shift+Z redoes and then undoes (net: nothing happens). | `main.cpp:1441-1468` and `main.cpp:6440-6450` | **FIXED 0.83** |
+| B2 | 🔴 | **New Scene keeps the old file path.** `newScene()` clears the entities but not `currentScenePath`. Ctrl+S right after "New Scene" overwrites the scene you had open before (default `Castle.gfprod`) with an empty scene. There is also no "unsaved changes?" prompt on New/Open/Quit. | `main.cpp:1421-1428`, `main.cpp:7168` | **FIXED 0.83** |
 | B3 | 🔴 | **Renaming a parent breaks its children.** Parent links are stored by name (`parentName`). `RenameEntityCommand` renames only the entity itself, so every child is orphaned: it jumps to the top of the Hierarchy and stops following. The same happens to Catapult `yawEntityName`/`armEntityName` references. | `EditorScene.cpp:53-70` | CONFIRMED |
-| B4 | 🔴 | **The script editor cuts off long scripts.** The Edit Script buffer is a fixed 16 KB and the AI preview is 8 KB. A longer `.lua` is silently truncated when it loads, and pressing **Save** writes the truncated text back to disk. None of today's scripts is that big, but the next long one will be damaged. | `main.cpp:557`, `main.cpp:548`, `main.cpp:2228`, `main.cpp:4956` | CONFIRMED |
-| B5 | 🟠 | **Multi-select delete and duplicate only act on one object.** You can select many objects (Ctrl/Shift-click), but `deleteSelected` and `duplicateSelected` only use the primary one. | `main.cpp:750`, `main.cpp:1345` | CONFIRMED |
+| B4 | 🔴 | **The script editor cuts off long scripts.** The Edit Script buffer is a fixed 16 KB and the AI preview is 8 KB. A longer `.lua` is silently truncated when it loads, and pressing **Save** writes the truncated text back to disk. None of today's scripts is that big, but the next long one will be damaged. | `main.cpp:557`, `main.cpp:548`, `main.cpp:2228`, `main.cpp:4956` | **FIXED 0.83** |
+| B5 | 🟠 | **Multi-select delete and duplicate only act on one object.** You can select many objects (Ctrl/Shift-click), but `deleteSelected` and `duplicateSelected` only use the primary one. | `main.cpp:750`, `main.cpp:1345` | **FIXED 0.83** |
 | B6 | 🟠 | **Many Inspector edits can't be undone.** Undo only records changes that go through the command bus. These edit the entity directly and skip it: the Active checkbox, tag Up/Down, Mask RGB, UV Scale, the 3 material layers, terrain World Size, terrain textures, Import Heightmap, Perlin Generate, sculpt/paint, Animate Object, Loop, and keyframe add/delete. Those edits are also left out of undo snapshots. | `main.cpp:3751, 4038, 4065, 4432-4486, 4724, 4803-4865, 5106, 5741, 5798, 5976, 6198-6303` | CONFIRMED |
 | B7 | 🟡 | **Undo only goes back 5 steps**, and each step is a full copy of the scene. | `main.cpp:322` | CONFIRMED |
 | B8 | 🟠 | **Script properties (`-- @property`) edited in the Inspector outside Play mode are thrown away.** The field shows the default and ignores the edit, because there's nowhere per-entity to store it. The same `.lua` file is also re-read from disk every frame, for every attached script. | `main.cpp:4980-5031` | CONFIRMED |
@@ -50,8 +50,8 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 
 | # | Sev | Finding | Where | Status |
 |---|---|---|---|---|
-| A1 | 🟠 | **The Settings > AI Setup "Endpoint" and "Model" boxes do nothing.** `AIProviderClient` reads only `Game/AI/Providers.json`, so anything typed there is ignored. | `main.cpp:1867-1868`, `AIProviderClient.cpp:138-159` | CONFIRMED |
-| A2 | 🟠 | **"Calibrate / Test provider" freezes the editor.** It runs on the UI thread, and the timeout is 120 s. | `main.cpp:1876-1907`, `Providers.json timeoutSeconds` | CONFIRMED |
+| A1 | 🟠 | **The Settings > AI Setup "Endpoint" and "Model" boxes do nothing.** `AIProviderClient` reads only `Game/AI/Providers.json`, so anything typed there is ignored. | `main.cpp:1867-1868`, `AIProviderClient.cpp:138-159` | **FIXED 0.83** |
+| A2 | 🟠 | **"Calibrate / Test provider" freezes the editor.** It runs on the UI thread, and the timeout is 120 s. | `main.cpp:1876-1907`, `Providers.json timeoutSeconds` | **FIXED 0.83** |
 | A3 | 🟡 | **The provider list is written twice:** hard-coded in `main.cpp` and again in `Providers.json`. The JSON's `"activeProvider"` is ignored; the UI always starts on entry 0. | `main.cpp:629-641` | CONFIRMED |
 | A4 | 🟡 | **Theme and Language choices are not saved** and reset every launch. | `main.cpp:598-607`, `7003-7004` | CONFIRMED |
 | A5 | 🟡 | **Placeholder settings pages:** Settings > *Project* ("more settings will land here…") and *Language* (only English works). | `main.cpp:1927-1935`, `2032-2048` | CONFIRMED (placeholder) |
@@ -98,6 +98,13 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **B17 fixed** (see its entry above): `getRight()` now points right; regression-tested against the real camera.
 - **Demo scripts packaged:** the FPS Demo kit lives in `Game/Scripts/FPSDemo/` + `Game/Icons/FPSDemo/`, with its own `enemy.lua`, and can be copied into any project with File > Import FPS Demo Kit into This Project. The small starter scripts in `Game/Scripts/` are separate (`enemy_ai.lua` restored to its original).
 - **Plan status:** Phases 0-8 (§6) are still **not started** - waiting for the user's "start Phase 0". Phase 2's menu work should keep the new File menu item next to Build Game.
+
+### 2.8 Update 2026-09-24 (Alpha 0.83)
+
+- **Fixed:** B4, B1, B2, B5, A1, A2 (the user asked for these six, in that order). Details: `docs/planFix_AGY_CHANGELOG.md` §1f.
+- **B1 note:** the single handler stayed in `drawEditorPanels` (no new `handleEditorShortcuts()` function).
+- **B2 note:** the editor also starts with no scene file now (it used to point at `Castle.gfprod` while showing an empty scene).
+- **Plan status:** **Phase 1 partly done** - still open in Phase 1: B3 (rename orphans), B9 (picking hidden objects), G1 (missing catapult script). Phase 1's manual checks for the six fixes are waiting for the user. Phases 0 and 2-8 not started.
 
 ## 3. Findings — duplication and things that don't make sense
 

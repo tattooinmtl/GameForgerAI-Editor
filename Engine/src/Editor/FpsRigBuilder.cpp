@@ -303,7 +303,7 @@ namespace gameforger::editor
 				tag(name, "Empty");
 				if (viewmodel)
 				{
-					tag(name, "Viewmodel");
+					tag(name, ignoreTag_);
 				}
 				if (!parent.empty())
 				{
@@ -335,10 +335,15 @@ namespace gameforger::editor
 					set(name, "Renderer", "color", spec.color);
 					if (viewmodel)
 					{
-						tag(name, "Viewmodel");
+						tag(name, ignoreTag_);
 					}
 				}
 			}
+
+			// The tag `viewmodel` parts get: "Viewmodel" for the player's own
+			// models, "NoRaycast" for enemy models - both make raycasts and
+			// weapon hits ignore the part (hits land on the enemy's capsule).
+			void setIgnoreTag(std::string tagName) { ignoreTag_ = std::move(tagName); }
 
 			[[nodiscard]] int created() const noexcept { return created_; }
 			[[nodiscard]] int failures() const noexcept { return failures_; }
@@ -350,76 +355,353 @@ namespace gameforger::editor
 			int created_ = 0;
 			int failures_ = 0;
 			int missingScripts_ = 0;
+			std::string ignoreTag_ = "Viewmodel";
 		};
 
-		// The third-person body: primitive parts like the first-person hands,
-		// on jointed groups fps_player.lua animates (walk, run, jump, crouch,
-		// climb). It faces +Z; its RIGHT side is -X (the camera looking down
-		// +Z shows +X on screen-left). Parented to the player so it follows
-		// it everywhere; its local scale cancels the player capsule's scale.
-		void buildPlayerBody(Builder& builder, const std::string& body, const std::string& player,
-			const glm::vec3& playerScale)
+		// Scales a part list (positions and sizes) by `size`, and widens it
+		// (X/Z sizes) by `bulk`.
+		std::vector<PartSpec> sized(std::vector<PartSpec> parts, const float size, const float bulk = 1.0F)
 		{
-			builder.group(body, player, glm::vec3(0.0F), glm::vec3(0.0F),
-				glm::vec3(1.0F / playerScale.x, 1.0F / playerScale.y, 1.0F / playerScale.z), true);
+			for (PartSpec& part : parts)
+			{
+				part.position *= size;
+				part.scale *= size;
+				part.scale.x *= bulk;
+				part.scale.z *= bulk;
+			}
+			return parts;
+		}
+
+		enum class HeadStyle
+		{
+			Human,
+			Goblin,
+			Orc
+		};
+
+		// How a humanoid body looks. The player, the goblins and the orc all
+		// use the same jointed body (so the same animations fit them all).
+		struct HumanoidLook
+		{
+			float size = 1.0F;  // 1 = the player's 1.8 m
+			float bulk = 1.0F;  // wider torso and limbs (the orc)
+			glm::vec3 skin = kSkin;
+			glm::vec3 shirt = kSleeve;
+			glm::vec3 pants = kPants;
+			glm::vec3 boots = kLeather;
+			glm::vec3 hands = kGlove;
+			glm::vec3 hair = kHair;
+			glm::vec3 eyes = kEye;
+			HeadStyle head = HeadStyle::Human;
+			bool backpack = true;
+			bool bareArms = false;
+			bool bareChest = false;
+		};
+
+		// Palette for the monsters.
+		constexpr glm::vec3 kGoblinSkin{0.36F, 0.56F, 0.22F};
+		constexpr glm::vec3 kGoblinVest{0.42F, 0.29F, 0.16F};
+		constexpr glm::vec3 kGoblinPants{0.30F, 0.22F, 0.14F};
+		constexpr glm::vec3 kGoblinEyes{0.98F, 0.82F, 0.12F};
+		constexpr glm::vec3 kOrcSkin{0.27F, 0.40F, 0.19F};
+		constexpr glm::vec3 kOrcDark{0.19F, 0.29F, 0.13F};
+		constexpr glm::vec3 kOrcEyes{0.95F, 0.18F, 0.10F};
+		constexpr glm::vec3 kIvory{0.95F, 0.92F, 0.80F};
+		constexpr glm::vec3 kIron{0.30F, 0.31F, 0.34F};
+
+		std::vector<PartSpec> headParts(const HumanoidLook& look)
+		{
+			switch (look.head)
+			{
+				case HeadStyle::Goblin:
+					return {
+						{"Neck", PrimitiveType::Cylinder, {0.0F, 0.04F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.05F, 0.05F}, look.skin},
+						{"Skull", PrimitiveType::Sphere, {0.0F, 0.17F, 0.02F}, {0.0F, 0.0F, 0.0F}, {0.125F, 0.115F, 0.125F}, look.skin},
+						{"EarR", PrimitiveType::Cone, {-0.15F, 0.21F, 0.0F}, {0.0F, 0.0F, 70.0F}, {0.035F, 0.11F, 0.02F}, look.skin},
+						{"EarL", PrimitiveType::Cone, {0.15F, 0.21F, 0.0F}, {0.0F, 0.0F, -70.0F}, {0.035F, 0.11F, 0.02F}, look.skin},
+						{"Nose", PrimitiveType::Cone, {0.0F, 0.15F, 0.16F}, {90.0F, 0.0F, 0.0F}, {0.025F, 0.07F, 0.025F}, look.skin},
+						{"EyeR", PrimitiveType::Sphere, {-0.048F, 0.19F, 0.11F}, {0.0F, 0.0F, 0.0F}, {0.02F, 0.016F, 0.014F}, look.eyes},
+						{"EyeL", PrimitiveType::Sphere, {0.048F, 0.19F, 0.11F}, {0.0F, 0.0F, 0.0F}, {0.02F, 0.016F, 0.014F}, look.eyes},
+						{"Mouth", PrimitiveType::Cube, {0.0F, 0.10F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.045F, 0.008F, 0.01F}, kEye},
+					};
+				case HeadStyle::Orc:
+					return {
+						{"Neck", PrimitiveType::Cylinder, {0.0F, 0.04F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.075F, 0.05F, 0.075F}, look.skin},
+						{"Skull", PrimitiveType::Sphere, {0.0F, 0.17F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.125F, 0.13F, 0.125F}, look.skin},
+						{"Jaw", PrimitiveType::Cube, {0.0F, 0.09F, 0.05F}, {0.0F, 0.0F, 0.0F}, {0.105F, 0.05F, 0.09F}, look.skin},
+						{"Brow", PrimitiveType::Cube, {0.0F, 0.215F, 0.1F}, {0.0F, 0.0F, 0.0F}, {0.11F, 0.025F, 0.035F}, kOrcDark},
+						{"TuskR", PrimitiveType::Cone, {-0.055F, 0.13F, 0.13F}, {0.0F, 0.0F, 0.0F}, {0.016F, 0.045F, 0.016F}, kIvory},
+						{"TuskL", PrimitiveType::Cone, {0.055F, 0.13F, 0.13F}, {0.0F, 0.0F, 0.0F}, {0.016F, 0.045F, 0.016F}, kIvory},
+						{"EyeR", PrimitiveType::Sphere, {-0.045F, 0.185F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.017F, 0.012F, 0.012F}, look.eyes},
+						{"EyeL", PrimitiveType::Sphere, {0.045F, 0.185F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.017F, 0.012F, 0.012F}, look.eyes},
+						{"Topknot", PrimitiveType::Cylinder, {0.0F, 0.31F, -0.03F}, {-20.0F, 0.0F, 0.0F}, {0.035F, 0.06F, 0.035F}, look.hair},
+					};
+				case HeadStyle::Human:
+				default:
+					return {
+						{"Neck", PrimitiveType::Cylinder, {0.0F, 0.04F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.05F, 0.05F}, look.skin},
+						{"Skull", PrimitiveType::Sphere, {0.0F, 0.17F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.105F, 0.12F, 0.11F}, look.skin},
+						{"Hair", PrimitiveType::Sphere, {0.0F, 0.21F, -0.015F}, {0.0F, 0.0F, 0.0F}, {0.11F, 0.095F, 0.115F}, look.hair},
+						{"EyeR", PrimitiveType::Sphere, {-0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, look.eyes},
+						{"EyeL", PrimitiveType::Sphere, {0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, look.eyes},
+						{"Nose", PrimitiveType::Cube, {0.0F, 0.15F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.02F, 0.012F}, look.skin},
+					};
+			}
+		}
+
+		// A round shield on the left forearm (group under ElbowL). Its face
+		// looks forward in the "carry" pose and straight ahead when the arm
+		// is raised to block - see the body poses in fps_player.lua/enemy.lua.
+		std::vector<PartSpec> roundShieldParts(const float radius, const glm::vec3& face, const glm::vec3& metal)
+		{
+			return {
+				{"Face", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {radius, 0.012F, radius}, face},
+				{"Rim", PrimitiveType::Cylinder, {0.0F, -0.004F, 0.0F}, {0.0F, 0.0F, 0.0F}, {radius * 1.07F, 0.008F, radius * 1.07F}, metal},
+				{"Boss", PrimitiveType::Sphere, {0.0F, 0.014F, 0.0F}, {0.0F, 0.0F, 0.0F}, {radius * 0.25F, radius * 0.16F, radius * 0.25F}, metal},
+			};
+		}
+
+		// Hand-held weapons for the humanoid's right hand (group at the
+		// hand, pointing along +Z of the forearm).
+		std::vector<PartSpec> goblinDaggerParts()
+		{
+			return {
+				{"Grip", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.03F}, {90.0F, 0.0F, 0.0F}, {0.018F, 0.05F, 0.018F}, kLeather},
+				{"Guard", PrimitiveType::Cube, {0.0F, 0.0F, 0.085F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.045F, 0.01F}, kIron},
+				{"Blade", PrimitiveType::Cube, {0.0F, 0.0F, 0.2F}, {0.0F, 0.0F, 0.0F}, {0.01F, 0.035F, 0.11F}, kSteel},
+				{"Tip", PrimitiveType::Cone, {0.0F, 0.0F, 0.33F}, {90.0F, 0.0F, 0.0F}, {0.01F, 0.03F, 0.035F}, kSteel},
+			};
+		}
+
+		std::vector<PartSpec> goblinSpearParts()
+		{
+			return {
+				{"Shaft", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.2F}, {90.0F, 0.0F, 0.0F}, {0.015F, 0.45F, 0.015F}, kWood},
+				{"Tip", PrimitiveType::Cone, {0.0F, 0.0F, 0.72F}, {90.0F, 0.0F, 0.0F}, {0.03F, 0.08F, 0.012F}, kSteel},
+				{"Binding", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.62F}, {90.0F, 0.0F, 0.0F}, {0.02F, 0.03F, 0.02F}, kLeather},
+			};
+		}
+
+		std::vector<PartSpec> orcClubParts()
+		{
+			std::vector<PartSpec> parts{
+				{"Handle", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.12F}, {90.0F, 0.0F, 0.0F}, {0.03F, 0.2F, 0.03F}, kDarkWood},
+				{"Head", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.5F}, {90.0F, 0.0F, 0.0F}, {0.085F, 0.22F, 0.085F}, kWood},
+				{"Band", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.3F}, {90.0F, 0.0F, 0.0F}, {0.09F, 0.02F, 0.09F}, kIron},
+				{"SpikeTip", PrimitiveType::Cone, {0.0F, 0.0F, 0.76F}, {90.0F, 0.0F, 0.0F}, {0.022F, 0.045F, 0.022F}, kSteel},
+			};
+			// Spikes all round the head: +X, -X, +Y, -Y at two heights.
+			static const std::array<const char*, 8> names{"Spike1", "Spike2", "Spike3", "Spike4", "Spike5", "Spike6",
+				"Spike7", "Spike8"};
+			int index = 0;
+			for (const float z : {0.4F, 0.6F})
+			{
+				const std::array<std::pair<glm::vec3, glm::vec3>, 4> around{{
+					{{0.11F, 0.0F, z}, {0.0F, 0.0F, -90.0F}},
+					{{-0.11F, 0.0F, z}, {0.0F, 0.0F, 90.0F}},
+					{{0.0F, 0.11F, z}, {0.0F, 0.0F, 0.0F}},
+					{{0.0F, -0.11F, z}, {0.0F, 0.0F, 180.0F}},
+				}};
+				for (const auto& [position, rotation] : around)
+				{
+					parts.push_back({names[static_cast<std::size_t>(index++)], PrimitiveType::Cone, position, rotation,
+						{0.022F, 0.045F, 0.022F}, kSteel});
+				}
+			}
+			return parts;
+		}
+
+		// The jointed body: primitive parts like the first-person hands, on
+		// joint groups the scripts animate (Hips, Spine, Head, ShoulderR/L,
+		// ElbowR/L, HipR/L, KneeR/L). It faces +Z; its RIGHT side is -X (the
+		// camera looking down +Z shows +X on screen-left). `parentScale` is
+		// cancelled so parts keep their own size; `localPosition` is where
+		// the feet go in the parent's (scaled) space. Optional `weapon` goes
+		// in the right hand (group ".Weapon"), `shield` on the left forearm
+		// (group ".Shield").
+		void buildHumanoid(Builder& builder, const std::string& body, const std::string& parent,
+			const glm::vec3& parentScale, const glm::vec3& localPosition, const HumanoidLook& look,
+			const std::vector<PartSpec>& weapon = {}, const std::vector<PartSpec>& shield = {})
+		{
+			const float s = look.size;
+			const float w = look.bulk;
+			builder.group(body, parent, localPosition, glm::vec3(0.0F),
+				glm::vec3(1.0F / parentScale.x, 1.0F / parentScale.y, 1.0F / parentScale.z), true);
 
 			const std::string hips = body + ".Hips";
-			builder.group(hips, body, {0.0F, kBodyHipsHeight, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-			builder.parts(hips, {
-				{"Pelvis", PrimitiveType::Cube, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.16F, 0.09F, 0.10F}, kPants},
+			builder.group(hips, body, glm::vec3(0.0F, kBodyHipsHeight, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			builder.parts(hips, sized({
+				{"Pelvis", PrimitiveType::Cube, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.16F, 0.09F, 0.10F}, look.pants},
 				{"Belt", PrimitiveType::Cube, {0.0F, 0.08F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.165F, 0.025F, 0.105F}, kBelt},
-			}, true);
+			}, s, w), true);
 
 			const std::string spine = body + ".Spine";
-			builder.group(spine, hips, {0.0F, 0.08F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-			builder.parts(spine, {
-				{"Belly", PrimitiveType::Cube, {0.0F, 0.12F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.155F, 0.10F, 0.10F}, kSleeve},
-				{"Chest", PrimitiveType::Cube, {0.0F, 0.33F, 0.005F}, {0.0F, 0.0F, 0.0F}, {0.195F, 0.14F, 0.115F}, kSleeve},
-				{"Pack", PrimitiveType::Cube, {0.0F, 0.30F, -0.16F}, {0.0F, 0.0F, 0.0F}, {0.13F, 0.15F, 0.055F}, kPack},
-			}, true);
+			builder.group(spine, hips, glm::vec3(0.0F, 0.08F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			const glm::vec3 torso = look.bareChest ? look.skin : look.shirt;
+			std::vector<PartSpec> spineParts{
+				{"Belly", PrimitiveType::Cube, {0.0F, 0.12F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.155F, 0.10F, 0.10F}, torso},
+				{"Chest", PrimitiveType::Cube, {0.0F, 0.33F, 0.005F}, {0.0F, 0.0F, 0.0F}, {0.195F, 0.14F, 0.115F}, torso},
+			};
+			if (look.backpack)
+			{
+				spineParts.push_back({"Pack", PrimitiveType::Cube, {0.0F, 0.30F, -0.16F}, {0.0F, 0.0F, 0.0F}, {0.13F, 0.15F, 0.055F}, kPack});
+			}
+			if (look.bareChest)
+			{
+				spineParts.push_back({"Strap", PrimitiveType::Cube, {0.0F, 0.3F, 0.0F}, {0.0F, 0.0F, 35.0F}, {0.03F, 0.2F, 0.12F}, kLeather});
+				spineParts.push_back({"Pauldron", PrimitiveType::Sphere, {0.2F, 0.45F, 0.0F}, {0.0F, 0.0F, -15.0F}, {0.09F, 0.06F, 0.1F}, kIron});
+			}
+			builder.parts(spine, sized(spineParts, s, w), true);
 
 			const std::string head = body + ".Head";
-			builder.group(head, spine, {0.0F, 0.48F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-			builder.parts(head, {
-				{"Neck", PrimitiveType::Cylinder, {0.0F, 0.04F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.05F, 0.05F}, kSkin},
-				{"Skull", PrimitiveType::Sphere, {0.0F, 0.17F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.105F, 0.12F, 0.11F}, kSkin},
-				{"Hair", PrimitiveType::Sphere, {0.0F, 0.21F, -0.015F}, {0.0F, 0.0F, 0.0F}, {0.11F, 0.095F, 0.115F}, kHair},
-				{"EyeR", PrimitiveType::Sphere, {-0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, kEye},
-				{"EyeL", PrimitiveType::Sphere, {0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, kEye},
-				{"Nose", PrimitiveType::Cube, {0.0F, 0.15F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.02F, 0.012F}, kSkin},
-			}, true);
+			builder.group(head, spine, glm::vec3(0.0F, 0.48F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			builder.parts(head, sized(headParts(look), s), true);
 
-			// Arms: shoulder -> upper arm -> elbow -> forearm + gloved hand.
+			// Arms: shoulder -> upper arm -> elbow -> forearm + hand.
 			for (const auto& [side, x] : {std::pair<const char*, float>{"R", -0.245F}, {"L", 0.245F}})
 			{
 				const std::string shoulder = body + ".Shoulder" + side;
-				builder.group(shoulder, spine, {x, 0.41F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-				builder.parts(shoulder, {
-					{"UpperArm", PrimitiveType::Capsule, {0.0F, -0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.058F, 0.15F, 0.058F}, kSleeve},
-				}, true);
+				builder.group(shoulder, spine, glm::vec3(x * w, 0.41F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(shoulder, sized({
+					{"UpperArm", PrimitiveType::Capsule, {0.0F, -0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.058F, 0.15F, 0.058F},
+						look.bareArms ? look.skin : look.shirt},
+				}, s, w), true);
 				const std::string elbow = body + ".Elbow" + side;
-				builder.group(elbow, shoulder, {0.0F, -0.29F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-				builder.parts(elbow, {
-					{"Forearm", PrimitiveType::Capsule, {0.0F, -0.13F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.13F, 0.05F}, kSkin},
-					{"Hand", PrimitiveType::Cube, {0.0F, -0.285F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.042F, 0.055F, 0.028F}, kGlove},
-				}, true);
+				builder.group(elbow, shoulder, glm::vec3(0.0F, -0.29F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(elbow, sized({
+					{"Forearm", PrimitiveType::Capsule, {0.0F, -0.13F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.13F, 0.05F}, look.skin},
+					{"Hand", PrimitiveType::Cube, {0.0F, -0.285F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.042F, 0.055F, 0.028F}, look.hands},
+				}, s, w), true);
+				if (std::string(side) == "R" && !weapon.empty())
+				{
+					const std::string weaponNode = body + ".Weapon";
+					builder.group(weaponNode, elbow, glm::vec3(0.0F, -0.285F, 0.01F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+					builder.parts(weaponNode, sized(weapon, s), true);
+				}
+				if (std::string(side) == "L" && !shield.empty())
+				{
+					// Face normal (0,-0.77,-0.64) in forearm space: forward
+					// in the carry pose and when raised to block.
+					const std::string shieldNode = body + ".Shield";
+					builder.group(shieldNode, elbow, glm::vec3(0.0F, -0.21F, -0.04F) * s, {-140.0F, 0.0F, 0.0F},
+						glm::vec3(1.0F), true);
+					builder.parts(shieldNode, sized(shield, s), true);
+				}
 			}
 
 			// Legs: hip -> thigh -> knee -> shin + boot.
 			for (const auto& [side, x] : {std::pair<const char*, float>{"R", -0.095F}, {"L", 0.095F}})
 			{
 				const std::string hip = body + ".Hip" + side;
-				builder.group(hip, hips, {x, -0.04F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-				builder.parts(hip, {
-					{"Thigh", PrimitiveType::Capsule, {0.0F, -0.215F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.075F, 0.215F, 0.075F}, kPants},
-				}, true);
+				builder.group(hip, hips, glm::vec3(x * w, -0.04F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(hip, sized({
+					{"Thigh", PrimitiveType::Capsule, {0.0F, -0.215F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.075F, 0.215F, 0.075F}, look.pants},
+				}, s, w), true);
 				const std::string knee = body + ".Knee" + side;
-				builder.group(knee, hip, {0.0F, -0.43F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
-				builder.parts(knee, {
-					{"Shin", PrimitiveType::Capsule, {0.0F, -0.20F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.064F, 0.20F, 0.064F}, kPants},
-					{"Boot", PrimitiveType::Cube, {0.0F, -0.41F, 0.045F}, {0.0F, 0.0F, 0.0F}, {0.06F, 0.045F, 0.115F}, kLeather},
-				}, true);
+				builder.group(knee, hip, glm::vec3(0.0F, -0.43F, 0.0F) * s, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(knee, sized({
+					{"Shin", PrimitiveType::Capsule, {0.0F, -0.20F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.064F, 0.20F, 0.064F}, look.pants},
+					{"Boot", PrimitiveType::Cube, {0.0F, -0.41F, 0.045F}, {0.0F, 0.0F, 0.0F}, {0.06F, 0.045F, 0.115F}, look.boots},
+				}, s, w), true);
 			}
+		}
+
+		// A monster: a hidden capsule (the collision/hit shape, center at
+		// its middle - enemy.lua's convention) carrying health.lua +
+		// enemy.lua, with a humanoid body under it. `values` are enemy.lua
+		// Inspector values for this monster.
+		std::string buildMonster(Builder& builder, const std::string& baseName, const glm::vec3& feet,
+			const HumanoidLook& look, const std::vector<PartSpec>& weapon, const std::vector<PartSpec>& shield,
+			const float maxHealth, const std::vector<std::pair<std::string, std::string>>& values)
+		{
+			const std::string name = builder.uniqueName(baseName);
+			const float height = 1.8F * look.size;
+			const float radius = 0.32F * look.size * look.bulk;
+			const glm::vec3 scale(radius, height * 0.5F, radius);
+			if (!builder.create(name, PrimitiveType::Capsule, feet + glm::vec3(0.0F, height * 0.5F, 0.0F)))
+			{
+				return {};
+			}
+			builder.set(name, "Transform", "scale", scale);
+			builder.set(name, "Renderer", "color", look.skin);
+			builder.set(name, "Collider", "enabled", true);
+			builder.tag(name, "Enemy");
+			builder.tag(name, "Empty"); // the body below is what you see
+			builder.attach(name, kHealthScript);
+			builder.scriptProperty(name, kHealthScript, "max_health", std::to_string(static_cast<int>(maxHealth)));
+			builder.attach(name, kEnemyAiScript);
+			const std::string body = name + " Body";
+			builder.scriptProperty(name, kEnemyAiScript, "body_name", body);
+			builder.scriptProperty(name, kEnemyAiScript, "model_scale", std::to_string(look.size));
+			for (const auto& [property, value] : values)
+			{
+				builder.scriptProperty(name, kEnemyAiScript, property, value);
+			}
+			builder.setIgnoreTag("NoRaycast");
+			buildHumanoid(builder, body, name, scale, {0.0F, -1.0F, 0.0F}, look, weapon, shield);
+			builder.setIgnoreTag("Viewmodel");
+			return name;
+		}
+
+		// Two goblins (melee + ranged, both with shields) and the Orc Warlord
+		// boss with his spiked club, further down the arena.
+		void buildMonsters(Builder& builder, const glm::vec3& origin)
+		{
+			HumanoidLook goblin;
+			goblin.size = 0.72F;
+			goblin.skin = kGoblinSkin;
+			goblin.shirt = kGoblinVest;
+			goblin.pants = kGoblinPants;
+			goblin.boots = kLeather;
+			goblin.hands = kGoblinSkin;
+			goblin.eyes = kGoblinEyes;
+			goblin.head = HeadStyle::Goblin;
+			goblin.backpack = false;
+			goblin.bareArms = true;
+			const std::vector<PartSpec> buckler = roundShieldParts(0.17F, kWood, kIron);
+
+			(void)buildMonster(builder, "Goblin Cutter", origin + glm::vec3(-5.0F, 0.0F, 21.0F), goblin,
+				goblinDaggerParts(), buckler, 60.0F,
+				{{"attack_style", "melee"}, {"damage", "7"}, {"attack_range", "1.3"}, {"attack_cooldown", "1.1"},
+					{"windup", "0.4"}, {"chase_speed", "3.8"}, {"search_radius", "10"}, {"escape_radius", "18"},
+					{"has_shield", "true"}, {"shield_block", "0.6"}});
+			(void)buildMonster(builder, "Goblin Spearthrower", origin + glm::vec3(5.0F, 0.0F, 23.0F), goblin,
+				goblinSpearParts(), buckler, 45.0F,
+				{{"attack_style", "ranged"}, {"damage", "6"}, {"attack_range", "13"}, {"attack_cooldown", "1.8"},
+					{"windup", "0.55"}, {"chase_speed", "3.2"}, {"search_radius", "14"}, {"escape_radius", "22"},
+					{"keep_distance", "7"}, {"projectile_speed", "15"}, {"has_shield", "true"}, {"shield_block", "0.5"}});
+
+			HumanoidLook orc;
+			orc.size = 1.45F;
+			orc.bulk = 1.35F;
+			orc.skin = kOrcSkin;
+			orc.pants = kLeather;
+			orc.boots = kIron;
+			orc.hands = kOrcSkin;
+			orc.hair = kEye;
+			orc.eyes = kOrcEyes;
+			orc.head = HeadStyle::Orc;
+			orc.backpack = false;
+			orc.bareArms = true;
+			orc.bareChest = true;
+			(void)buildMonster(builder, "Orc Warlord", origin + glm::vec3(0.0F, 0.0F, 32.0F), orc, orcClubParts(), {},
+				500.0F,
+				{{"attack_style", "melee"}, {"damage", "30"}, {"attack_range", "2.6"}, {"attack_cooldown", "2.2"},
+					{"windup", "0.85"}, {"chase_speed", "2.6"}, {"wander_speed", "1.2"}, {"search_radius", "15"},
+					{"escape_radius", "32"}, {"knockback", "7"}, {"is_boss", "true"}, {"boss_title", "Orc Warlord"}});
+		}
+
+		// The player's first-person shield (FPSRig.Shield), raised with
+		// the right mouse button - hidden until then. Authored facing the
+		// camera (disc along Z); fps_player.lua moves it.
+		std::vector<PartSpec> fpsShieldParts()
+		{
+			return {
+				{"Face", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.0F}, {90.0F, 0.0F, 0.0F}, {0.14F, 0.01F, 0.14F}, kWood},
+				{"Rim", PrimitiveType::Cylinder, {0.0F, 0.0F, 0.004F}, {90.0F, 0.0F, 0.0F}, {0.15F, 0.007F, 0.15F}, kIron},
+				{"Band", PrimitiveType::Cube, {0.0F, 0.0F, -0.012F}, {0.0F, 0.0F, 0.0F}, {0.14F, 0.014F, 0.004F}, kIron},
+				{"Boss", PrimitiveType::Sphere, {0.0F, 0.0F, 0.014F}, {0.0F, 0.0F, 0.0F}, {0.035F, 0.035F, 0.022F}, kIron},
+			};
 		}
 
 		// Something to climb in the demo arena (climbable.lua): a ladder
@@ -564,6 +846,7 @@ namespace gameforger::editor
 			}
 
 			buildClimbables(builder, origin);
+			buildMonsters(builder, origin);
 
 			(void)createGameManager(builder, origin + glm::vec3(0.0F, 0.5F, -3.0F));
 		}
@@ -613,7 +896,8 @@ namespace gameforger::editor
 		builder.tag(result.playerName, "Empty");
 
 		result.bodyName = builder.uniqueName("PlayerBody");
-		buildPlayerBody(builder, result.bodyName, result.playerName, playerScale);
+		buildHumanoid(builder, result.bodyName, result.playerName, playerScale, glm::vec3(0.0F), HumanoidLook{}, {},
+			roundShieldParts(0.2F, kWood, kIron));
 
 		// The viewmodel rig.
 		result.rigName = builder.uniqueName("FPSRig");
@@ -631,6 +915,10 @@ namespace gameforger::editor
 		builder.group(handL, rig + ".Sway", {0.16F, -0.24F, 0.46F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
 		builder.parts(handL, handParts(), true);
 		builder.set(handL, "Entity", "active", false);
+		const std::string shield = rig + ".Shield";
+		builder.group(shield, rig + ".Sway", {0.10F, -0.55F, 0.40F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+		builder.parts(shield, fpsShieldParts(), true);
+		builder.set(shield, "Entity", "active", false);
 
 		for (const WeaponSpec& weapon : weapons)
 		{

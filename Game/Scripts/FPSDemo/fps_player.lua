@@ -16,7 +16,9 @@
 --                 drag out of the window to drop, right-click for more)
 --   1 - 8 / wheel choose the hotbar slot - its weapon is equipped
 --   Left Mouse    attack / fire (hold to auto-fire the AK-47)
---   Right Mouse   aim down sights (pistol, AK-47)
+--   Right Mouse   raise the SHIELD (block) - or aim down sights with the
+--                 pistol / AK-47. A block right as a hit lands is a PARRY:
+--                 no damage, and a close attacker is stunned.
 --   R             reload
 --
 -- WEAPONS (an item's `weapon` value in items.lua picks one)
@@ -58,6 +60,9 @@
 -- @property body_name string PlayerBody
 -- @property crouch_multiplier number 0.5
 -- @property climb_speed number 2.2
+-- @property has_shield bool true
+-- @property parry_window number 0.3
+-- @property block_reduction number 0.8
 
 local FpsPlayer = {}
 
@@ -276,6 +281,20 @@ function FpsPlayer:on_start()
     self.pose = {}
     self.sent_pose = {}
 
+    -- Shield (right mouse): block_start is when it went up (parry timing).
+    if self.has_shield == nil then self.has_shield = true end
+    self.parry_window = self.parry_window or 0.3
+    self.block_reduction = clamp(self.block_reduction or 0.8, 0, 1)
+    self.blocking = false
+    self.block = 0
+    self.block_hit = 0
+    self.block_start = -10
+    self.last_parry_time = -10
+    self.last_block_time = -10
+    self.shield_node = rig .. ".Shield"
+    self.has_shield_rig = self.world:getEntityPosition(self.shield_node) ~= nil
+    self.shield_shown = false
+
     self:hide_all_weapons()
 end
 
@@ -307,14 +326,77 @@ function FpsPlayer:on_update(delta_time)
         self:update_hotbar_input()
     end
 
+    self:update_block(dt, ui_open)
     local moving, sprinting = self:update_movement(dt)
     self:update_equipped()
-    -- Both hands are on the wall while climbing: no attacking.
-    self:update_weapon(dt, ui_open or self.climbing, sprinting)
+    -- Both hands are on the wall while climbing, and no attacking behind the shield.
+    self:update_weapon(dt, ui_open or self.climbing or self.blocking, sprinting)
     self:update_view_motion(dt, moving, sprinting)
     self:update_rig()
     self:update_body(dt, sprinting)
     self:update_hud()
+end
+
+-- ---------------------------------------------------------------- shield
+
+-- Guns keep the right mouse button for aiming down sights.
+function FpsPlayer:can_block()
+    return self.has_shield and ADS_OFFSET[self.weapon_id or "fists"] == nil
+end
+
+function FpsPlayer:update_block(dt, ui_open)
+    local want = (not ui_open) and self:can_block() and self.input:isMouseButtonDown("Right")
+        and self.reload_t < 0 and not self.climbing
+    if want and not self.blocking then
+        self.block_start = self.time
+    end
+    self.blocking = want
+    self.block = approach(self.block, want and 1 or 0, 18, dt)
+    self.block_hit = approach(self.block_hit, 0, 10, dt)
+end
+
+-- health.lua asks this before a hit lands. The raised shield covers hits
+-- from the front: a PARRY (raised within parry_window of the hit) stops it
+-- and stuns a close attacker; a plain BLOCK stops block_reduction of it.
+function FpsPlayer:modify_incoming_damage(amount, attacker_name, info)
+    if not self.blocking or self.block < 0.5 then return nil end
+    local source = (info and info.from) or (attacker_name and self.world:getEntityPosition(attacker_name))
+    if source == nil then return nil end
+    local p = self.entity:getPosition()
+    local dx, dz = source.x - p.x, source.z - p.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    local _, aim = self.camera:getAim()
+    local forward = aim or self.entity:getForward()
+    local flat = math.sqrt(forward.x * forward.x + forward.z * forward.z)
+    if d < 1e-3 or flat < 1e-3 or (dx * forward.x + dz * forward.z) / (d * flat) < 0.3 then
+        return nil -- from the side or behind: the shield does not cover it
+    end
+    local spark = v(p.x + forward.x / flat * 0.5, p.y + 1.25, p.z + forward.z / flat * 0.5)
+    self.block_hit = 1
+    if self.time - self.block_start <= self.parry_window then
+        self.last_parry_time = self.time
+        self.world:spawnFlash(spark, {r = 1.0, g = 0.85, b = 0.3}, 40, 0.2)
+        self.world:spawnText(v(spark.x, spark.y + 0.35, spark.z), "PARRY!", {r = 1.0, g = 0.85, b = 0.25}, 0.9, 1.4)
+        if attacker_name ~= nil and attacker_name ~= "" and d < 4.5 then
+            self.world:stun(attacker_name, 1.6, {element = "parry"})
+        end
+        return 0
+    end
+    self.last_block_time = self.time
+    self.world:spawnFlash(spark, {r = 0.9, g = 0.9, b = 0.95}, 22, 0.12)
+    self.world:spawnText(v(spark.x, spark.y + 0.3, spark.z), "BLOCK", {r = 0.85, g = 0.9, b = 1.0}, 0.6, 0.9)
+    return amount * (1 - self.block_reduction)
+end
+
+-- A heavy hit (the Orc Warlord's club) shoves the player away. A parry
+-- stops it; a block halves it.
+function FpsPlayer:on_knockback(dx, dz, strength)
+    if self.time - self.last_parry_time < 0.25 then return end
+    if self.time - self.last_block_time < 0.25 then strength = strength * 0.5 end
+    if self.climbing then self:stop_climbing() end
+    self.push_x, self.push_z = dx * strength, dz * strength
+    self.velocity_y = math.max(self.velocity_y, 2.5)
+    self.grounded = false
 end
 
 -- climbable.lua sends this every frame the player is in reach of it.
@@ -350,6 +432,7 @@ function FpsPlayer:update_movement(dt)
     local speed = self.walk_speed * (sprinting and self.sprint_multiplier or 1)
     if self.ads > 0.5 then speed = speed * 0.6 end
     if self.crouching then speed = speed * self.crouch_multiplier end
+    if self.blocking then speed = speed * 0.6 end
 
     -- Crouching lowers the first-person eye too.
     self.crouch_blend = approach(self.crouch_blend, self.crouching and 1 or 0, 12, dt)
@@ -599,6 +682,17 @@ function FpsPlayer:body_pose(sprinting)
         pose.KneeR = v(3, 0, 0)
         pose.KneeL = v(3, 0, 0)
     end
+    -- Shield arm (left): carried in front, raised to block.
+    if self.has_shield then
+        if self.block > 0.3 then
+            pose.ShoulderL = v(-55, 0, 12)
+            pose.ElbowL = v(-80, 0, 0)
+            pose.Spine = add(pose.Spine, v(6, 0, 0))
+        elseif self.grounded then
+            pose.ShoulderL = v(-20, 0, 8)
+            pose.ElbowL = v(-60, 0, 0)
+        end
+    end
     -- Look up/down with the head.
     pose.Head = add(pose.Head, v(-clamp(self.camera:getPitch(), -60, 60) * 0.5, 0, 0))
     return pose, drop
@@ -627,6 +721,10 @@ function FpsPlayer:update_body(dt, sprinting)
     local target = nil
     if self.climbing then
         target = math.deg(math.atan(-self.climb.nx, -self.climb.nz))
+    elseif self.blocking then
+        -- Behind the shield: face where the camera looks.
+        local _, aim = self.camera:getAim()
+        if aim ~= nil and (aim.x ~= 0 or aim.z ~= 0) then target = math.deg(math.atan(aim.x, aim.z)) end
     elseif self.move_speed > 0 and (self.move_x ~= 0 or self.move_z ~= 0) then
         target = math.deg(math.atan(self.move_x, self.move_z))
     end
@@ -1157,8 +1255,25 @@ function FpsPlayer:update_rig()
     if ADS_OFFSET[id] ~= nil then
         r_pos = add(r_pos, mul(ADS_OFFSET[id], self.ads))
     end
+    -- The shield comes up from below while blocking; the weapon hand drops back.
+    local b = smooth(self.block)
+    r_pos = add(r_pos, v(0.02 * b, -0.1 * b, -0.06 * b))
     self.world:setEntityPosition(self.hand_r, to_rig(r_pos))
     self.world:setEntityRotation(self.hand_r, to_rig_rot(r_rot))
+    if self.has_shield_rig then
+        local show = b > 0.02
+        if show ~= self.shield_shown then
+            self.world:setEntityActive(self.shield_node, show)
+            self.shield_shown = show
+        end
+        if show then
+            local hit = self.block_hit
+            -- Held up on the left, angled so it covers without hiding the view.
+            self.world:setEntityPosition(self.shield_node, to_rig(v(-0.2 + 0.02 * hit, lerp(-0.62, -0.15, b) - 0.04 * hit,
+                0.55 - 0.07 * hit)))
+            self.world:setEntityRotation(self.shield_node, to_rig_rot(v(lerp(45, 6, b) - 8 * hit, lerp(-45, -28, b), 0)))
+        end
+    end
 
     if id == "fists" then
         local l_pos = add(HAND_L_REST, v(0, -0.28 * equip - 0.04 * self.sprint_blend, 0))

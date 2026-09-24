@@ -29,7 +29,8 @@ namespace gameforger::editor
 		// xp_system.lua unlocks (Fire/Frost/Life), training targets
 		// (health.lua, two of them chasing and hitting back via
 		// enemy_ai.lua), a rock to mine, a ladder and a rock cliff to
-		// climb (climbable.lua), and a Game Manager.
+		// climb (climbable.lua), two goblins (melee + ranged, with shields)
+		// and the Orc Warlord boss (enemy.lua), and a Game Manager.
 		bool includeDemoContent = false;
 		// Also add a large ground plane (for an empty scene).
 		bool includeGround = false;
@@ -57,9 +58,11 @@ namespace gameforger::editor
 	//                                                    until equipped; guns have a
 	//                                                    .Muzzle marker)
 	//         FPSRig.HandL          <- left hand, shown for two-handed weapons
+	//         FPSRig.Shield         <- shield, raised with the right mouse button
 	//   PlayerBody (child of Player) <- third-person body, shown only in third person:
 	//     .Hips / .Spine / .Head / .ShoulderR,L / .ElbowR,L / .HipR,L / .KneeR,L joints,
-	//     animated by fps_player.lua (idle, walk, run, jump, crouch, climb)
+	//     animated by fps_player.lua (idle, walk, run, jump, crouch, climb, block),
+	//     .Shield on the left forearm
 	//
 	// Every hand/weapon part is a plain primitive child - select any of them
 	// in the Hierarchy to recolor/resize it, or parent your own imported model

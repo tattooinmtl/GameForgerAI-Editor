@@ -10,6 +10,13 @@
 --   on_stun(seconds, attacker, info)
 --   on_status(kind, seconds, strength, source)   kind = "burn" (strength = damage/sec) or "frost"
 --   is_dead()                           true while dead (the player controller freezes)
+--   get_health()                        {health =, max =}
+-- It sends on_death(attacker) to this object's other scripts when a non-player dies.
+--
+-- Shields: before a hit lands, on_damage asks this object's OTHER scripts
+--   modify_incoming_damage(amount, attacker, info) -> new amount
+-- (fps_player.lua's shield block/parry, enemy.lua's goblin shields). A
+-- returned number replaces the damage; 0 = fully blocked.
 --
 -- @property max_health number 100
 -- @property destroy_on_death bool true
@@ -71,11 +78,23 @@ function Health:is_dead()
     return self.dead == 1
 end
 
+function Health:get_health()
+    return {health = self.health, max = self.max_health}
+end
+
 function Health:on_damage(amount, attacker_name, info)
     if self.dead == 1 or amount == nil or amount <= 0 then
         return false
     end
     info = info or {}
+    -- A shield (another script on this object) can reduce or stop the hit.
+    local _, changed = self.entity:send("modify_incoming_damage", amount, attacker_name, info)
+    if type(changed) == "number" then
+        amount = changed
+        if amount <= 0 then
+            return false
+        end
+    end
     self.health = math.max(0, self.health - amount)
 
     local top = self:top_position()
@@ -106,6 +125,7 @@ function Health:on_damage(amount, attacker_name, info)
         else
             print(self.entity:getName() .. " was defeated" ..
                 ((attacker_name ~= nil and attacker_name ~= "") and (" by " .. attacker_name) or "") .. ".")
+            self.entity:send("on_death", attacker_name)
             if self.destroy_on_death then
                 self.entity:setActive(false)
             end

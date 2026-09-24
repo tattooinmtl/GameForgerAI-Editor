@@ -1246,13 +1246,15 @@ namespace
 		int playerId = -1;
 		float lookYaw = 0.0F;
 
-		explicit DemoPlayerHarness(const std::filesystem::path& root) : projectRoot(root), scene(root)
+		explicit DemoPlayerHarness(const std::filesystem::path& root, const bool demoContent = false)
+			: projectRoot(root), scene(root)
 		{
 			std::filesystem::remove_all(projectRoot);
 			(void)importFpsDemoKit(std::filesystem::path(GAMEFORGER_SOURCE_DIR), projectRoot, false);
 			bus.setHandler([this](const AIEditorCommand& cmd) { return scene.execute(cmd); });
 			FpsRigOptions options;
 			options.includeGround = true;
+			options.includeDemoContent = demoContent;
 			rig = buildFpsPlayerRig(scene, bus, options);
 			playerId = scene.findEntity(rig.playerName)->id;
 		}
@@ -1450,6 +1452,229 @@ void testFpsDemoPlayerBody()
 	TEST_ASSERT(h.scene.findEntity(body + ".KneeR")->localRotationEuler.x > 40.0F && !h.playerFlag("grounded"),
 		"jumping tucks the legs");
 	h.frames(60);
+	TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+#endif
+}
+
+#ifdef GAMEFORGER_SOURCE_DIR
+namespace
+{
+	// The demo arena with only `keep` of the AI enemies switched on, the
+	// player moved to `playerAt` facing +Z, and a test driver on the player
+	// (cmd "hit"/"stun" -> world:damage/stun on `target`).
+	void setUpMonsterFight(DemoPlayerHarness& h, const std::string& keep, const glm::vec3& playerAt)
+	{
+		for (const SceneEntity& entity : std::vector<SceneEntity>(h.scene.entities()))
+		{
+			if (hasScript(entity, fpsdemo::kEnemy) && entity.name != keep)
+			{
+				(void)h.bus.execute(SetPropertyCommand{entity.name, "Entity", "active", false});
+			}
+		}
+		(void)h.bus.execute(SetPropertyCommand{h.rig.playerName, "Transform", "position", playerAt});
+		writeTextFile(h.projectRoot / "Game" / "Scripts" / "test_hit.lua", R"(local D = {}
+function D:on_start() self.cmd = "" self.target = "" self.amount = 0 end
+function D:on_update(dt)
+	if self.cmd == "hit" then self.world:damage(self.target, self.amount, {element = "physical"}) end
+	if self.cmd == "stun" then self.world:stun(self.target, 3) end
+	self.cmd = ""
+end
+return D
+)");
+		(void)h.bus.execute(AttachScriptCommand{h.rig.playerName, "Game/Scripts/test_hit.lua"});
+	}
+
+	float healthOf(DemoPlayerHarness& h, const std::string& name)
+	{
+		return h.runtime.getScriptNumberField(h.scene.findEntity(name)->id, fpsdemo::kHealth, "health", -1.0F);
+	}
+
+	void driverHit(DemoPlayerHarness& h, const std::string& target, const float amount, const char* cmd = "hit")
+	{
+		const int id = h.playerId;
+		h.runtime.setScriptStringField(id, "Game/Scripts/test_hit.lua", "target", target);
+		h.runtime.setScriptNumberField(id, "Game/Scripts/test_hit.lua", "amount", amount);
+		h.runtime.setScriptStringField(id, "Game/Scripts/test_hit.lua", "cmd", cmd);
+		h.frames(1);
+	}
+}
+#endif
+
+void testFpsDemoMonsterModels()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	DemoPlayerHarness h("fps_monster_models", true);
+	TEST_ASSERT(h.rig.success, "arena builds: " + h.rig.message);
+	for (const char* monster : {"Goblin Cutter", "Goblin Spearthrower", "Orc Warlord"})
+	{
+		const SceneEntity* root = h.scene.findEntity(monster);
+		TEST_ASSERT(root != nullptr, std::string("monster exists: ") + monster);
+		TEST_ASSERT(hasTag(*root, "Enemy") && hasTag(*root, "Empty"), std::string("hidden hit capsule: ") + monster);
+		TEST_ASSERT(hasScript(*root, fpsdemo::kEnemy) && hasScript(*root, fpsdemo::kHealth), std::string("scripts: ") + monster);
+		const std::string body = std::string(monster) + " Body";
+		for (const char* joint : {".Hips", ".Head", ".ShoulderR", ".ElbowL", ".KneeR", ".Weapon"})
+		{
+			TEST_ASSERT(h.scene.findEntity(body + joint) != nullptr, body + joint);
+		}
+		const SceneEntity* skull = h.scene.findEntity(body + ".Head.Skull");
+		TEST_ASSERT(skull != nullptr && hasTag(*skull, "NoRaycast"), std::string("model parts ignored by hits: ") + monster);
+	}
+	TEST_ASSERT(h.scene.findEntity("Goblin Cutter Body.Shield") != nullptr &&
+			h.scene.findEntity("Goblin Spearthrower Body.Shield") != nullptr,
+		"both goblins carry shields");
+	TEST_ASSERT(h.scene.findEntity("Orc Warlord Body.Shield") == nullptr &&
+			h.scene.findEntity("Orc Warlord Body.Weapon.Spike8") != nullptr,
+		"the orc has a spiked club, no shield");
+	TEST_ASSERT(h.scene.findEntity(h.rig.bodyName + ".Shield") != nullptr &&
+			h.scene.findEntity(h.rig.rigName + ".Shield") != nullptr,
+		"the player has a shield (third-person body + first-person rig)");
+
+	h.start();
+	h.frames(5);
+	for (const char* monster : {"Goblin Cutter", "Orc Warlord"})
+	{
+		const SceneEntity* boot = h.scene.findEntity(std::string(monster) + " Body.KneeR.Boot");
+		const SceneEntity* root = h.scene.findEntity(monster);
+		const float feet = root->position.y - root->scale.y;
+		TEST_ASSERT(std::abs((boot->position.y - boot->scale.y) - feet) < 0.05F,
+			std::string("boots on the ground: ") + monster);
+	}
+	const SceneEntity* orcBoot = h.scene.findEntity("Orc Warlord Body.KneeR.Boot");
+	const SceneEntity* goblinBoot = h.scene.findEntity("Goblin Cutter Body.KneeR.Boot");
+	TEST_ASSERT(orcBoot->scale.y > goblinBoot->scale.y * 1.8F, "the orc is much bigger than a goblin");
+	TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+#endif
+}
+
+void testFpsDemoGoblinsAndShields()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	const std::string cutter = "Goblin Cutter";
+	const std::string player = "Player";
+
+	// 1. The melee goblin turns, winds up and hits the player.
+	{
+		DemoPlayerHarness h("fps_goblin_1", true);
+		const glm::vec3 goblinFeet = h.scene.findEntity(cutter)->position - glm::vec3(0.0F, h.scene.findEntity(cutter)->scale.y, 0.0F);
+		setUpMonsterFight(h, cutter, goblinFeet + glm::vec3(0.0F, 0.0F, -1.1F));
+		h.start();
+		const float before = healthOf(h, h.rig.playerName);
+		float mostRaised = 0.0F;
+		for (int i = 0; i < 90; ++i)
+		{
+			h.frames(1);
+			mostRaised = std::min(mostRaised, h.scene.findEntity(cutter + " Body.ShoulderR")->localRotationEuler.x);
+		}
+		TEST_ASSERT(healthOf(h, h.rig.playerName) <= before - 6.9F, "the goblin's dagger hurts the player");
+		TEST_ASSERT(mostRaised < -100.0F, "the goblin raises its arm to strike");
+		TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+	}
+
+	// 2. Shield up early = BLOCK (80% less); raised as the blow lands = PARRY.
+	{
+		DemoPlayerHarness h("fps_goblin_2", true);
+		const SceneEntity* g = h.scene.findEntity(cutter);
+		setUpMonsterFight(h, cutter, g->position - glm::vec3(0.0F, g->scale.y, 1.1F));
+		h.start();
+		h.input.rightMouse = true;
+		const float before = healthOf(h, h.rig.playerName);
+		h.frames(60);
+		const float lost = before - healthOf(h, h.rig.playerName);
+		TEST_ASSERT(lost > 1.0F && lost < 2.0F, "a block stops 80% of the hit (lost " + std::to_string(lost) + ")");
+		h.input.rightMouse = false;
+		h.frames(20);
+
+		// Wait for the next wind-up, raise the shield just before it lands.
+		const int goblinId = h.scene.findEntity(cutter)->id;
+		for (int i = 0; i < 200 && h.runtime.getScriptNumberField(goblinId, fpsdemo::kEnemy, "attack_t", -1.0F) < 0.25F; ++i)
+		{
+			h.frames(1);
+		}
+		const float beforeParry = healthOf(h, h.rig.playerName);
+		h.input.rightMouse = true;
+		h.frames(20);
+		TEST_ASSERT(healthOf(h, h.rig.playerName) == beforeParry, "a parry takes no damage");
+		TEST_ASSERT(h.runtime.getScriptNumberField(goblinId, fpsdemo::kEnemy, "stunned_time", 0.0F) > 0.8F,
+			"a parry stuns the goblin");
+		TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+	}
+
+	// 3. The goblin's shield blocks 60% from the front - but not while stunned.
+	{
+		DemoPlayerHarness h("fps_goblin_3", true);
+		const SceneEntity* g = h.scene.findEntity(cutter);
+		setUpMonsterFight(h, cutter, g->position - glm::vec3(0.0F, g->scale.y, 6.0F));
+		h.start();
+		h.frames(20); // it notices the player and comes at them, shield first (not attacking yet)
+		float before = healthOf(h, cutter);
+		driverHit(h, cutter, 10.0F);
+		TEST_ASSERT(std::abs((before - healthOf(h, cutter)) - 4.0F) < 0.01F,
+			"goblin shield blocks 60% from the front (lost " + std::to_string(before - healthOf(h, cutter)) + ")");
+		driverHit(h, cutter, 0.0F, "stun");
+		before = healthOf(h, cutter);
+		driverHit(h, cutter, 10.0F);
+		TEST_ASSERT(std::abs((before - healthOf(h, cutter)) - 10.0F) < 0.01F, "no block while stunned");
+		TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+	}
+
+	// 4. The spear thrower keeps its distance and its spears hit.
+	{
+		const std::string thrower = "Goblin Spearthrower";
+		DemoPlayerHarness h("fps_goblin_4", true);
+		const SceneEntity* g = h.scene.findEntity(thrower);
+		setUpMonsterFight(h, thrower, g->position - glm::vec3(0.0F, g->scale.y, 9.0F));
+		h.start();
+		const float before = healthOf(h, h.rig.playerName);
+		h.frames(240);
+		TEST_ASSERT(healthOf(h, h.rig.playerName) < before - 5.0F, "thrown spears hit the player");
+		const glm::vec3 gp = h.scene.findEntity(thrower)->position;
+		const glm::vec3 pp = h.player().position;
+		const float apart = glm::length(glm::vec2(gp.x - pp.x, gp.z - pp.z));
+		TEST_ASSERT(apart > 5.0F && apart < 10.5F, "it keeps its distance (" + std::to_string(apart) + ")");
+		TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+	}
+#endif
+}
+
+void testFpsDemoOrcBoss()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	const std::string orc = "Orc Warlord";
+	DemoPlayerHarness h("fps_orc", true);
+	const SceneEntity* o = h.scene.findEntity(orc);
+	const glm::vec3 orcFeet = o->position - glm::vec3(0.0F, o->scale.y, 0.0F);
+	setUpMonsterFight(h, orc, orcFeet + glm::vec3(0.0F, 0.0F, -2.2F));
+	h.start();
+	const float before = healthOf(h, h.rig.playerName);
+	bool barShown = false;
+	float farthest = 0.0F;
+	for (int i = 0; i < 150; ++i)
+	{
+		h.frames(1);
+		barShown = barShown || std::any_of(h.gameplay.hudBars.begin(), h.gameplay.hudBars.end(),
+			[](const auto& bar) { return bar.id == "boss" && bar.order >= 100 && bar.label.rfind("Orc Warlord", 0) == 0; });
+		const glm::vec3 pp = h.player().position;
+		farthest = std::max(farthest, glm::length(glm::vec2(pp.x - orcFeet.x, pp.z - orcFeet.z)));
+	}
+	TEST_ASSERT(barShown, "the boss health bar shows at the top while fighting");
+	TEST_ASSERT(healthOf(h, h.rig.playerName) <= before - 29.0F, "the club hits hard");
+	TEST_ASSERT(farthest > 3.5F, "the club knocks the player back (" + std::to_string(farthest) + ")");
+
+	driverHit(h, orc, 10000.0F);
+	h.frames(2);
+	TEST_ASSERT(!h.scene.isActiveInHierarchy(*h.scene.findEntity(orc)), "the boss can be defeated");
+	TEST_ASSERT(std::none_of(h.gameplay.hudBars.begin(), h.gameplay.hudBars.end(),
+		[](const auto& bar) { return bar.id == "boss"; }), "its bar goes away");
+	TEST_ASSERT(h.gameplay.messageText.rfind("Orc Warlord is defeated", 0) == 0, "victory message");
 	TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
 #endif
 }
@@ -1798,6 +2023,9 @@ int main()
 	RUN_TEST(testSliderScriptProperty);
 	RUN_TEST(testFpsDemoClimbing);
 	RUN_TEST(testFpsDemoPlayerBody);
+	RUN_TEST(testFpsDemoMonsterModels);
+	RUN_TEST(testFpsDemoGoblinsAndShields);
+	RUN_TEST(testFpsDemoOrcBoss);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

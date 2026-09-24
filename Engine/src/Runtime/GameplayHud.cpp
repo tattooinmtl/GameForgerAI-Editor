@@ -231,10 +231,27 @@ namespace gameforger::editor
 			constexpr float kHeight = 16.0F;
 			constexpr float kGap = 6.0F;
 			glm::vec2 cursor(frame.origin.x + 18.0F, frame.origin.y + frame.size.y - 22.0F - kHeight);
+			float topY = frame.origin.y + 16.0F;
 			// Stack upward from the bottom-left, first bar at the bottom.
+			// Bars with order >= 100 (a boss's health) go wide across the top.
 			for (auto it = gameplay.hudBars.rbegin(); it != gameplay.hudBars.rend(); ++it)
 			{
 				const GameplayState::HudBar& bar = *it;
+				if (bar.order >= 100)
+				{
+					const float width = std::min(frame.size.x * 0.5F, 560.0F);
+					const glm::vec2 min(frame.origin.x + (frame.size.x - width) * 0.5F, topY);
+					const glm::vec2 max = min + glm::vec2(width, 22.0F);
+					canvas.rectFilled(min - glm::vec2(3.0F), max + glm::vec2(3.0F), {0.0F, 0.0F, 0.0F, 0.6F}, 4.0F);
+					canvas.rectFilled(min, glm::vec2(min.x + width * glm::clamp(bar.fraction, 0.0F, 1.0F), max.y),
+						withAlpha(bar.color, 0.95F), 3.0F);
+					canvas.rect(min, max, {1.0F, 0.85F, 0.5F, 0.6F}, 3.0F, 1.5F);
+					const glm::vec2 size = canvas.textSize(bar.label, 0.95F);
+					shadowedText(canvas, glm::vec2(min.x + (width - size.x) * 0.5F, min.y + (22.0F - size.y) * 0.5F),
+						{1.0F, 1.0F, 1.0F, 1.0F}, bar.label, 0.95F);
+					topY += 32.0F;
+					continue;
+				}
 				const glm::vec2 min = cursor;
 				const glm::vec2 max = cursor + glm::vec2(kWidth, kHeight);
 				canvas.rectFilled(min - glm::vec2(2.0F), max + glm::vec2(2.0F), {0.0F, 0.0F, 0.0F, 0.55F}, 4.0F);

@@ -54,6 +54,21 @@
 
 ---
 
+## 1l. Session Log: 2026-09-24 (goblins, Orc Warlord boss, shields + parry - Alpha 0.88)
+
+The user asked for a pre-made set of 2 goblins (weak, range + melee, with shields), a shield for the player on the other mouse button (attack + defend, parry), and an orc boss with a big spiked club (melee). Every change:
+1. **One humanoid builder** (`Engine/src/Editor/FpsRigBuilder.cpp`): `buildPlayerBody` became `buildHumanoid(look, weapon, shield)` - same joints for the player, goblins and orc; `HumanoidLook` (size, bulk, colors, head style Human/Goblin/Orc, backpack, bare arms/chest). New part sets: goblin head (ears, pointy nose, yellow eyes), orc head (tusks, brow, jaw, topknot), orc straps + pauldron, goblin dagger, goblin spear, orc spiked club (12 spikes), round shields. Builder `setIgnoreTag`: enemy model parts are tagged "NoRaycast" (hits land on the hidden capsule).
+2. **Monsters in the demo arena** (`buildMonster`/`buildMonsters`): hidden Enemy capsule (tag Empty) + health.lua + enemy.lua + body. "Goblin Cutter" (60 HP, dagger, shield), "Goblin Spearthrower" (45 HP, spears, shield, keeps 7 m away), "Orc Warlord" (500 HP, club, 30 damage, knockback 7, boss bar). Values are per-object Inspector properties.
+3. **`Game/Scripts/FPSDemo/enemy.lua` rewritten** as one configurable enemy: new properties attack_style (melee|ranged), damage, attack_range, attack_cooldown, windup, chase/wander speed, search/escape radius, keep_distance, projectile_speed, has_shield, shield_block, knockback, is_boss, boss_title, body_name, model_scale. Melee = wind-up then strike (the parry window); ranged = lobbed spears (flight, hits, walls); shields block from the front unless attacking/stunned; stuns cancel attacks; boss bar while fighting; body animation (walk, run, attack, throw, guard, stunned). The Chasers keep their old values but now also wind up (0.3 s) before hitting.
+4. **`health.lua`**: before damage, asks the object's other scripts `modify_incoming_damage(amount, attacker, info)` (shields); new `get_health()`; sends `on_death` when a non-player dies.
+5. **`fps_player.lua` shield**: right mouse raises it (not with pistol/AK-47 - they keep aiming); 0.6x speed and no attacking while blocking; BLOCK = 80% less damage from the front; PARRY (raised within `parry_window` 0.3 s of the hit) = no damage + stuns an attacker within 4.5 m for 1.6 s; `on_knockback` (parry cancels, block halves); first-person `FPSRig.Shield` rises from below on the left; third-person body carries it and raises it (and faces the camera) while blocking. New properties has_shield, parry_window, block_reduction.
+6. **HUD** (`Engine/src/Runtime/GameplayHud.cpp`): HUD bars with order >= 100 are drawn as a wide bar across the top (the boss bar) - Editor Game view and Runtime.
+7. **Demo scene** regenerated.
+8. **Tests** (`Engine/tests/TestMain.cpp`): `testFpsDemoMonsterModels`, `testFpsDemoGoblinsAndShields` (goblin hits; block = 80% less; parry = no damage + stun; goblin shield 60% from the front but not while stunned; spears hit and the thrower keeps its distance), `testFpsDemoOrcBoss` (boss bar, heavy hit, knockback, defeat clears the bar + victory message). 29 tests.
+9. **Version** 0.87 -> 0.88.
+* **Verified:** Debug build of all targets, zero new warnings on changed lines, 29/29 tests. Runtime screenshots: goblins + orc approaching with the boss bar, third-person shield raised, first-person shield raised with the orc coming (first version of the first-person shield covered most of the view - made it smaller and moved it left).
+* **Not done (not asked):** no death animation (defeated enemies disappear, as before); the third-person body still doesn't hold the equipped weapon; the shield has no durability.
+
 ## 1k. Session Log: 2026-09-24 (FPS Demo full body + climbing - Alpha 0.87)
 
 The user asked for a full third-person body for the demo player (built like the hands), with jump/run/walk/crouch/climb animations, and a script to put on any object to climb it (ladder, wall, cliff) with a 0-360 slider in the Inspector that locks the climb angle. Every change:

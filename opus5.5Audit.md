@@ -128,6 +128,11 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **NEW G7 🟡 (not fixed):** colliders ignore rotation (position ± scale boxes) - a turned solid object blocks as if unturned. Found while testing climbing.
 - Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
 
+### 2.13 Update 2026-09-24 (Alpha 0.88)
+
+- **Feature (user request, not an audit item):** goblins (melee + ranged, shields), Orc Warlord boss, player shield block/parry, boss HUD bar. See changelog §1l.
+- Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
+
 ## 3. Findings — duplication and things that don't make sense
 
 | # | Finding | Where |

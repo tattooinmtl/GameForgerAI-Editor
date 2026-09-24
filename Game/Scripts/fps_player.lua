@@ -299,9 +299,7 @@ function FpsPlayer:update_movement(dt)
     if self.ads > 0.5 then speed = speed * 0.6 end
 
     local forward = self.entity:getForward()
-    -- Screen-right for a camera looking along `forward` (cross(forward, up)).
-    -- Not self.entity:getRight(), which returns the opposite side.
-    local right = v(-forward.z, 0, forward.x)
+    local right = self.entity:getRight()
     local mx = forward.x * forward_axis + right.x * strafe_axis
     local mz = forward.z * forward_axis + right.z * strafe_axis
     local ml = math.sqrt(mx * mx + mz * mz)

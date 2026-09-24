@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
 
 #include "GameForger/Editor/AICommand.hpp"
@@ -513,6 +514,7 @@ return Controller
 // FPS player / items / inventory / weapon API tests
 // ----------------------------------------------------------------------------
 #include "GameForger/Editor/FpsRigBuilder.hpp"
+#include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
 namespace
@@ -921,6 +923,40 @@ return S
 	fx.runtime.shutdown();
 	std::filesystem::remove(targetScript);
 	std::filesystem::remove(shooterScript);
+}
+
+void testGetRightMatchesScreenRight()
+{
+	// Regression: audit H-Script-1 (2026-08-13) flipped getRight to +X on
+	// paper, which made D strafe LEFT. Check it against the camera the
+	// renderer really uses (glm::lookAt) at several yaws.
+	const std::string script = "Game/Scripts/test_get_right.lua";
+	writeTextFile(script, R"(local T = {}
+function T:on_start()
+	local r = self.entity:getRight()
+	self.rx = r.x self.ry = r.y self.rz = r.z
+end
+return T
+)");
+	for (const float yaw : {0.0F, 37.0F, 90.0F, 180.0F, -125.0F})
+	{
+		SceneFixture fx;
+		(void)fx.bus.execute(CreateEntityCommand{"P"});
+		(void)fx.bus.execute(SetPropertyCommand{"P", "Transform", "rotation", glm::vec3(0.0F, yaw, 0.0F)});
+		(void)fx.bus.execute(AttachScriptCommand{"P", script});
+		fx.start();
+		const int id = fx.find("P")->id;
+		const glm::vec3 right(fx.runtime.getScriptNumberField(id, script, "rx", 0.0F),
+			fx.runtime.getScriptNumberField(id, script, "ry", 0.0F), fx.runtime.getScriptNumberField(id, script, "rz", 0.0F));
+		// Camera looking along the entity's forward (fps convention).
+		const glm::vec3 forward = yawPitchForward(yaw, 0.0F);
+		const glm::vec3 eye(0.0F, 1.6F, 0.0F);
+		const glm::mat4 view = glm::lookAt(eye, eye + forward, glm::vec3(0.0F, 1.0F, 0.0F));
+		const glm::vec4 onScreen = view * glm::vec4(eye + right, 1.0F);
+		TEST_ASSERT(onScreen.x > 0.99F, "getRight points to the RIGHT of the screen at yaw " + std::to_string(yaw));
+		fx.runtime.shutdown();
+	}
+	std::filesystem::remove(script);
 }
 
 void testScriptMessagingApi()
@@ -1370,6 +1406,7 @@ int main()
 	RUN_TEST(testItemPickupHideAndDrop);
 	RUN_TEST(testFpsRigBuilder);
 	RUN_TEST(testWeaponLuaApi);
+	RUN_TEST(testGetRightMatchesScreenRight);
 	RUN_TEST(testScriptMessagingApi);
 	RUN_TEST(testFpsPlayerEndToEnd);
 

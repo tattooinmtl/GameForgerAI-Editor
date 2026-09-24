@@ -190,11 +190,13 @@ namespace gameforger::editor
 			ScriptRuntime* runtime = runtimeFrom(L);
 			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
 			const float yawRadians = glm::radians(entity != nullptr ? entity->rotationEuler.y : 0.0F);
-			// Y up, Z forward (right-handed): right = +X = cross(+Y, forward).
-			// The previous cross(forward, +Y) returned -X, so D pressed while
-			// facing +Z strafed the player in the wrong direction.
+			// Screen-right for a camera looking along `forward`. The game camera
+			// is glm::lookAt (right-handed), whose right axis is
+			// cross(forward, up) - i.e. -X when looking down +Z (+X shows on
+			// screen-LEFT). The 2026-08-13 "fix" (audit H-Script-1) switched this
+			// to cross(up, forward) = +X on paper, which made D strafe left.
 			const glm::vec3 forward(std::sin(yawRadians), 0.0F, std::cos(yawRadians));
-			pushVec3(L, glm::normalize(glm::cross(glm::vec3(0.0F, 1.0F, 0.0F), forward)));
+			pushVec3(L, glm::normalize(glm::cross(forward, glm::vec3(0.0F, 1.0F, 0.0F))));
 			return 1;
 		}
 

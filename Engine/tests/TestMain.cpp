@@ -1202,6 +1202,258 @@ void testFpsDemoThirdPersonStrafe()
 #endif
 }
 
+void testSliderScriptProperty()
+{
+	const std::string scriptPath = "Game/Scripts/test_slider_prop.lua";
+	writeTextFile(scriptPath, R"(-- @property climb_angle slider 0|360 90
+-- @property bad slider 5|1 3
+local T = {}
+function T:on_start() self.seen = self.climb_angle end
+return T
+)");
+	const auto props = ScriptRuntime::parseScriptProperties(scriptPath);
+	TEST_ASSERT(props.size() == 1, "slider parsed, invalid range (max <= min) skipped");
+	TEST_ASSERT(props[0].type == ScriptRuntime::ExposedScriptProperty::Type::Slider, "slider type");
+	TEST_ASSERT(props[0].sliderMin == 0.0F && props[0].sliderMax == 360.0F, "slider range");
+	TEST_ASSERT(props[0].defaultNumber == 90.0F && props[0].defaultAsText() == "90", "slider default");
+
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"A"});
+	(void)fx.bus.execute(AttachScriptCommand{"A", scriptPath});
+	(void)fx.bus.execute(SetPropertyCommand{"A", "ScriptProperty", scriptPath + "#climb_angle", std::string("270")});
+	fx.start();
+	TEST_ASSERT(std::abs(fx.runtime.getScriptNumberField(fx.find("A")->id, scriptPath, "seen", 0.0F) - 270.0F) < 0.001F,
+		"slider value reaches the script as a number");
+	fx.runtime.shutdown();
+	std::filesystem::remove(scriptPath);
+}
+
+#ifdef GAMEFORGER_SOURCE_DIR
+namespace
+{
+	// The FPS Demo player (kit imported into a fresh project, rig built,
+	// every script started), stepped frame by frame with ScriptedInput.
+	struct DemoPlayerHarness
+	{
+		std::filesystem::path projectRoot;
+		EditorScene scene;
+		AICommandBus bus;
+		ScriptedInput input;
+		ScriptRuntime runtime;
+		GameplayState gameplay;
+		FpsRigBuildResult rig;
+		std::vector<std::string> errors;
+		int playerId = -1;
+		float lookYaw = 0.0F;
+
+		explicit DemoPlayerHarness(const std::filesystem::path& root) : projectRoot(root), scene(root)
+		{
+			std::filesystem::remove_all(projectRoot);
+			(void)importFpsDemoKit(std::filesystem::path(GAMEFORGER_SOURCE_DIR), projectRoot, false);
+			bus.setHandler([this](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+			FpsRigOptions options;
+			options.includeGround = true;
+			rig = buildFpsPlayerRig(scene, bus, options);
+			playerId = scene.findEntity(rig.playerName)->id;
+		}
+
+		void start()
+		{
+			ensureInventorySlots(gameplay);
+			runtime.initialize(
+				scene, bus, input,
+				[this](const bool isError, const std::string& message)
+				{
+					if (isError)
+					{
+						errors.push_back(message);
+					}
+				},
+				nullptr, nullptr, nullptr, nullptr, nullptr);
+			runtime.setGameplayState(&gameplay);
+			for (const SceneEntity& entity : scene.entities())
+			{
+				for (const std::string& script : entity.scripts)
+				{
+					(void)runtime.startScript(entity.id, script, projectRoot);
+				}
+			}
+		}
+
+		void frames(const int count)
+		{
+			for (int frame = 0; frame < count; ++frame)
+			{
+				gameplay.lookPitchDegrees = 0.0F;
+				gameplay.lookYawDegrees = lookYaw;
+				applyParentConstraints(scene, bus);
+				tickScripts(scene, runtime, true, 1.0F / 60.0F);
+				applyParentConstraints(scene, bus);
+				input.keysPressed.clear();
+			}
+		}
+
+		void press(const std::string& key)
+		{
+			input.keysPressed = {key};
+			frames(1);
+		}
+
+		[[nodiscard]] const SceneEntity& player() const { return *scene.findEntity(playerId); }
+		[[nodiscard]] bool playerFlag(const char* field) const
+		{
+			return runtime.getScriptBoolField(playerId, fpsdemo::kPlayer, field, false);
+		}
+		[[nodiscard]] std::string firstError() const { return errors.empty() ? std::string() : errors.front(); }
+
+		~DemoPlayerHarness()
+		{
+			runtime.shutdown();
+			std::filesystem::remove_all(projectRoot);
+		}
+	};
+}
+#endif
+
+void testFpsDemoClimbing()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	// A wall 3 units ahead of the player (who faces +Z), climbable on its
+	// -Z side (climb_angle 180), turned with the object at 0 and 90 degrees.
+	for (const float wallYaw : {0.0F, 90.0F})
+	{
+		DemoPlayerHarness h("fps_climb_project");
+		TEST_ASSERT(h.rig.success, "rig builds: " + h.rig.message);
+		(void)h.bus.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(0.0F, 2.0F, 3.0F)});
+		// Turned 90 degrees, its local +X side (climb_angle 90) faces the player.
+		const glm::vec3 wallScale = wallYaw == 0.0F ? glm::vec3(1.0F, 2.0F, 0.3F) : glm::vec3(0.3F, 2.0F, 1.0F);
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "Transform", "scale", wallScale});
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "Transform", "rotation", glm::vec3(0.0F, wallYaw, 0.0F)});
+		// Colliders ignore rotation (a position +/- scale box), so only the
+		// unturned wall is solid - it is what the player pulls up onto.
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "Collider", "enabled", wallYaw == 0.0F});
+		TEST_ASSERT(h.bus.execute(AttachScriptCommand{"Wall", fpsdemo::kClimbable}).success, "attach climbable.lua");
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "ScriptProperty", std::string(fpsdemo::kClimbable) + "#climb_angle",
+			std::string(wallYaw == 0.0F ? "180" : "90")});
+		h.start();
+		const std::string where = " (wall turned " + std::to_string(wallYaw) + ")";
+
+		h.frames(20);
+		h.input.keysDown = {"W"};
+		h.frames(60);
+		TEST_ASSERT(h.playerFlag("climbing"), "walking into the wall grabs on" + where);
+		const float grabbedY = h.player().position.y;
+		h.frames(30);
+		TEST_ASSERT(h.player().position.y > grabbedY + 0.5F, "W climbs up" + where);
+		TEST_ASSERT(std::abs(h.player().position.z - (2.7F - 0.4F)) < 0.05F, "sticks to the face, standing off" + where);
+
+		// Sideways: D moves to the player's right (-X when facing +Z).
+		const float beforeX = h.player().position.x;
+		h.input.keysDown = {"D"};
+		h.frames(20);
+		TEST_ASSERT(h.player().position.x < beforeX - 0.2F, "D moves right along the wall" + where);
+
+		// Keep climbing: pull up onto the top.
+		// Keep climbing (then let go of W): pull up onto the top.
+		h.input.keysDown = {"W"};
+		for (int frame = 0; frame < 200 && h.playerFlag("climbing"); ++frame)
+		{
+			h.frames(1);
+		}
+		TEST_ASSERT(!h.playerFlag("climbing"), "climbed over the top" + where);
+		h.input.keysDown.clear();
+		h.frames(30);
+		if (wallYaw == 0.0F)
+		{
+			TEST_ASSERT(std::abs(h.player().position.y - 4.0F) < 0.1F && h.player().position.z > 2.7F,
+				"standing on top of the wall" + where + " - at y " + std::to_string(h.player().position.y) + " z " +
+					std::to_string(h.player().position.z));
+		}
+		TEST_ASSERT(h.errors.empty(), "no script errors" + where + ": " + h.firstError());
+	}
+
+	// Space jumps off the wall.
+	{
+		DemoPlayerHarness h("fps_climb_project");
+		(void)h.bus.execute(CreateEntityCommand{"Wall", PrimitiveType::Cube, glm::vec3(0.0F, 2.0F, 3.0F)});
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "Transform", "scale", glm::vec3(1.0F, 2.0F, 0.3F)});
+		(void)h.bus.execute(AttachScriptCommand{"Wall", fpsdemo::kClimbable});
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "ScriptProperty", std::string(fpsdemo::kClimbable) + "#climb_angle",
+			std::string("180")});
+		h.start();
+		h.input.keysDown = {"W"};
+		h.frames(100);
+		TEST_ASSERT(h.playerFlag("climbing"), "grabbed the wall");
+		h.input.keysDown.clear();
+		h.press("Space");
+		h.frames(10);
+		TEST_ASSERT(!h.playerFlag("climbing") && h.player().position.z < 2.2F, "Space jumps off, away from the wall");
+		h.frames(90);
+		TEST_ASSERT(h.player().position.y < 0.05F, "and falls back to the ground");
+		TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+	}
+#endif
+}
+
+void testFpsDemoPlayerBody()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	DemoPlayerHarness h("fps_body_project");
+	TEST_ASSERT(h.rig.success && !h.rig.bodyName.empty(), "rig builds a body: " + h.rig.message);
+	const std::string body = h.rig.bodyName;
+	for (const char* joint : {".Hips", ".Spine", ".Head", ".ShoulderR", ".ShoulderL", ".ElbowR", ".ElbowL", ".HipR",
+			 ".HipL", ".KneeR", ".KneeL"})
+	{
+		TEST_ASSERT(h.scene.findEntity(body + joint) != nullptr, std::string("body joint ") + joint);
+	}
+	TEST_ASSERT(h.scene.findEntity(body)->parentName == h.rig.playerName, "body follows the player (parented)");
+	h.start();
+	h.frames(10);
+	TEST_ASSERT(!h.scene.isActiveInHierarchy(*h.scene.findEntity(body)), "body hidden in first person");
+
+	h.press("C");
+	h.frames(5);
+	TEST_ASSERT(h.scene.isActiveInHierarchy(*h.scene.findEntity(body)), "body shown in third person");
+	// Feet on the ground: the boots' soles at the player's feet.
+	const SceneEntity* boot = h.scene.findEntity(body + ".KneeR.Boot");
+	TEST_ASSERT(boot != nullptr, "boot part exists");
+	const float soleY = boot->position.y - boot->scale.y;
+	TEST_ASSERT(std::abs(soleY - h.player().position.y) < 0.03F, "boots stand on the ground");
+	// Body parts keep their size (the player capsule's scale is cancelled).
+	TEST_ASSERT(std::abs(boot->scale.x - 0.06F) < 0.002F && std::abs(boot->scale.y - 0.045F) < 0.002F,
+		"body parts keep their own size");
+
+	// Walking swings the legs; crouching lowers the hips.
+	const auto hipSwing = [&h, &body]() { return std::abs(h.scene.findEntity(body + ".HipR")->localRotationEuler.x); };
+	h.input.keysDown = {"W"};
+	float mostSwing = 0.0F;
+	for (int i = 0; i < 40; ++i)
+	{
+		h.frames(1);
+		mostSwing = std::max(mostSwing, hipSwing());
+	}
+	TEST_ASSERT(mostSwing > 15.0F, "walking swings the legs");
+	const float standingHips = h.scene.findEntity(body + ".Hips")->localPosition.y;
+	h.input.keysDown = {"LeftCtrl"};
+	h.frames(40);
+	TEST_ASSERT(h.scene.findEntity(body + ".Hips")->localPosition.y < standingHips - 0.25F, "crouching lowers the hips");
+	TEST_ASSERT(h.scene.findEntity(body + ".KneeR")->localRotationEuler.x > 80.0F, "crouching bends the knees");
+	h.input.keysDown.clear();
+	h.press("Space");
+	h.frames(8);
+	TEST_ASSERT(h.scene.findEntity(body + ".KneeR")->localRotationEuler.x > 40.0F && !h.playerFlag("grounded"),
+		"jumping tucks the legs");
+	h.frames(60);
+	TEST_ASSERT(h.errors.empty(), "no script errors: " + h.firstError());
+#endif
+}
+
 void testFpsPlayerEndToEnd()
 {
 #ifndef GAMEFORGER_SOURCE_DIR
@@ -1543,6 +1795,9 @@ int main()
 	RUN_TEST(testScriptMessagingApi);
 	RUN_TEST(testFpsPlayerEndToEnd);
 	RUN_TEST(testFpsDemoThirdPersonStrafe);
+	RUN_TEST(testSliderScriptProperty);
+	RUN_TEST(testFpsDemoClimbing);
+	RUN_TEST(testFpsDemoPlayerBody);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

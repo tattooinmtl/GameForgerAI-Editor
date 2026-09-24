@@ -73,7 +73,8 @@ namespace gameforger::editor
 	{
 		std::error_code error;
 		for (const char* script : {fpsdemo::kPlayer, fpsdemo::kProjectiles, fpsdemo::kEffects, fpsdemo::kXpSystem,
-				 fpsdemo::kHealth, fpsdemo::kItems, fpsdemo::kEnemy, fpsdemo::kGameManager})
+				 fpsdemo::kHealth, fpsdemo::kItems, fpsdemo::kEnemy, fpsdemo::kGameManager,
+				 fpsdemo::kClimbable})
 		{
 			if (!std::filesystem::exists(projectRoot / script, error))
 			{

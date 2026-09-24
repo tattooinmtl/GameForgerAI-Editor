@@ -176,6 +176,17 @@ namespace gameforger::editor
 			return 1;
 		}
 
+		// The pivot offset in the object's own [-1,1] box (0,0,0 = center,
+		// 0,-1,0 = bottom) - with getPosition/getScale/getRotation a script
+		// can work out the object's real box (climbable.lua does).
+		int luaEntityGetPivot(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			pushVec3(L, entity != nullptr ? entity->pivotOffset : glm::vec3(0.0F));
+			return 1;
+		}
+
 		int luaEntityGetForward(lua_State* L)
 		{
 			ScriptRuntime* runtime = runtimeFrom(L);
@@ -290,6 +301,28 @@ namespace gameforger::editor
 		}
 
 		// ---- self.camera additions ----
+
+		// First-person eye height above the entity's feet (crouching lowers
+		// it). A Play-time change, discarded on Stop like any other.
+		int luaCameraSetEyeHeight(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			const float height = static_cast<float>(luaL_checknumber(L, 2));
+			if (entity != nullptr && std::abs(entity->cameraRig.fpsEyeHeight - height) > 1e-4F)
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Camera", "fpsEyeHeight", height});
+			}
+			return 0;
+		}
+
+		int luaCameraGetEyeHeight(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			lua_pushnumber(L, static_cast<lua_Number>(entity != nullptr ? entity->cameraRig.fpsEyeHeight : 0.0F));
+			return 1;
+		}
 
 		int luaCameraGetPitch(lua_State* L)
 		{
@@ -830,6 +863,7 @@ namespace gameforger::editor
 			switch (property.type)
 			{
 				case Type::Number:
+				case Type::Slider:
 				{
 					char* end = nullptr;
 					const float value = std::strtof(text.c_str(), &end);
@@ -1107,6 +1141,7 @@ namespace gameforger::editor
 			addMethod("getRotation", luaEntityGetRotation);
 			addMethod("setRotation", luaEntitySetRotation);
 			addMethod("getScale", luaEntityGetScale);
+			addMethod("getPivot", luaEntityGetPivot);
 			addMethod("getForward", luaEntityGetForward);
 			addMethod("getRight", luaEntityGetRight);
 			addMethod("getName", luaEntityGetName);
@@ -1148,6 +1183,8 @@ namespace gameforger::editor
 			addMethod("setMode", luaCameraSetMode);
 			addMethod("getMode", luaCameraGetMode);
 			addMethod("getPitch", luaCameraGetPitch);
+			addMethod("setEyeHeight", luaCameraSetEyeHeight);
+			addMethod("getEyeHeight", luaCameraGetEyeHeight);
 			addMethod("getAim", luaCameraGetAim);
 		}
 
@@ -1980,6 +2017,27 @@ namespace gameforger::editor
 					prop.defaultString = prop.options.front();
 				}
 			}
+			else if (typeStr == "slider")
+			{
+				// -- @property climb_angle slider 0|360 0   (a number shown as a slider)
+				prop.type = ExposedScriptProperty::Type::Slider;
+				std::string range;
+				iss >> range;
+				const std::size_t bar = range.find('|');
+				if (bar == std::string::npos)
+				{
+					continue;
+				}
+				prop.sliderMin = std::strtof(range.substr(0, bar).c_str(), nullptr);
+				prop.sliderMax = std::strtof(range.substr(bar + 1).c_str(), nullptr);
+				if (prop.sliderMax <= prop.sliderMin)
+				{
+					continue;
+				}
+				prop.defaultNumber = prop.sliderMin;
+				iss >> prop.defaultNumber;
+				prop.defaultNumber = std::clamp(prop.defaultNumber, prop.sliderMin, prop.sliderMax);
+			}
 			else if (typeStr == "vec3" || typeStr == "Vector3")
 			{
 				prop.type = ExposedScriptProperty::Type::Vec3;
@@ -1995,6 +2053,7 @@ namespace gameforger::editor
 		switch (type)
 		{
 			case Type::Number:
+			case Type::Slider:
 			{
 				std::ostringstream stream;
 				stream << defaultNumber;

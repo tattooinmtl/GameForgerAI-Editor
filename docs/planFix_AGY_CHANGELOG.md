@@ -54,6 +54,22 @@
 
 ---
 
+## 1k. Session Log: 2026-09-24 (FPS Demo full body + climbing - Alpha 0.87)
+
+The user asked for a full third-person body for the demo player (built like the hands), with jump/run/walk/crouch/climb animations, and a script to put on any object to climb it (ladder, wall, cliff) with a 0-360 slider in the Inspector that locks the climb angle. Every change:
+1. **Slider property type** (`Engine/include/GameForger/Editor/ScriptRuntime.hpp`, `Engine/src/Editor/ScriptRuntime.cpp`, `Editor/src/main.cpp`): `-- @property <name> slider <min>|<max> <default>` - a number drawn as an Inspector `SliderFloat` (per-object, undoable, live during Play like numbers). Invalid ranges (max <= min) are skipped.
+2. **New Lua API** (`ScriptRuntime.cpp`): `self.entity:getPivot()`, `self.camera:setEyeHeight(h)` / `getEyeHeight()` (Play-time change of the first-person eye height).
+3. **`Game/Scripts/FPSDemo/climbable.lua`** (new, part of the kit: `fpsdemo::kClimbable`, counted by `fpsDemoKitInstalled`): works out the climbable face from the object's position, scale, pivot and Y rotation; `climb_angle` (slider 0-360) = which side is climbed, turning with the object (0 = +Z side, 90 = +X, 180 = -Z, 270 = -X); `reach`. Every frame it tells Player-tagged objects in reach (`on_climbable_near`). It works as the "tag": no separate tag is needed.
+4. **`fps_player.lua`**: crouch (Left Ctrl: half speed, lower collider, eye 0.55 lower, no jump); climbing (walk into a climbable face with W; W/S up/down, A/D sideways, Space jumps off with a push away, pull up over the top, S at the bottom lets go; no attacking while climbing); third-person body driver `update_body` + `body_pose` (idle breathing, walk, run, jump/fall, crouch/crouch-walk, climb; the body turns to where you move, faces the wall when climbing; head follows the look pitch); new properties `body_name`, `crouch_multiplier`, `climb_speed`.
+5. **Body model** (`Engine/src/Editor/FpsRigBuilder.cpp`, `.hpp`): `buildPlayerBody` - `PlayerBody` (child of the Player, local scale cancels the capsule's scale) with Hips/Spine/Head/ShoulderR,L/ElbowR,L/HipR,L/KneeR,L joints and primitive parts (pelvis, belt, belly, chest, backpack, neck, head, hair, eyes, nose, arms, gloves, thighs, shins, boots). The Player capsule is tagged "Empty" (collision shape only, not drawn). `FpsRigBuildResult::bodyName`.
+6. **Demo arena**: a "Climb Wall" block with a "Ladder" (rails + rungs + `Ladder.Climb` box, climb_angle 270) and a "Rock Cliff" (climb_angle 180). `Game/Scenes/FPSDemo.gfprod` / `.gfai` regenerated.
+7. **Add Script preset** "Climbable (climbable.lua)" (`main.cpp`).
+8. **Tests** (`Engine/tests/TestMain.cpp`): `testSliderScriptProperty`, `testFpsDemoClimbing` (grab, climb, stick to the face, sideways, pull up and stand on top; a wall turned 90 deg; Space jumps off), `testFpsDemoPlayerBody` (joints, parented, hidden in first person / shown in third, boots on the ground, parts keep their size, walking swings legs, crouch lowers hips, jump tucks legs). New `DemoPlayerHarness` helper. 26 tests.
+9. **Version** 0.86 -> 0.87.
+* **Verified:** Debug build of all targets, zero new warnings on changed lines, 26/26 tests. Runtime screenshots (scratch copy with faked input): walking, running, crouch-walking, jumping, walking to the ladder and climbing it.
+* **Found (existing engine limit, not changed):** colliders ignore rotation (position +/- scale boxes), so a TURNED climbable that is also a Collider can stop the player before its face. Documented in climbable.lua; the demo cliff is not turned.
+* **Not done (not asked):** the third-person body doesn't hold the equipped weapon; no climb-direction arrow in the editor viewport; I had to close the user's running 0.86 editor to relink the new build.
+
 ## 1j. Session Log: 2026-09-24 (FPS Demo third-person strafe - still Alpha 0.86)
 
 The user reported A/D inverted in the FPS Demo after pressing C (third person).

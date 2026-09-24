@@ -122,6 +122,12 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **NEW B20 🔴 No default panel layout in code.** The docked layout exists only in the user's own `GameForgerEditorLayout.ini` (gitignored, in the folder the editor runs from). Any fresh folder (this worktree, a new clone) opens with every panel floating and tiny, stacked at the top-left. **Edit > Reset Editor Layout does the same** (it loads an empty ini). Both branches have this. Temporary fix: copied the user's `C:\GameForgerAI-Editor\GameForgerEditorLayout.ini` into this worktree. Real fix (build the default dock layout in code with `ImGui::DockBuilder*`, used on first run and by Reset) belongs with Phase 2 - waiting for the user's go.
 - **Two branches:** the user's main checkout `C:\GameForgerAI-Editor` is on `unity-parity-upgrade` (63 commits since `ee4cfb9`); this work (0.80-0.85, the FPS Demo kit) is on `TattooAI/app-audit-workflow-reorg-cca6a1` (6 commits since `ee4cfb9`). Neither has the other's work. Merging is the user's decision.
 
+### 2.12 Update 2026-09-24 (Alpha 0.87)
+
+- **Feature (user request, not an audit item):** FPS Demo third-person body + crouch/climb, `climbable.lua`, `slider` script property. See changelog §1k.
+- **NEW G7 🟡 (not fixed):** colliders ignore rotation (position ± scale boxes) - a turned solid object blocks as if unturned. Found while testing climbing.
+- Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
+
 ## 3. Findings — duplication and things that don't make sense
 
 | # | Finding | Where |

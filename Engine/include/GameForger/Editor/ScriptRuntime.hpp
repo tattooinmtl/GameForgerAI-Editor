@@ -128,7 +128,7 @@ namespace gameforger::editor
 		// read it with e.g. `self.speed = self.speed or 4.5`.
 		struct ExposedScriptProperty
 		{
-			enum class Type { Number, String, Bool, Vec3, Icon, Enum, Image };
+			enum class Type { Number, String, Bool, Vec3, Icon, Enum, Image, Slider };
 			std::string name;
 			Type type = Type::Number;
 			float defaultNumber = 0.0F;
@@ -136,6 +136,8 @@ namespace gameforger::editor
 			bool defaultBool = false;
 			glm::vec3 defaultVec3{0.0F};
 			std::vector<std::string> options; // Enum only
+			float sliderMin = 0.0F;           // Slider only: `slider <min>|<max> <default>`
+			float sliderMax = 1.0F;
 
 			// The default value in the same text form SceneEntity::
 			// scriptProperties stores overrides in.

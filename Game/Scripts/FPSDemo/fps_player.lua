@@ -7,7 +7,10 @@
 --
 -- CONTROLS (during Play)
 --   W A S D       move            Space      jump          Left Shift  sprint
+--   Left Ctrl     crouch
 --   Mouse         look            C          first/third person
+--   Climbing: walk into a climbable.lua object with W. W/S climb, A/D move
+--                 sideways, Space jumps off; climb past the top to pull up.
 --   E             pick up the nearest items.lua object
 --   I             open/close the inventory grid (drag to rearrange,
 --                 drag out of the window to drop, right-click for more)
@@ -52,6 +55,9 @@
 -- @property damage_multiplier number 1
 -- @property infinite_ammo bool false
 -- @property start_mode enum fps|third_person fps
+-- @property body_name string PlayerBody
+-- @property crouch_multiplier number 0.5
+-- @property climb_speed number 2.2
 
 local FpsPlayer = {}
 
@@ -242,6 +248,34 @@ function FpsPlayer:on_start()
     self.land_dip = 0
     self.sprint_blend = 0
 
+    -- Crouch / climb / jump-off push.
+    self.crouch_multiplier = self.crouch_multiplier or 0.5
+    self.climb_speed = self.climb_speed or 2.2
+    self.crouching = false
+    self.crouch_blend = 0
+    self.stand_eye = self.camera:getEyeHeight()
+    if self.stand_eye == nil or self.stand_eye <= 0 then self.stand_eye = 1.62 end
+    self.climbing = false
+    self.climb = nil
+    self.climb_offer = nil
+    self.climb_offer_time = -1
+    self.climb_cooldown = 0
+    self.climb_side = 0
+    self.climb_phase = 0
+    self.push_x, self.push_z = 0, 0
+    self.move_x, self.move_z = 0, 0
+    self.move_speed = 0
+
+    -- Third-person body (FpsRigBuilder's "PlayerBody"): shown in third
+    -- person, hidden in first person, animated by update_body().
+    self.body_name = self.body_name or "PlayerBody"
+    self.has_body = self.world:getEntityPosition(self.body_name) ~= nil
+    self.body_shown = nil
+    self.body_yaw = self.entity:getRotation().y
+    self.walk_phase = 0
+    self.pose = {}
+    self.sent_pose = {}
+
     self:hide_all_weapons()
 end
 
@@ -259,8 +293,11 @@ function FpsPlayer:on_update(delta_time)
     self.is_dead = dead == true
     if self.is_dead then
         self.prev_fire = true
+        if self.climbing then self:stop_climbing() end
+        self.move_speed = 0
         self:update_view_motion(dt, false, false)
         self:update_rig()
+        self:update_body(dt, false)
         self:update_hud()
         return
     end
@@ -272,10 +309,18 @@ function FpsPlayer:on_update(delta_time)
 
     local moving, sprinting = self:update_movement(dt)
     self:update_equipped()
-    self:update_weapon(dt, ui_open, sprinting)
+    -- Both hands are on the wall while climbing: no attacking.
+    self:update_weapon(dt, ui_open or self.climbing, sprinting)
     self:update_view_motion(dt, moving, sprinting)
     self:update_rig()
+    self:update_body(dt, sprinting)
     self:update_hud()
+end
+
+-- climbable.lua sends this every frame the player is in reach of it.
+function FpsPlayer:on_climbable_near(face)
+    self.climb_offer = face
+    self.climb_offer_time = self.time
 end
 
 -- health.lua sends this when the player respawns.
@@ -291,12 +336,24 @@ function FpsPlayer:update_movement(dt)
     local blocked = self.world:isAimingCatapult()
     local forward_axis = blocked and 0 or self.input:getAxis("W", "S")
     local strafe_axis = blocked and 0 or self.input:getAxis("D", "A")
+    self.climb_cooldown = math.max(0, self.climb_cooldown - dt)
+
+    if self.climbing then
+        return self:update_climbing(dt, forward_axis, strafe_axis)
+    end
+
     local moving = forward_axis ~= 0 or strafe_axis ~= 0
-    local sprinting = moving and forward_axis > 0 and self.input:isKeyDown("LeftShift")
+    self.crouching = (not blocked) and self.input:isKeyDown("LeftCtrl")
+    local sprinting = moving and forward_axis > 0 and self.input:isKeyDown("LeftShift") and not self.crouching
         and self.ads < 0.5 and self.reload_t < 0 and not self.world:isHoldingItem()
 
     local speed = self.walk_speed * (sprinting and self.sprint_multiplier or 1)
     if self.ads > 0.5 then speed = speed * 0.6 end
+    if self.crouching then speed = speed * self.crouch_multiplier end
+
+    -- Crouching lowers the first-person eye too.
+    self.crouch_blend = approach(self.crouch_blend, self.crouching and 1 or 0, 12, dt)
+    self.camera:setEyeHeight(self.stand_eye - 0.55 * self.crouch_blend)
 
     local forward = self.entity:getForward()
     local right = self.entity:getRight()
@@ -315,19 +372,33 @@ function FpsPlayer:update_movement(dt)
     local mz = forward.z * forward_axis + right.z * strafe_axis
     local ml = math.sqrt(mx * mx + mz * mz)
     if ml > 1e-4 then mx, mz = mx / ml, mz / ml end
+    self.move_x, self.move_z = mx, mz
 
-    if self.grounded and self.input:isKeyPressed("Space") then
+    -- Walking into a climbable.lua object grabs on.
+    local offer = self:fresh_climb_offer()
+    if offer ~= nil and self.climb_cooldown <= 0 and forward_axis > 0
+        and (mx * -offer.nx + mz * -offer.nz) > 0.3 then
+        self:start_climbing(offer)
+        return false, false
+    end
+
+    if self.grounded and self.input:isKeyPressed("Space") and not self.crouching then
         self.velocity_y = self.jump_speed
         self.grounded = false
     end
     self.velocity_y = self.velocity_y + self.gravity * dt
 
+    -- The push from jumping off a wall fades out.
+    self.push_x = approach(self.push_x, 0, 2.5, dt)
+    self.push_z = approach(self.push_z, 0, 2.5, dt)
+
     local position = self.entity:getPosition()
-    position.x = position.x + mx * speed * dt
-    position.z = position.z + mz * speed * dt
+    position.x = position.x + (mx * speed + self.push_x) * dt
+    position.z = position.z + (mz * speed + self.push_z) * dt
     position.y = position.y + self.velocity_y * dt
 
-    local resolved, grounded = self.physics:resolve(position, self.collider_radius, self.collider_height)
+    local height = self.collider_height * (1 - 0.35 * self.crouch_blend)
+    local resolved, grounded = self.physics:resolve(position, self.collider_radius, height)
     position = resolved
     if position.y <= 0 then -- fallback floor for scenes without ground colliders
         position.y = 0
@@ -338,11 +409,255 @@ function FpsPlayer:update_movement(dt)
             self.land_dip = math.min(0.06, -self.velocity_y * 0.004)
         end
         self.velocity_y = 0
+        self.push_x, self.push_z = 0, 0
     end
     self.grounded = grounded
     self.was_grounded = grounded
     self.entity:setPosition(position)
+    self.move_speed = moving and speed or 0
     return moving and grounded, sprinting
+end
+
+-- ---------------------------------------------------------------- climbing
+
+-- The climbable.lua face we're in reach of (it re-sends it every frame).
+function FpsPlayer:fresh_climb_offer()
+    if self.climb_offer ~= nil and self.time - self.climb_offer_time < 0.15 then
+        return self.climb_offer
+    end
+    return nil
+end
+
+function FpsPlayer:start_climbing(face)
+    local p = self.entity:getPosition()
+    self.climbing = true
+    self.climb = face
+    self.climb_side = clamp((p.x - face.px) * face.sx + (p.z - face.pz) * face.sz,
+        -face.half_width, face.half_width)
+    self.climb_phase = 0
+    self.velocity_y = 0
+    self.push_x, self.push_z = 0, 0
+    self.crouching = false
+    self.grounded = false
+    self.move_speed = 0
+end
+
+function FpsPlayer:stop_climbing()
+    self.climbing = false
+    self.climb_cooldown = 0.35
+    self.grounded = false
+    self.was_grounded = false
+end
+
+function FpsPlayer:update_climbing(dt, forward_axis, strafe_axis)
+    -- Follow the face (it can move); let go if we left its reach.
+    local offer = self:fresh_climb_offer()
+    if offer ~= nil and offer.name == self.climb.name then
+        self.climb = offer
+    elseif self.time - self.climb_offer_time > 0.3 then
+        self:stop_climbing()
+        return false, false
+    end
+    local c = self.climb
+    self.move_speed = 0
+    self.crouch_blend = approach(self.crouch_blend, 0, 12, dt)
+    self.camera:setEyeHeight(self.stand_eye - 0.55 * self.crouch_blend)
+
+    -- Space: jump off, away from the wall.
+    if self.input:isKeyPressed("Space") then
+        self:stop_climbing()
+        self.velocity_y = self.jump_speed * 0.7
+        self.push_x, self.push_z = c.nx * 3.5, c.nz * 3.5
+        return false, false
+    end
+
+    local p = self.entity:getPosition()
+    p.y = p.y + forward_axis * self.climb_speed * dt
+    self.climb_side = clamp(self.climb_side + strafe_axis * self.climb_speed * 0.7 * dt,
+        -c.half_width, c.half_width)
+    if forward_axis ~= 0 or strafe_axis ~= 0 then
+        self.climb_phase = self.climb_phase + dt * 3.2 * self.climb_speed
+    end
+
+    -- Near the top: pull up onto it (holding W), else stop at the lip.
+    local lip = c.top - 1.0
+    if p.y >= lip then
+        if forward_axis > 0 then
+            self:stop_climbing()
+            local over = self.collider_radius + 0.1
+            self.entity:setPosition(v(c.px - c.nx * over + c.sx * self.climb_side, c.top + 0.02,
+                c.pz - c.nz * over + c.sz * self.climb_side))
+            self.velocity_y = 0
+            return false, false
+        end
+        p.y = lip
+    end
+
+    -- Stick to the face, standing off by the collider radius.
+    local stand_off = self.collider_radius + 0.05
+    p.x = c.px + c.sx * self.climb_side + c.nx * stand_off
+    p.z = c.pz + c.sz * self.climb_side + c.nz * stand_off
+
+    -- Climbing down onto the ground lets go.
+    local resolved, grounded = self.physics:resolve(p, self.collider_radius, self.collider_height)
+    if p.y <= 0 then
+        resolved.y = 0
+        grounded = true
+    end
+    self.entity:setPosition(resolved)
+    if grounded and forward_axis < 0 then
+        self:stop_climbing()
+        self.grounded = true
+        self.was_grounded = true
+    end
+    return false, false
+end
+
+-- ---------------------------------------------------------------- third-person body
+
+-- Joint groups under the body (FpsRigBuilder.cpp buildPlayerBody). The
+-- body is built from primitive shapes, like the first-person hands.
+local BODY_JOINTS = {"Hips", "Spine", "Head", "ShoulderR", "ShoulderL", "ElbowR", "ElbowL",
+    "HipR", "HipL", "KneeR", "KneeL"}
+local BODY_HIPS_HEIGHT = 0.93
+
+-- Target pose (degrees per joint, + the hips' drop) for the current state.
+-- A hanging limb swings BACK with +X and forward with -X; the spine and
+-- head tilt forward with +X. The body's right side is -X.
+function FpsPlayer:body_pose(sprinting)
+    local pose = {}
+    for _, joint in ipairs(BODY_JOINTS) do pose[joint] = v(0, 0, 0) end
+    local drop = 0
+
+    if self.climbing then
+        local c = math.sin(self.climb_phase)
+        pose.ShoulderR = v(-155 - 22 * c, 0, 0)
+        pose.ShoulderL = v(-155 + 22 * c, 0, 0)
+        pose.ElbowR = v(-20 - 25 * math.max(0, -c), 0, 0)
+        pose.ElbowL = v(-20 - 25 * math.max(0, c), 0, 0)
+        pose.HipL = v(-45 - 25 * c, 0, 0)
+        pose.KneeL = v(70 + 30 * c, 0, 0)
+        pose.HipR = v(-45 + 25 * c, 0, 0)
+        pose.KneeR = v(70 - 30 * c, 0, 0)
+        pose.Spine = v(8, 0, 0)
+        pose.Head = v(-15, 0, 0)
+        return pose, 0.1
+    end
+
+    local speed = self.move_speed
+    local gait = clamp(speed / math.max(self.walk_speed, 0.1), 0, 1.8)
+    local run = clamp((gait - 1) / 0.7, 0, 1)
+    local s = math.sin(self.walk_phase)
+
+    if not self.grounded then
+        -- Jump / fall: legs tucked, arms up for balance.
+        pose.HipR = v(-40, 0, 0)
+        pose.KneeR = v(70, 0, 0)
+        pose.HipL = v(-12, 0, 0)
+        pose.KneeL = v(35, 0, 0)
+        pose.ShoulderR = v(-35, 0, -30)
+        pose.ShoulderL = v(-35, 0, 30)
+        pose.ElbowR = v(-30, 0, 0)
+        pose.ElbowL = v(-30, 0, 0)
+        pose.Spine = v(6, 0, 0)
+    elseif self.crouch_blend > 0.5 then
+        -- Crouch (and crouch-walk).
+        local swing = 18 * math.min(gait * 2, 1)
+        pose.HipR = v(-75 - swing * s, 0, 0)
+        pose.HipL = v(-75 + swing * s, 0, 0)
+        pose.KneeR = v(115 + 10 * math.max(0, -s) * math.min(gait * 2, 1), 0, 0)
+        pose.KneeL = v(115 + 10 * math.max(0, s) * math.min(gait * 2, 1), 0, 0)
+        pose.Spine = v(25, 0, 0)
+        pose.ShoulderR = v(-20 + swing * 0.6 * s, 0, -6)
+        pose.ShoulderL = v(-20 - swing * 0.6 * s, 0, 6)
+        pose.ElbowR = v(-45, 0, 0)
+        pose.ElbowL = v(-45, 0, 0)
+        drop = 0.38
+    elseif gait > 0.05 then
+        -- Walk / run.
+        local leg = 28 * math.min(gait, 1) + 22 * run
+        local knee = 25 + 45 * run
+        local arm = leg * (0.8 + 0.2 * run)
+        pose.HipR = v(-leg * s, 0, 0)
+        pose.HipL = v(leg * s, 0, 0)
+        pose.KneeR = v(6 + knee * math.max(0, -s), 0, 0)
+        pose.KneeL = v(6 + knee * math.max(0, s), 0, 0)
+        pose.ShoulderR = v(arm * s, 0, -6)
+        pose.ShoulderL = v(-arm * s, 0, 6)
+        pose.ElbowR = v(-12 - 60 * run, 0, 0)
+        pose.ElbowL = v(-12 - 60 * run, 0, 0)
+        pose.Spine = v(4 + 10 * run, 0, 0)
+        drop = (0.02 + 0.03 * run) * math.abs(math.cos(self.walk_phase))
+    else
+        -- Idle: breathing.
+        local breathe = math.sin(self.time * 1.8)
+        pose.Spine = v(1.5 * breathe, 0, 0)
+        pose.ShoulderR = v(2 * breathe, 0, -7)
+        pose.ShoulderL = v(2 * breathe, 0, 7)
+        pose.ElbowR = v(-8, 0, 0)
+        pose.ElbowL = v(-8, 0, 0)
+        pose.KneeR = v(3, 0, 0)
+        pose.KneeL = v(3, 0, 0)
+    end
+    -- Look up/down with the head.
+    pose.Head = add(pose.Head, v(-clamp(self.camera:getPitch(), -60, 60) * 0.5, 0, 0))
+    return pose, drop
+end
+
+-- Turn `from` toward `to` (degrees) the short way round.
+local function approach_angle(from, to, rate, dt)
+    local delta = (to - from + 180) % 360 - 180
+    return from + delta * (1 - math.exp(-rate * dt))
+end
+
+function FpsPlayer:update_body(dt, sprinting)
+    if not self.has_body then return end
+    local show = self.camera_mode == "third_person"
+    if show ~= self.body_shown then
+        self.world:setEntityActive(self.body_name, show)
+        self.body_shown = show
+    end
+    if not show then
+        self.body_yaw = self.entity:getRotation().y
+        return
+    end
+
+    -- Face where we move (the camera turns on its own in third person);
+    -- face the wall while climbing.
+    local target = nil
+    if self.climbing then
+        target = math.deg(math.atan(-self.climb.nx, -self.climb.nz))
+    elseif self.move_speed > 0 and (self.move_x ~= 0 or self.move_z ~= 0) then
+        target = math.deg(math.atan(self.move_x, self.move_z))
+    end
+    if target ~= nil then
+        self.body_yaw = approach_angle(self.body_yaw, target, 12, dt)
+    end
+    if self.move_speed > 0 then
+        self.walk_phase = self.walk_phase + dt * (4 + 1.3 * self.move_speed)
+    end
+
+    -- The body is parented to the player (it follows it, also in the
+    -- editor); only its own turn relative to the player is set here.
+    self.world:setEntityRotation(self.body_name, v(0, self.body_yaw - self.entity:getRotation().y, 0))
+
+    local target_pose, drop = self:body_pose(sprinting)
+    self.body_drop = approach(self.body_drop or 0, drop, 14, dt)
+    self.world:setEntityPosition(self.body_name .. ".Hips", v(0, BODY_HIPS_HEIGHT - self.body_drop, 0))
+    for _, joint in ipairs(BODY_JOINTS) do
+        local current = self.pose[joint] or v(0, 0, 0)
+        local goal = target_pose[joint]
+        current = v(approach(current.x, goal.x, 14, dt), approach(current.y, goal.y, 14, dt),
+            approach(current.z, goal.z, 14, dt))
+        self.pose[joint] = current
+        -- Only send joints that actually moved.
+        local sent = self.sent_pose[joint]
+        if sent == nil or math.abs(sent.x - current.x) + math.abs(sent.y - current.y)
+            + math.abs(sent.z - current.z) > 0.05 then
+            self.world:setEntityRotation(self.body_name .. "." .. joint, current)
+            self.sent_pose[joint] = current
+        end
+    end
 end
 
 -- ---------------------------------------------------------------- inventory / equip

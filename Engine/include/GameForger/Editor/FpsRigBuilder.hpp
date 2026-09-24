@@ -28,7 +28,8 @@ namespace gameforger::editor
 		// player (items.lua objects), hidden pickups for the three casters
 		// xp_system.lua unlocks (Fire/Frost/Life), training targets
 		// (health.lua, two of them chasing and hitting back via
-		// enemy_ai.lua), a rock to mine, and a Game Manager.
+		// enemy_ai.lua), a rock to mine, a ladder and a rock cliff to
+		// climb (climbable.lua), and a Game Manager.
 		bool includeDemoContent = false;
 		// Also add a large ground plane (for an empty scene).
 		bool includeGround = false;
@@ -40,6 +41,7 @@ namespace gameforger::editor
 		std::string message;
 		std::string playerName;
 		std::string rigName;
+		std::string bodyName;
 		int entitiesCreated = 0;
 	};
 
@@ -55,6 +57,9 @@ namespace gameforger::editor
 	//                                                    until equipped; guns have a
 	//                                                    .Muzzle marker)
 	//         FPSRig.HandL          <- left hand, shown for two-handed weapons
+	//   PlayerBody (child of Player) <- third-person body, shown only in third person:
+	//     .Hips / .Spine / .Head / .ShoulderR,L / .ElbowR,L / .HipR,L / .KneeR,L joints,
+	//     animated by fps_player.lua (idle, walk, run, jump, crouch, climb)
 	//
 	// Every hand/weapon part is a plain primitive child - select any of them
 	// in the Hierarchy to recolor/resize it, or parent your own imported model

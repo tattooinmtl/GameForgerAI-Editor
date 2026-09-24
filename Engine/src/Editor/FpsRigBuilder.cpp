@@ -15,6 +15,7 @@ namespace gameforger::editor
 		constexpr const char* kHealthScript = fpsdemo::kHealth;
 		constexpr const char* kEnemyAiScript = fpsdemo::kEnemy;
 		constexpr const char* kGameManagerScript = fpsdemo::kGameManager;
+		constexpr const char* kClimbableScript = fpsdemo::kClimbable;
 
 		// One primitive of a hand or weapon model, in its group's local
 		// space. `scale` is the primitive's half-extent (primitives are
@@ -45,6 +46,15 @@ namespace gameforger::editor
 		constexpr glm::vec3 kStormPurple{0.30F, 0.20F, 0.45F};
 		constexpr glm::vec3 kCopper{0.72F, 0.38F, 0.18F};
 		constexpr glm::vec3 kSilver{0.82F, 0.86F, 0.92F};
+		constexpr glm::vec3 kPants{0.22F, 0.24F, 0.30F};
+		constexpr glm::vec3 kHair{0.18F, 0.12F, 0.08F};
+		constexpr glm::vec3 kPack{0.36F, 0.29F, 0.18F};
+		constexpr glm::vec3 kBelt{0.10F, 0.10F, 0.11F};
+		constexpr glm::vec3 kEye{0.08F, 0.08F, 0.10F};
+
+		// Hips height of the third-person body - fps_player.lua's
+		// BODY_HIPS_HEIGHT must match.
+		constexpr float kBodyHipsHeight = 0.93F;
 
 		// A right fist closed around a vertical handle running along Y
 		// through the origin (so every weapon's grip sits at 0,0,0).
@@ -342,6 +352,128 @@ namespace gameforger::editor
 			int missingScripts_ = 0;
 		};
 
+		// The third-person body: primitive parts like the first-person hands,
+		// on jointed groups fps_player.lua animates (walk, run, jump, crouch,
+		// climb). It faces +Z; its RIGHT side is -X (the camera looking down
+		// +Z shows +X on screen-left). Parented to the player so it follows
+		// it everywhere; its local scale cancels the player capsule's scale.
+		void buildPlayerBody(Builder& builder, const std::string& body, const std::string& player,
+			const glm::vec3& playerScale)
+		{
+			builder.group(body, player, glm::vec3(0.0F), glm::vec3(0.0F),
+				glm::vec3(1.0F / playerScale.x, 1.0F / playerScale.y, 1.0F / playerScale.z), true);
+
+			const std::string hips = body + ".Hips";
+			builder.group(hips, body, {0.0F, kBodyHipsHeight, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			builder.parts(hips, {
+				{"Pelvis", PrimitiveType::Cube, {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.16F, 0.09F, 0.10F}, kPants},
+				{"Belt", PrimitiveType::Cube, {0.0F, 0.08F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.165F, 0.025F, 0.105F}, kBelt},
+			}, true);
+
+			const std::string spine = body + ".Spine";
+			builder.group(spine, hips, {0.0F, 0.08F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			builder.parts(spine, {
+				{"Belly", PrimitiveType::Cube, {0.0F, 0.12F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.155F, 0.10F, 0.10F}, kSleeve},
+				{"Chest", PrimitiveType::Cube, {0.0F, 0.33F, 0.005F}, {0.0F, 0.0F, 0.0F}, {0.195F, 0.14F, 0.115F}, kSleeve},
+				{"Pack", PrimitiveType::Cube, {0.0F, 0.30F, -0.16F}, {0.0F, 0.0F, 0.0F}, {0.13F, 0.15F, 0.055F}, kPack},
+			}, true);
+
+			const std::string head = body + ".Head";
+			builder.group(head, spine, {0.0F, 0.48F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+			builder.parts(head, {
+				{"Neck", PrimitiveType::Cylinder, {0.0F, 0.04F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.05F, 0.05F}, kSkin},
+				{"Skull", PrimitiveType::Sphere, {0.0F, 0.17F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.105F, 0.12F, 0.11F}, kSkin},
+				{"Hair", PrimitiveType::Sphere, {0.0F, 0.21F, -0.015F}, {0.0F, 0.0F, 0.0F}, {0.11F, 0.095F, 0.115F}, kHair},
+				{"EyeR", PrimitiveType::Sphere, {-0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, kEye},
+				{"EyeL", PrimitiveType::Sphere, {0.038F, 0.18F, 0.10F}, {0.0F, 0.0F, 0.0F}, {0.014F, 0.014F, 0.014F}, kEye},
+				{"Nose", PrimitiveType::Cube, {0.0F, 0.15F, 0.115F}, {0.0F, 0.0F, 0.0F}, {0.012F, 0.02F, 0.012F}, kSkin},
+			}, true);
+
+			// Arms: shoulder -> upper arm -> elbow -> forearm + gloved hand.
+			for (const auto& [side, x] : {std::pair<const char*, float>{"R", -0.245F}, {"L", 0.245F}})
+			{
+				const std::string shoulder = body + ".Shoulder" + side;
+				builder.group(shoulder, spine, {x, 0.41F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(shoulder, {
+					{"UpperArm", PrimitiveType::Capsule, {0.0F, -0.14F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.058F, 0.15F, 0.058F}, kSleeve},
+				}, true);
+				const std::string elbow = body + ".Elbow" + side;
+				builder.group(elbow, shoulder, {0.0F, -0.29F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(elbow, {
+					{"Forearm", PrimitiveType::Capsule, {0.0F, -0.13F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.05F, 0.13F, 0.05F}, kSkin},
+					{"Hand", PrimitiveType::Cube, {0.0F, -0.285F, 0.01F}, {0.0F, 0.0F, 0.0F}, {0.042F, 0.055F, 0.028F}, kGlove},
+				}, true);
+			}
+
+			// Legs: hip -> thigh -> knee -> shin + boot.
+			for (const auto& [side, x] : {std::pair<const char*, float>{"R", -0.095F}, {"L", 0.095F}})
+			{
+				const std::string hip = body + ".Hip" + side;
+				builder.group(hip, hips, {x, -0.04F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(hip, {
+					{"Thigh", PrimitiveType::Capsule, {0.0F, -0.215F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.075F, 0.215F, 0.075F}, kPants},
+				}, true);
+				const std::string knee = body + ".Knee" + side;
+				builder.group(knee, hip, {0.0F, -0.43F, 0.0F}, glm::vec3(0.0F), glm::vec3(1.0F), true);
+				builder.parts(knee, {
+					{"Shin", PrimitiveType::Capsule, {0.0F, -0.20F, 0.0F}, {0.0F, 0.0F, 0.0F}, {0.064F, 0.20F, 0.064F}, kPants},
+					{"Boot", PrimitiveType::Cube, {0.0F, -0.41F, 0.045F}, {0.0F, 0.0F, 0.0F}, {0.06F, 0.045F, 0.115F}, kLeather},
+				}, true);
+			}
+		}
+
+		// Something to climb in the demo arena (climbable.lua): a ladder
+		// and a rock cliff face.
+		void buildClimbables(Builder& builder, const glm::vec3& origin)
+		{
+			// Ladder: two rails + rungs under one climbable box, leaning on
+			// a wall block you can pull yourself up onto.
+			const std::string wall = builder.uniqueName("Climb Wall");
+			if (builder.create(wall, PrimitiveType::Cube, origin + glm::vec3(9.0F, 2.0F, 4.0F)))
+			{
+				builder.set(wall, "Transform", "scale", glm::vec3(1.5F, 2.0F, 1.5F));
+				builder.set(wall, "Renderer", "color", glm::vec3(0.55F, 0.52F, 0.48F));
+				builder.set(wall, "Collider", "enabled", true);
+			}
+			// The ladder: an empty group (move it and everything follows) with
+			// the climbable box (1 wide, 4 tall, thin - its scale IS the
+			// climbable area) and the visible rails and rungs under it.
+			const std::string ladder = builder.uniqueName("Ladder");
+			const glm::vec3 ladderBase = origin + glm::vec3(7.42F, 0.0F, 4.0F);
+			builder.group(ladder, "", ladderBase, glm::vec3(0.0F), glm::vec3(1.0F), false);
+			const std::string climbBox = ladder + ".Climb";
+			builder.group(climbBox, ladder, {0.0F, 2.0F, 0.0F}, glm::vec3(0.0F), {0.08F, 2.0F, 0.5F}, false);
+			builder.attach(climbBox, kClimbableScript);
+			// 270 = its -X side, facing away from the wall.
+			builder.scriptProperty(climbBox, kClimbableScript, "climb_angle", "270");
+			std::vector<PartSpec> ladderParts{
+				{"RailA", PrimitiveType::Cube, {0.0F, 2.0F, -0.45F}, {0.0F, 0.0F, 0.0F}, {0.04F, 2.0F, 0.04F}, kWood},
+				{"RailB", PrimitiveType::Cube, {0.0F, 2.0F, 0.45F}, {0.0F, 0.0F, 0.0F}, {0.04F, 2.0F, 0.04F}, kWood},
+			};
+			static const std::array<const char*, 11> rungNames{
+				"Rung1", "Rung2", "Rung3", "Rung4", "Rung5", "Rung6", "Rung7", "Rung8", "Rung9", "Rung10", "Rung11"};
+			for (std::size_t rung = 0; rung < rungNames.size(); ++rung)
+			{
+				ladderParts.push_back({rungNames[rung], PrimitiveType::Cylinder,
+					{0.0F, 0.3F + static_cast<float>(rung) * 0.35F, 0.0F}, {90.0F, 0.0F, 0.0F}, {0.03F, 0.45F, 0.03F},
+					kDarkWood});
+			}
+			builder.parts(ladder, ladderParts, false);
+
+			// Rock cliff: a tall block you climb on its -Z face (the side
+			// facing the start). Not turned: colliders ignore rotation, so a
+			// turned solid block would stop you short of its real face.
+			const std::string cliff = builder.uniqueName("Rock Cliff");
+			if (builder.create(cliff, PrimitiveType::Cube, origin + glm::vec3(-9.0F, 3.0F, 12.0F)))
+			{
+				builder.set(cliff, "Transform", "scale", glm::vec3(2.5F, 3.0F, 1.2F));
+				builder.set(cliff, "Renderer", "color", glm::vec3(0.46F, 0.42F, 0.38F));
+				builder.set(cliff, "Collider", "enabled", true);
+				builder.attach(cliff, kClimbableScript);
+				builder.scriptProperty(cliff, kClimbableScript, "climb_angle", "180");
+			}
+		}
+
 		std::string createGameManager(Builder& builder, const glm::vec3& position)
 		{
 			const std::string name = builder.uniqueName("Game Manager");
@@ -431,6 +563,8 @@ namespace gameforger::editor
 				builder.scriptProperty(rockName, kHealthScript, "max_health", "120");
 			}
 
+			buildClimbables(builder, origin);
+
 			(void)createGameManager(builder, origin + glm::vec3(0.0F, 0.5F, -3.0F));
 		}
 	}
@@ -466,13 +600,20 @@ namespace gameforger::editor
 			result.message = "Could not create the player entity.";
 			return result;
 		}
-		builder.set(result.playerName, "Transform", "scale", glm::vec3(0.4F, 0.9F, 0.4F));
+		const glm::vec3 playerScale(0.4F, 0.9F, 0.4F);
+		builder.set(result.playerName, "Transform", "scale", playerScale);
 		builder.set(result.playerName, "Transform", "pivot", glm::vec3(0.0F, -1.0F, 0.0F));
 		builder.set(result.playerName, "Renderer", "color", glm::vec3(0.25F, 0.45F, 0.75F));
 		builder.set(result.playerName, "Camera", "fpsEyeHeight", 1.62F);
 		builder.set(result.playerName, "Camera", "thirdPersonAimHeight", 1.4F);
 		builder.set(result.playerName, "Camera", "lockCursor", true);
 		builder.tag(result.playerName, "Player");
+		// The capsule is only the collision shape now - the body below is
+		// what you see in third person.
+		builder.tag(result.playerName, "Empty");
+
+		result.bodyName = builder.uniqueName("PlayerBody");
+		buildPlayerBody(builder, result.bodyName, result.playerName, playerScale);
 
 		// The viewmodel rig.
 		result.rigName = builder.uniqueName("FPSRig");
@@ -532,6 +673,7 @@ namespace gameforger::editor
 			builder.attach(result.playerName, script);
 		}
 		builder.scriptProperty(result.playerName, kFpsPlayerScript, "rig_name", rig);
+		builder.scriptProperty(result.playerName, kFpsPlayerScript, "body_name", result.bodyName);
 		builder.scriptProperty(result.playerName, kHealthScript, "is_player", "true");
 		builder.scriptProperty(result.playerName, kHealthScript, "destroy_on_death", "false");
 
@@ -543,7 +685,7 @@ namespace gameforger::editor
 		result.entitiesCreated = builder.created();
 		result.success = builder.failures() == 0;
 		result.message = "Created " + std::to_string(result.entitiesCreated) + " entities (player '" +
-			result.playerName + "', rig '" + rig + "').";
+			result.playerName + "', body '" + result.bodyName + "', rig '" + rig + "').";
 		if (builder.failures() > 0)
 		{
 			result.message += " " + std::to_string(builder.failures()) + " step(s) failed - see the Console.";

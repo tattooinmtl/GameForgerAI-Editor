@@ -30,6 +30,7 @@ namespace gameforger::editor
 		inline constexpr const char* kItems = "Game/Scripts/FPSDemo/items.lua";
 		inline constexpr const char* kEnemy = "Game/Scripts/FPSDemo/enemy.lua";
 		inline constexpr const char* kGameManager = "Game/Scripts/FPSDemo/game_manager.lua";
+		inline constexpr const char* kClimbable = "Game/Scripts/FPSDemo/climbable.lua";
 
 		// What goes on the player object, in attach order.
 		inline constexpr std::array<const char*, 5> kPlayerScripts{kPlayer, kProjectiles, kEffects, kXpSystem, kHealth};

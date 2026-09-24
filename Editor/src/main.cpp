@@ -5908,6 +5908,33 @@ namespace
                             }
                         }
                     }
+                    else if (prop.type == PropertyType::Slider)
+                    {
+                        // `-- @property <name> slider <min>|<max> <default>`
+                        char* parseEnd = nullptr;
+                        float storedValue = std::strtof(storedText.c_str(), &parseEnd);
+                        if (parseEnd == storedText.c_str())
+                        {
+                            storedValue = prop.defaultNumber;
+                        }
+                        float value = live
+                            ? scriptRuntime.getScriptNumberField(entity.id, scriptPath, prop.name, storedValue)
+                            : storedValue;
+                        if (ImGui::SliderFloat(prop.name.c_str(), &value, prop.sliderMin, prop.sliderMax, "%.0f"))
+                        {
+                            if (live)
+                            {
+                                scriptRuntime.setScriptNumberField(entity.id, scriptPath, prop.name, value);
+                            }
+                            else
+                            {
+                                std::array<char, 32> numberText{};
+                                std::snprintf(numberText.data(), numberText.size(), "%g", static_cast<double>(value));
+                                (void)commandBus.execute(
+                                    SetPropertyCommand{entity.name, "ScriptProperty", propertyKey, std::string(numberText.data())});
+                            }
+                        }
+                    }
                     else if (prop.type == PropertyType::Bool)
                     {
                         const bool storedValue = storedText == "true" || storedText == "1";
@@ -6334,7 +6361,7 @@ namespace
                 const char* description;
                 PresetKind kind;
             };
-            constexpr std::array<ScriptPreset, 16> presets{{
+            constexpr std::array<ScriptPreset, 17> presets{{
                     {"FPS Controller",
                      "Game/Scripts/fps_controller.lua",
                      "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
@@ -6431,6 +6458,12 @@ namespace
                      gameforger::editor::fpsdemo::kGameManager,
                      "The built game's title, splash logo (Change Image...) and intro message - put it on one "
                      "object per scene (or use GameObject > Game Manager).",
+                     PresetKind::Marker},
+                    {"Climbable (climbable.lua)",
+                     gameforger::editor::fpsdemo::kClimbable,
+                     "Makes this object climbable by the FPS Demo player - a ladder, a wall, a cliff. Walk into it "
+                     "with W to grab on; W/S climb, A/D move sideways, Space jumps off. climb_angle (slider "
+                     "0-360) sets which way the player faces while climbing it.",
                      PresetKind::Marker},
                 }};
 

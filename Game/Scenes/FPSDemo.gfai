@@ -114,7 +114,8 @@
       "name": "Player",
       "active": true,
       "tags": [
-        "Player"
+        "Player",
+        "Empty"
       ],
       "primitive": "capsule",
       "position": [0.000000, 0.000000, 0.000000],
@@ -219,9 +220,3802 @@
       ],
       "scriptProperties": [
         {"script": "Game/Scripts/FPSDemo/fps_player.lua", "name": "rig_name", "value": "FPSRig"},
+        {"script": "Game/Scripts/FPSDemo/fps_player.lua", "name": "body_name", "value": "PlayerBody"},
         {"script": "Game/Scripts/FPSDemo/health.lua", "name": "is_player", "value": "true"},
         {"script": "Game/Scripts/FPSDemo/health.lua", "name": "destroy_on_death", "value": "false"}
       ],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.000000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Player",
+      "localPosition": [0.000000, 0.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [2.500000, 1.111111, 2.500000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Hips",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.930000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody",
+      "localPosition": [0.000000, 0.930000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Hips.Pelvis",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.000000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.220000, 0.240000, 0.300000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Hips",
+      "localPosition": [0.000000, 0.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.160000, 0.090000, 0.100000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Hips.Belt",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.080000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.100000, 0.100000, 0.110000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Hips",
+      "localPosition": [0.000000, 0.080000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.165000, 0.025000, 0.105000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Spine",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.080000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Hips",
+      "localPosition": [0.000000, 0.080000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Spine.Belly",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.120000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.200000, 0.260000, 0.200000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [0.000000, 0.120000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.155000, 0.100000, 0.100000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Spine.Chest",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.330000, 0.005000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.200000, 0.260000, 0.200000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [0.000000, 0.330000, 0.005000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.195000, 0.140000, 0.115000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Spine.Pack",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.300000, -0.160000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.360000, 0.290000, 0.180000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [0.000000, 0.300000, -0.160000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.130000, 0.150000, 0.055000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.480000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [0.000000, 0.480000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.Neck",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cylinder",
+      "position": [0.000000, 0.040000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.860000, 0.660000, 0.520000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [0.000000, 0.040000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.050000, 0.050000, 0.050000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.Skull",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "sphere",
+      "position": [0.000000, 0.170000, 0.010000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.860000, 0.660000, 0.520000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [0.000000, 0.170000, 0.010000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.105000, 0.120000, 0.110000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.Hair",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "sphere",
+      "position": [0.000000, 0.210000, -0.015000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.180000, 0.120000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [0.000000, 0.210000, -0.015000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.110000, 0.095000, 0.115000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.EyeR",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "sphere",
+      "position": [-0.038000, 0.180000, 0.100000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.080000, 0.080000, 0.100000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [-0.038000, 0.180000, 0.100000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.014000, 0.014000, 0.014000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.EyeL",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "sphere",
+      "position": [0.038000, 0.180000, 0.100000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.080000, 0.080000, 0.100000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [0.038000, 0.180000, 0.100000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.014000, 0.014000, 0.014000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.Head.Nose",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 0.150000, 0.115000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.860000, 0.660000, 0.520000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Head",
+      "localPosition": [0.000000, 0.150000, 0.115000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.012000, 0.020000, 0.012000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ShoulderR",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [-0.245000, 0.410000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [-0.245000, 0.410000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ShoulderR.UpperArm",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.140000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.200000, 0.260000, 0.200000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ShoulderR",
+      "localPosition": [0.000000, -0.140000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.058000, 0.150000, 0.058000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowR",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.290000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ShoulderR",
+      "localPosition": [0.000000, -0.290000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowR.Forearm",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.130000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.860000, 0.660000, 0.520000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ElbowR",
+      "localPosition": [0.000000, -0.130000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.050000, 0.130000, 0.050000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowR.Hand",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.285000, 0.010000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.160000, 0.170000, 0.190000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ElbowR",
+      "localPosition": [0.000000, -0.285000, 0.010000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.042000, 0.055000, 0.028000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ShoulderL",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.245000, 0.410000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Spine",
+      "localPosition": [0.245000, 0.410000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ShoulderL.UpperArm",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.140000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.200000, 0.260000, 0.200000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ShoulderL",
+      "localPosition": [0.000000, -0.140000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.058000, 0.150000, 0.058000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowL",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.290000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ShoulderL",
+      "localPosition": [0.000000, -0.290000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowL.Forearm",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.130000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.860000, 0.660000, 0.520000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ElbowL",
+      "localPosition": [0.000000, -0.130000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.050000, 0.130000, 0.050000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.ElbowL.Hand",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.285000, 0.010000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.160000, 0.170000, 0.190000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.ElbowL",
+      "localPosition": [0.000000, -0.285000, 0.010000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.042000, 0.055000, 0.028000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.HipR",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [-0.095000, -0.040000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Hips",
+      "localPosition": [-0.095000, -0.040000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.HipR.Thigh",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.215000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.220000, 0.240000, 0.300000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.HipR",
+      "localPosition": [0.000000, -0.215000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.075000, 0.215000, 0.075000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeR",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.430000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.HipR",
+      "localPosition": [0.000000, -0.430000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeR.Shin",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.200000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.220000, 0.240000, 0.300000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.KneeR",
+      "localPosition": [0.000000, -0.200000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.064000, 0.200000, 0.064000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeR.Boot",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.410000, 0.045000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.260000, 0.150000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.KneeR",
+      "localPosition": [0.000000, -0.410000, 0.045000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.060000, 0.045000, 0.115000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.HipL",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.095000, -0.040000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.Hips",
+      "localPosition": [0.095000, -0.040000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.HipL.Thigh",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.215000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.220000, 0.240000, 0.300000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.HipL",
+      "localPosition": [0.000000, -0.215000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.075000, 0.215000, 0.075000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeL",
+      "active": true,
+      "tags": [
+        "Empty",
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.430000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.HipL",
+      "localPosition": [0.000000, -0.430000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeL.Shin",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "capsule",
+      "position": [0.000000, -0.200000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.220000, 0.240000, 0.300000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.KneeL",
+      "localPosition": [0.000000, -0.200000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.064000, 0.200000, 0.064000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "PlayerBody.KneeL.Boot",
+      "active": true,
+      "tags": [
+        "Viewmodel"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, -0.410000, 0.045000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.260000, 0.150000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "PlayerBody.KneeL",
+      "localPosition": [0.000000, -0.410000, 0.045000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.060000, 0.045000, 0.115000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
       "animation": {
         "enabled": false,
         "looping": false,
@@ -24390,6 +28184,1820 @@
       ],
       "scriptProperties": [
         {"script": "Game/Scripts/FPSDemo/health.lua", "name": "max_health", "value": "120"}
+      ],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Climb Wall",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [9.000000, 2.000000, 4.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.500000, 2.000000, 1.500000],
+      "color": [0.550000, 0.520000, 0.480000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "",
+      "localPosition": [0.000000, 1.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": true,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder",
+      "active": true,
+      "tags": [
+        "Empty"
+      ],
+      "primitive": "cube",
+      "position": [7.420000, 0.000000, 4.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "",
+      "localPosition": [0.000000, 1.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Climb",
+      "active": true,
+      "tags": [
+        "Empty"
+      ],
+      "primitive": "cube",
+      "position": [0.000000, 2.000000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.800000, 0.800000, 0.800000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.080000, 2.000000, 0.500000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [
+        "Game/Scripts/FPSDemo/climbable.lua"
+      ],
+      "scriptProperties": [
+        {"script": "Game/Scripts/FPSDemo/climbable.lua", "name": "climb_angle", "value": "270"}
+      ],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.RailA",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [0.000000, 2.000000, -0.450000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.500000, 0.300000, 0.140000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.000000, -0.450000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.040000, 2.000000, 0.040000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.RailB",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [0.000000, 2.000000, 0.450000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.500000, 0.300000, 0.140000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.000000, 0.450000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [0.040000, 2.000000, 0.040000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung1",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 0.300000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 0.300000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung2",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 0.650000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 0.650000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung3",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 1.000000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 1.000000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung4",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 1.350000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 1.350000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung5",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 1.700000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 1.700000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung6",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 2.050000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.050000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung7",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 2.400000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.400000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung8",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 2.750000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 2.750000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung9",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 3.100000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 3.100000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung10",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 3.450000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 3.450000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Ladder.Rung11",
+      "active": true,
+      "tags": [],
+      "primitive": "cylinder",
+      "position": [0.000000, 3.800000, 0.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [1.000000, 1.000000, 1.000000],
+      "color": [0.340000, 0.190000, 0.080000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "Ladder",
+      "localPosition": [0.000000, 3.800000, 0.000000],
+      "localRotationEuler": [90.000000, 0.000000, 0.000000],
+      "localScale": [0.030000, 0.450000, 0.030000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": false,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [],
+      "scriptProperties": [],
+      "animation": {
+        "enabled": false,
+        "looping": false,
+        "keyframes": []
+      }
+    },
+    {
+      "name": "Rock Cliff",
+      "active": true,
+      "tags": [],
+      "primitive": "cube",
+      "position": [-9.000000, 3.000000, 12.000000],
+      "rotation": [0.000000, 0.000000, 0.000000],
+      "scale": [2.500000, 3.000000, 1.200000],
+      "color": [0.460000, 0.420000, 0.380000],
+      "pivot": [0.000000, 0.000000, 0.000000],
+      "materialBlendWeight": [0.000000, 0.000000, 0.000000],
+      "materialUvScale": [2.000000, 2.000000],
+      "parentName": "",
+      "localPosition": [0.000000, 1.000000, 0.000000],
+      "localRotationEuler": [0.000000, 0.000000, 0.000000],
+      "localScale": [1.000000, 1.000000, 1.000000],
+      "materialLayers": [
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        },
+        {
+          "diffusePath": "",
+          "normalPath": "",
+          "heightPath": ""
+        }
+      ],
+      "hasCollider": true,
+      "isPickupItem": false,
+      "pickupItem": {
+        "itemName": "Item",
+        "iconPath": ""
+      },
+      "isCastle": false,
+      "castle": {
+        "hp": 100.000000,
+        "maxHp": 100.000000
+      },
+      "isCatapult": false,
+      "catapult": {
+        "yawEntityName": "",
+        "armEntityName": "",
+        "minPitchDegrees": 5.000000,
+        "maxPitchDegrees": 70.000000,
+        "launchSpeed": 22.000000
+      },
+      "isTextMesh": false,
+      "isCineCamera": false,
+      "isTerrain": false,
+      "terrain": {
+        "resolution": 65,
+        "worldSize": 50.000000,
+        "heightScale": 12.000000,
+        "uvScale": [8.000000, 8.000000],
+        "heights": [],
+        "layers": [
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          },
+          {
+            "diffusePath": "",
+            "normalPath": "",
+            "heightPath": ""
+          }
+        ],
+        "splatWeights": []
+      },
+      "isImportedMesh": false,
+      "importedMesh": {
+        "sourcePath": ""
+      },
+      "textMesh": {
+        "content": "Text",
+        "fontPath": "",
+        "fontSize": 1.000000,
+        "depth": 0.200000
+      },
+      "cameraRig": {
+        "fpsEyeHeight": 0.750000,
+        "thirdPersonDistance": 4.000000,
+        "thirdPersonHeight": 2.200000,
+        "thirdPersonAimHeight": 1.100000,
+        "thirdPersonYawOffsetDegrees": 0.000000,
+        "lockCursor": false
+      },
+      "scripts": [
+        "Game/Scripts/FPSDemo/climbable.lua"
+      ],
+      "scriptProperties": [
+        {"script": "Game/Scripts/FPSDemo/climbable.lua", "name": "climb_angle", "value": "180"}
       ],
       "animation": {
         "enabled": false,

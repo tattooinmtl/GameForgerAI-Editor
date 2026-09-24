@@ -32,6 +32,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_internal.h> // DockBuilder API, for the default panel layout
 
 #include <ImGuizmo.h>
 #include <stb_image.h>
@@ -1785,6 +1786,51 @@ namespace
         state.selectedProviderId = providerId;
         state.calibrated = false;
         state.setupChanged = true;
+    }
+
+    // The editor's default panel layout (audit B20). It used to exist only in
+    // the user's own GameForgerEditorLayout.ini, so a fresh folder - and
+    // Edit > Reset Editor Layout - opened every panel small and floating.
+    // Same arrangement as that file: Hierarchy over Project on the left,
+    // Inspector over Toolbox on the right, Viewport/Game/Cine Camera Preview
+    // tabs in the middle, AI Forge/Animation/Console/Storyboard tabs below.
+    void buildDefaultDockLayout(const ImGuiID dockspaceId, const ImGuiViewport* viewport)
+    {
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodePos(dockspaceId, viewport->WorkPos);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+
+        ImGuiID center = dockspaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.19F, nullptr, &center);
+        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.24F, nullptr, &center);
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30F, nullptr, &center);
+        const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.42F, nullptr, &left);
+        const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.38F, nullptr, &right);
+
+        ImGui::DockBuilderDockWindow("Hierarchy", left);
+        ImGui::DockBuilderDockWindow("Project", leftBottom);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Toolbox", rightBottom);
+        ImGui::DockBuilderDockWindow("Viewport", center);
+        ImGui::DockBuilderDockWindow("Game", center);
+        ImGui::DockBuilderDockWindow("Cine Camera Preview", center);
+        ImGui::DockBuilderDockWindow("AI Forge", bottom);
+        ImGui::DockBuilderDockWindow("Animation", bottom);
+        ImGui::DockBuilderDockWindow("Console", bottom);
+        ImGui::DockBuilderDockWindow("Storyboard", bottom);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    // Shows `name`'s tab in its dock group. Focus alone doesn't do it, and
+    // a group always shows the tab of the focused window if it holds it.
+    void selectDockedTab(const char* name)
+    {
+        ImGuiWindow* window = ImGui::FindWindowByName(name);
+        if (window != nullptr && window->DockNode != nullptr && window->DockNode->TabBar != nullptr)
+        {
+            window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+        }
     }
 
     void glfwErrorCallback(const int error, const char* description)
@@ -8360,7 +8406,8 @@ int main()
     // the app's lifetime and is re-passed to scriptRuntime.initialize() on
     // every Play start, same lifetime pattern as scriptRuntime itself. See
     // GlfwInputSource for GameForgerRuntime's equivalent.
-    ImGuiInputSource imguiInputSource;
+    // Qualified: imgui_internal.h has its own enum ImGuiInputSource.
+    gameforger::editor::ImGuiInputSource imguiInputSource;
     AnimationPanelState animPanel;
     AIAnimationState aiAnimation;
     ProjectBrowserState projectBrowser;
@@ -8369,6 +8416,9 @@ int main()
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
+    ImGuiID dockspaceId = 0;
+    bool needsDefaultLayout = false;
+    int focusDefaultTabsInFrames = 0;
     // The scene file "Save Scene" writes to; set by Open and Save As. Empty
     // until the scene has a file (the editor starts with an empty, unsaved
     // scene), so the first Save asks where instead of overwriting
@@ -8401,16 +8451,30 @@ int main()
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
 
-        if (resetLayout)
+        // Built before this frame's DockSpace, with the id the previous
+        // frame's DockSpace returned: on first run when the layout file had
+        // no docked layout, and for Edit > Reset Editor Layout (which used
+        // to load an empty layout = every panel floating).
+        if (dockspaceId != 0 && (resetLayout || needsDefaultLayout))
         {
-            ImGui::LoadIniSettingsFromMemory("", 0);
+            buildDefaultDockLayout(dockspaceId, ImGui::GetMainViewport());
             resetLayout = false;
+            needsDefaultLayout = false;
+            // Panels dock into the new layout and their tab bars are created
+            // over the next frames; focus once that has settled.
+            focusDefaultTabsInFrames = 4;
         }
 
-        ImGui::DockSpaceOverViewport(
+        const bool firstDockFrame = dockspaceId == 0;
+        dockspaceId = ImGui::DockSpaceOverViewport(
             0,
             ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
+        if (firstDockFrame)
+        {
+            const ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+            needsDefaultLayout = rootNode == nullptr || !rootNode->IsSplitNode();
+        }
 
         drawMainMenu(
             scene, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
@@ -8460,6 +8524,16 @@ int main()
         drawCineCameraPreviewPanel(
             cineCameraRenderer, scene, commandBus, selection, storyboard, projectRoot, deltaTime);
         drawStoryboardPanel(scene, selection, storyboard);
+
+        if (focusDefaultTabsInFrames > 0 && --focusDefaultTabsInFrames == 0)
+        {
+            // After a default layout is built, show the first tab of each
+            // group - otherwise the last panel created (Storyboard) has focus
+            // and its tab stays on top.
+            selectDockedTab("AI Forge");
+            selectDockedTab("Viewport");
+            ImGui::SetWindowFocus("Viewport");
+        }
 
         ImGui::Render();
 

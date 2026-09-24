@@ -54,6 +54,17 @@
 
 ---
 
+## 1i. Session Log: 2026-09-24 (default panel layout - Alpha 0.86)
+
+The user picked option 2: put a default panel layout into the code (audit B20). Every change:
+1. `Editor/src/main.cpp`: new `buildDefaultDockLayout()` (ImGui DockBuilder, `#include <imgui_internal.h>`). Same arrangement as the user's own layout file: Hierarchy over Project (left), Inspector over Toolbox (right), Viewport/Game/Cine Camera Preview tabs (middle), AI Forge/Animation/Console/Storyboard tabs (bottom).
+2. Main loop: the dockspace id returned by `DockSpaceOverViewport` is kept; on the first frame, if the layout file has no docked layout, the default is built at the start of the next frame. **Edit > Reset Editor Layout** now builds the default too (it used to load an empty layout = every panel floating).
+3. New `selectDockedTab()`: after building, the Viewport and AI Forge tabs are shown (otherwise the last panel created, Storyboard, kept focus and its tab stayed on top).
+4. `gameforger::editor::ImGuiInputSource` qualified in `main()` - `imgui_internal.h` has its own `ImGuiInputSource` enum.
+5. Version 0.85 -> 0.86.
+* **Verified:** Debug build of all targets, zero new warnings on changed lines, 22/22 tests. Screenshot with no layout file: docked, Viewport + AI Forge tabs showing. With the user's layout file: the split sizes are unchanged (not replaced). Edit > Reset Editor Layout was NOT clicked by me (no remote mouse input) - the user should check it.
+* **Not done (not asked):** no merge with `unity-parity-upgrade` (option 1).
+
 ## 1h. Session Log: 2026-09-24 (camera direction fixes - Alpha 0.85)
 
 The user reported the cameras inverted (editor Viewport: up/down and left/right; also in game). Root causes found by checking every camera against glm::lookAt, the view the renderer really uses:

@@ -63,6 +63,7 @@ The user reported the cameras inverted (editor Viewport: up/down and left/right;
 4. **Tests** (`Engine/tests/TestMain.cpp`): `testCameraBasisMatchesScreen` (right/up land screen-right/screen-up at 15 yaw/pitch combos) and `testThirdPersonMouseUpLooksUp`. 22 tests.
 5. **Version** 0.84 -> 0.85.
 * **Verified:** Debug build of all targets, zero new warnings on changed lines, 22/22 tests, editor starts.
+6. **Layout (no code change):** the user reported the layout broken. Cause: no default dock layout in code (plan B20); this worktree had no layout file, so panels floated. Copied the user's `GameForgerEditorLayout.ini` from `C:\GameForgerAI-Editor` into the worktree (gitignored file; the broken one is backed up in the session scratchpad).
 
 ## 1g. Session Log: 2026-09-24 (audit fixes B13, gizmo keys, A3, G1 - Alpha 0.84)
 

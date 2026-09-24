@@ -1,6 +1,7 @@
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -141,7 +142,7 @@ namespace gameforger::editor
 		const float dt = clampDeltaTime(deltaTime);
 		for (const SceneEntity& entity : scene.entities())
 		{
-			if (entity.active && !entity.scripts.empty())
+			if (!entity.scripts.empty() && scene.isActiveInHierarchy(entity))
 			{
 				scriptRuntime.updateEntity(entity.id, dt);
 			}
@@ -227,7 +228,8 @@ namespace gameforger::editor
 				// (enemy_ai/ranged_attacker).
 				for (const SceneEntity& other : scene.entities())
 				{
-					if (std::find(other.tags.begin(), other.tags.end(), projectile.hitTag) == other.tags.end())
+					if (!other.active ||
+						std::find(other.tags.begin(), other.tags.end(), projectile.hitTag) == other.tags.end())
 					{
 						continue;
 					}
@@ -245,5 +247,290 @@ namespace gameforger::editor
 			}
 		}
 		gameplay.projectiles = std::move(stillActive);
+	}
+
+	void tickEffects(GameplayState& gameplay, const bool isPlaying, const float deltaTime)
+	{
+		if (!isPlaying)
+		{
+			return;
+		}
+		const float dt = clampDeltaTime(deltaTime);
+		for (GameplayState::Beam& beam : gameplay.beams)
+		{
+			beam.remainingSeconds -= dt;
+		}
+		for (GameplayState::Flash& flash : gameplay.flashes)
+		{
+			if (flash.particle)
+			{
+				// Spawned this frame -> survives this tick, gone the next.
+				flash.remainingSeconds = flash.framesLeft-- > 0 ? 1.0F : 0.0F;
+			}
+			else
+			{
+				flash.remainingSeconds -= dt;
+			}
+		}
+		std::erase_if(gameplay.beams, [](const GameplayState::Beam& beam) { return beam.remainingSeconds <= 0.0F; });
+		std::erase_if(
+			gameplay.flashes, [](const GameplayState::Flash& flash) { return flash.remainingSeconds <= 0.0F; });
+		for (GameplayState::FloatingText& text : gameplay.floatingTexts)
+		{
+			text.remainingSeconds -= dt;
+			text.position.y += 0.9F * dt; // drift upward
+		}
+		std::erase_if(gameplay.floatingTexts,
+			[](const GameplayState::FloatingText& text) { return text.remainingSeconds <= 0.0F; });
+		if (gameplay.messageSecondsRemaining > 0.0F)
+		{
+			gameplay.messageSecondsRemaining = std::max(0.0F, gameplay.messageSecondsRemaining - dt);
+		}
+	}
+
+	void ensureInventorySlots(GameplayState& gameplay)
+	{
+		// Older code/saves kept only non-empty entries - compact those to
+		// the front first so nothing is lost, then pad with empty slots.
+		std::vector<GameplayState::InventoryItem> slots;
+		slots.reserve(kInventorySlotCount);
+		for (GameplayState::InventoryItem& item : gameplay.inventoryItems)
+		{
+			if (!item.empty() && static_cast<int>(slots.size()) < kInventorySlotCount)
+			{
+				slots.push_back(std::move(item));
+			}
+		}
+		slots.resize(kInventorySlotCount);
+		gameplay.inventoryItems = std::move(slots);
+		gameplay.selectedSlot = std::clamp(gameplay.selectedSlot, 0, kInventorySlotCount - 1);
+	}
+
+	int addInventoryItem(GameplayState& gameplay, GameplayState::InventoryItem item)
+	{
+		if (static_cast<int>(gameplay.inventoryItems.size()) != kInventorySlotCount)
+		{
+			ensureInventorySlots(gameplay);
+		}
+		if (item.count <= 0)
+		{
+			item.count = 1;
+		}
+		auto& slots = gameplay.inventoryItems;
+		if (item.stackable)
+		{
+			for (int index = 0; index < static_cast<int>(slots.size()); ++index)
+			{
+				GameplayState::InventoryItem& slot = slots[static_cast<std::size_t>(index)];
+				if (!slot.empty() && slot.stackable && slot.itemName == item.itemName &&
+					slot.count + item.count <= std::max(1, slot.maxStack))
+				{
+					slot.count += item.count;
+					for (std::string& stored : item.storedEntityNames)
+					{
+						slot.storedEntityNames.push_back(std::move(stored));
+					}
+					return index;
+				}
+			}
+		}
+		for (int index = 0; index < static_cast<int>(slots.size()); ++index)
+		{
+			if (slots[static_cast<std::size_t>(index)].empty())
+			{
+				slots[static_cast<std::size_t>(index)] = std::move(item);
+				return index;
+			}
+		}
+		return -1;
+	}
+
+	bool entityProvidesInventory(const SceneEntity& entity, const ScriptRuntime& scriptRuntime)
+	{
+		for (const std::string& scriptPath : entity.scripts)
+		{
+			if (scriptPath == "Game/Scripts/inventory_system.lua" ||
+				scriptRuntime.getScriptBoolField(entity.id, scriptPath, "inventory_enabled", false))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	const SceneEntity* findPickupItemCandidate(
+		const EditorScene& scene, const glm::vec3& origin, const float horizontalRange, const float heightTolerance,
+		const int excludeId)
+	{
+		const SceneEntity* best = nullptr;
+		float bestDistanceSquared = horizontalRange * horizontalRange;
+		for (const SceneEntity& other : scene.entities())
+		{
+			if (other.id == excludeId || !(other.isPickupItem || hasScript(other, kItemScriptPath)))
+			{
+				continue;
+			}
+			if (!scene.isActiveInHierarchy(other) || std::abs(other.position.y - origin.y) > heightTolerance)
+			{
+				continue;
+			}
+			const float deltaX = other.position.x - origin.x;
+			const float deltaZ = other.position.z - origin.z;
+			const float distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
+			if (distanceSquared > bestDistanceSquared)
+			{
+				continue;
+			}
+			best = &other;
+			bestDistanceSquared = distanceSquared;
+		}
+		return best;
+	}
+
+	namespace
+	{
+		// items.lua's live field, falling back to the object's saved
+		// override (the script may not be running, e.g. outside Play).
+		std::string itemScriptString(
+			const SceneEntity& entity, const ScriptRuntime& scriptRuntime, const char* field,
+			const std::string& fallback)
+		{
+			std::string stored = fallback;
+			if (const ScriptPropertyOverride* entry = findScriptProperty(entity, kItemScriptPath, field))
+			{
+				stored = entry->value;
+			}
+			return scriptRuntime.getScriptStringField(entity.id, kItemScriptPath, field, stored);
+		}
+
+		// Only the root's own flag changes - children follow through
+		// EditorScene::isActiveInHierarchy and keep their own flags.
+		void setEntityActive(const EditorScene& scene, AICommandBus& commandBus, const std::string& name, bool active)
+		{
+			if (scene.findEntity(name) != nullptr)
+			{
+				(void)commandBus.execute(SetPropertyCommand{name, "Entity", "active", active});
+			}
+		}
+	}
+
+	std::string pickupDisplayName(const SceneEntity& entity, const ScriptRuntime& scriptRuntime)
+	{
+		if (hasScript(entity, kItemScriptPath))
+		{
+			const std::string name = itemScriptString(entity, scriptRuntime, "item_name", "");
+			return name.empty() ? entity.name : name;
+		}
+		return entity.pickupItem.itemName;
+	}
+
+	bool pickUpItem(
+		EditorScene& scene, AICommandBus& commandBus, GameplayState& gameplay, const ScriptRuntime& scriptRuntime,
+		const SceneEntity& candidate)
+	{
+		GameplayState::InventoryItem item;
+		item.count = 1;
+		const std::string entityName = candidate.name;
+		if (hasScript(candidate, kItemScriptPath))
+		{
+			item.itemName = pickupDisplayName(candidate, scriptRuntime);
+			item.iconPath = itemScriptString(candidate, scriptRuntime, "icon", "");
+			item.itemType = itemScriptString(candidate, scriptRuntime, "item_type", "misc");
+			item.weapon = itemScriptString(candidate, scriptRuntime, "weapon", "none");
+			if (item.weapon == "none")
+			{
+				item.weapon.clear();
+			}
+			item.stackable = scriptRuntime.getScriptBoolField(candidate.id, kItemScriptPath, "stackable", false);
+			item.maxStack = static_cast<int>(
+				scriptRuntime.getScriptNumberField(candidate.id, kItemScriptPath, "max_stack", 99.0F));
+			item.storedEntityNames.push_back(entityName);
+			if (addInventoryItem(gameplay, std::move(item)) < 0)
+			{
+				return false;
+			}
+			// Unparent so it can be dropped anywhere later, then hide.
+			if (!candidate.parentName.empty())
+			{
+				(void)commandBus.execute(SetPropertyCommand{entityName, "Parent", "parentName", std::string()});
+			}
+			setEntityActive(scene, commandBus, entityName, false);
+			return true;
+		}
+
+		item.itemName = candidate.pickupItem.itemName;
+		item.iconPath = candidate.pickupItem.iconPath;
+		item.itemType = "misc";
+		item.scale = candidate.scale;
+		item.color = candidate.color;
+		item.materialBlendWeight = candidate.materialBlendWeight;
+		item.materialLayers = candidate.materialLayers;
+		item.materialUvScale = candidate.materialUvScale;
+		if (addInventoryItem(gameplay, std::move(item)) < 0)
+		{
+			return false;
+		}
+		(void)commandBus.execute(DeleteEntityCommand{entityName});
+		return true;
+	}
+
+	bool dropInventoryItem(
+		EditorScene& scene, AICommandBus& commandBus, GameplayState& gameplay, const int slotIndex,
+		const glm::vec3& dropPosition, const float yawDegrees)
+	{
+		if (slotIndex < 0 || slotIndex >= static_cast<int>(gameplay.inventoryItems.size()))
+		{
+			return false;
+		}
+		GameplayState::InventoryItem& item = gameplay.inventoryItems[static_cast<std::size_t>(slotIndex)];
+		if (item.empty())
+		{
+			return false;
+		}
+
+		if (!item.storedEntityNames.empty())
+		{
+			const std::string entityName = item.storedEntityNames.back();
+			item.storedEntityNames.pop_back();
+			if (scene.findEntity(entityName) != nullptr)
+			{
+				(void)commandBus.execute(SetPropertyCommand{entityName, "Transform", "position", dropPosition});
+				(void)commandBus.execute(
+					SetPropertyCommand{entityName, "Transform", "rotation", glm::vec3(0.0F, yawDegrees, 0.0F)});
+				setEntityActive(scene, commandBus, entityName, true);
+			}
+		}
+		else
+		{
+			// Legacy pickup: re-spawn a cube carrying the captured look.
+			const std::string baseName = item.itemName.empty() ? std::string("Item") : item.itemName;
+			std::string spawnedName = baseName;
+			for (int suffix = 1; scene.findEntity(spawnedName) != nullptr; ++suffix)
+			{
+				spawnedName = baseName + " (" + std::to_string(suffix) + ")";
+			}
+			(void)commandBus.execute(CreateEntityCommand{spawnedName, PrimitiveType::Cube, dropPosition});
+			(void)commandBus.execute(SetPropertyCommand{spawnedName, "Transform", "scale", item.scale});
+			(void)commandBus.execute(SetPropertyCommand{spawnedName, "Renderer", "color", item.color});
+			(void)commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "enabled", true});
+			(void)commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "itemName", item.itemName});
+			(void)commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "iconPath", item.iconPath});
+			if (const SceneEntity* spawned = scene.findEntity(spawnedName))
+			{
+				if (SceneEntity* mutableSpawned = scene.findEntityMutable(spawned->id))
+				{
+					mutableSpawned->materialBlendWeight = item.materialBlendWeight;
+					mutableSpawned->materialLayers = item.materialLayers;
+					mutableSpawned->materialUvScale = item.materialUvScale;
+				}
+			}
+		}
+
+		item.count -= 1;
+		if (item.count <= 0)
+		{
+			item = GameplayState::InventoryItem{};
+		}
+		return true;
 	}
 }

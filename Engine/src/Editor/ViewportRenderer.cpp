@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <unordered_map>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -815,8 +816,8 @@ void main()
 		lastProjection_ = glm::perspective(
 			glm::radians(50.0F),
 			static_cast<float>(width_) / static_cast<float>(height_),
-			0.1F,
-			200.0F);
+			0.05F,
+			250.0F);
 		lastView_ = glm::lookAt(eye, cameraTarget_, glm::vec3(0.0F, 1.0F, 0.0F));
 		const glm::mat4 viewProjection = lastProjection_ * lastView_;
 
@@ -882,9 +883,40 @@ void main()
 			glGetUniformLocation(texturedMeshShaderProgram_, "heightTex1"),
 			glGetUniformLocation(texturedMeshShaderProgram_, "heightTex2")};
 
+		// activeInHierarchy: an entity is hidden when it or any ancestor is
+		// inactive (a hidden weapon model hides all its parts; an item in
+		// the inventory hides its children too).
+		std::unordered_map<std::string, const SceneEntity*> entitiesByName;
+		entitiesByName.reserve(entities.size());
 		for (const SceneEntity& entity : entities)
 		{
-			if (!entity.active || entity.id == excludeEntityId)
+			entitiesByName.emplace(entity.name, &entity);
+		}
+		const auto activeInHierarchy = [&entitiesByName, &entities](const SceneEntity& entity)
+		{
+			const SceneEntity* current = &entity;
+			for (std::size_t depth = 0; current != nullptr && depth <= entities.size(); ++depth)
+			{
+				if (!current->active)
+				{
+					return false;
+				}
+				if (current->parentName.empty())
+				{
+					return true;
+				}
+				const auto parent = entitiesByName.find(current->parentName);
+				current = parent != entitiesByName.end() ? parent->second : nullptr;
+			}
+			return true;
+		};
+
+		for (const SceneEntity& entity : entities)
+		{
+			// "Empty" = transform-only group node (e.g. the FPS rig's
+			// hand/weapon groups) - it positions its children but has no
+			// look of its own.
+			if (entity.id == excludeEntityId || !activeInHierarchy(entity) || hasTag(entity, "Empty"))
 			{
 				continue;
 			}

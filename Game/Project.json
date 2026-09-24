@@ -3,7 +3,7 @@
   "version": 1,
   "name": "GameForgerAI",
   "aiProviders": "Game/AI/Providers.json",
-  "startupScene": "Game/Scenes/Castle.gfai",
+  "startupScene": "Game/Scenes/FPSDemo.gfai",
   "skeletonProfile": "Game/Characters/HumanoidV1.skeleton.json",
   "assetDirectories": [
     "Game/Characters",

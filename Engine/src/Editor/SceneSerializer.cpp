@@ -262,6 +262,28 @@ namespace gameforger::editor
 				}
 			}
 
+			if (const json::Value* scriptProperties = obj.find("scriptProperties"))
+			{
+				if (scriptProperties->type == json::Value::Type::Array)
+				{
+					for (const json::Value& entryValue : scriptProperties->arrayValue)
+					{
+						if (entryValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						ScriptPropertyOverride entry;
+						entry.scriptPath = readString(entryValue, "script");
+						entry.name = readString(entryValue, "name");
+						entry.value = readString(entryValue, "value");
+						if (!entry.scriptPath.empty() && !entry.name.empty())
+						{
+							entity.scriptProperties.push_back(std::move(entry));
+						}
+					}
+				}
+			}
+
 			if (const json::Value* animation = obj.find("animation"))
 			{
 				entity.animation.enabled = readBool(*animation, "enabled", false);
@@ -513,6 +535,16 @@ namespace gameforger::editor
 				json += indent + "    \"" + escapeJson(entity.scripts[index]) + "\"";
 			}
 			json += entity.scripts.empty() ? "],\n" : ("\n" + indent + "  ],\n");
+
+			json += indent + "  \"scriptProperties\": [";
+			for (std::size_t index = 0; index < entity.scriptProperties.size(); ++index)
+			{
+				const ScriptPropertyOverride& entry = entity.scriptProperties[index];
+				json += (index == 0 ? "\n" : ",\n");
+				json += indent + "    {\"script\": \"" + escapeJson(entry.scriptPath) + "\", \"name\": \"" +
+					escapeJson(entry.name) + "\", \"value\": \"" + escapeJson(entry.value) + "\"}";
+			}
+			json += entity.scriptProperties.empty() ? "],\n" : ("\n" + indent + "  ],\n");
 
 			json += indent + "  \"animation\": {\n";
 			json += indent + "    \"enabled\": " + std::string(entity.animation.enabled ? "true" : "false") + ",\n";

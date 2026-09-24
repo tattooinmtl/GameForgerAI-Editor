@@ -19,6 +19,8 @@ struct lua_Debug;
 
 namespace gameforger::editor
 {
+	struct GameplayState;
+
 	// Embeds a single Lua 5.4 VM and runs attached entity scripts against it for
 	// the duration of one Play session. Scripts follow this project's existing
 	// convention (see Game/Scripts/player_controller.lua): a chunk that returns
@@ -112,19 +114,79 @@ namespace gameforger::editor
 		// SceneEntity::scripts, which this class doesn't otherwise watch.
 		void stopScript(int entityId, const std::string& scriptPath);
 
+		// One `-- @property <name> <type> [default]` line of a script, shown
+		// in the Inspector and editable per object (SceneEntity::
+		// scriptProperties). Types:
+		//   number 4.5 | bool true | string any text | vec3 1 2 3
+		//   icon Game/Models/iconpack1/128/SwordT1.png   (an image path,
+		//        Inspector shows a thumbnail + "Change Icon..." button)
+		//   enum a|b|c b   (Inspector shows a dropdown of a/b/c, default b)
+		//   image Game/Branding/logo.jpg   (any picture, e.g. a splash logo -
+		//        "Change Image..." imports into the default's own folder)
+		// The value (default or the object's own) is set on the script's
+		// table as self.<name> BEFORE on_start() runs, so a script should
+		// read it with e.g. `self.speed = self.speed or 4.5`.
 		struct ExposedScriptProperty
 		{
-			enum class Type { Number, String, Bool, Vec3 };
+			enum class Type { Number, String, Bool, Vec3, Icon, Enum, Image };
 			std::string name;
 			Type type = Type::Number;
 			float defaultNumber = 0.0F;
 			std::string defaultString;
 			bool defaultBool = false;
 			glm::vec3 defaultVec3{0.0F};
+			std::vector<std::string> options; // Enum only
+
+			// The default value in the same text form SceneEntity::
+			// scriptProperties stores overrides in.
+			[[nodiscard]] std::string defaultAsText() const;
 		};
 
 		[[nodiscard]] static std::vector<ExposedScriptProperty> parseScriptProperties(
 			const std::filesystem::path& fullScriptPath);
+		// parseScriptProperties, re-read only when the file's modification
+		// time changes - cheap enough to call every frame from the Inspector.
+		[[nodiscard]] static const std::vector<ExposedScriptProperty>& cachedScriptProperties(
+			const std::filesystem::path& fullScriptPath);
+
+		// A script's `-- @preset <Preset Name> | <role>` line - scripts that
+		// belong together (e.g. the "FPS Opus" set). `role` says where the
+		// script goes: "player" scripts all go on the player object, others
+		// ("item", "damageable", "manager") on other objects. Empty name =
+		// not part of a preset.
+		struct ScriptPresetTag
+		{
+			std::string name;
+			std::string role;
+		};
+		[[nodiscard]] static ScriptPresetTag cachedScriptPreset(const std::filesystem::path& fullScriptPath);
+
+		// The value `entity` has for a script's @property, as text: its own
+		// override if it has one, else the script file's annotated default
+		// (empty if the script or property doesn't exist). For reading
+		// settings without running the script - e.g. GameForgerRuntime reads
+		// the Game Manager's splash logo before any script starts.
+		[[nodiscard]] static std::string scriptPropertyText(const SceneEntity& entity, const std::string& scriptPath,
+			const std::string& propertyName, const std::filesystem::path& projectRoot);
+
+		// Registry refs of every running instance on entityId (Lua bindings
+		// use this to call functions on them).
+		[[nodiscard]] std::vector<int> instanceRefs(int entityId) const;
+
+		// Session state (inventory, look angles, effects) shared with the
+		// host's gameplay loop - backs self.inventory, self.camera:getPitch/
+		// getAim and self.world:spawnBeam/spawnFlash. Optional: when null
+		// those calls are harmless no-ops (e.g. unit tests). initialize()
+		// clears it, so set it after initialize().
+		void setGameplayState(GameplayState* gameplayState) noexcept;
+		[[nodiscard]] GameplayState* gameplayState() const noexcept;
+
+		// Calls `functionName(self, number, text)` on every running script
+		// instance of entityId that defines it (e.g. on_damage(amount,
+		// sourceName), on_stun(seconds, sourceName)). Returns true if at
+		// least one instance handled it. Errors are logged, not thrown.
+		bool invokeHook(int entityId, const char* functionName, float number, const std::string& text);
+		[[nodiscard]] bool hasHook(int entityId, const char* functionName) const;
 
 		// Reads a numeric field directly off a running script instance's own
 		// table (e.g. `self.pickup_range = 4.0` set in on_start()) - lets a
@@ -188,6 +250,7 @@ namespace gameforger::editor
 		BoolSetCallback operatingCatapultSetCallback_;
 		GravityProjectileSpawnCallback gravityProjectileSpawnCallback_;
 		std::unordered_map<int, std::vector<ScriptInstance>> instancesByEntity_;
+		GameplayState* gameplayState_ = nullptr;
 		int activeCameraEntityId_ = -1;
 		std::string activeCameraMode_ = "fps";
 		// Per-call instruction budget consumed by instructionHook(). Reset

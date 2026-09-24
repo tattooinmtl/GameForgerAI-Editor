@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -507,6 +510,841 @@ return Controller
 }
 
 // ----------------------------------------------------------------------------
+// FPS player / items / inventory / weapon API tests
+// ----------------------------------------------------------------------------
+#include "GameForger/Editor/FpsRigBuilder.hpp"
+#include "GameForger/Runtime/GameplayLoop.hpp"
+
+namespace
+{
+	void writeTextFile(const std::filesystem::path& path, const std::string& text)
+	{
+		std::filesystem::create_directories(path.parent_path());
+		std::ofstream out(path, std::ios::binary | std::ios::trunc);
+		out << text;
+	}
+
+	struct SceneFixture
+	{
+		EditorScene scene{"."};
+		AICommandBus bus;
+		MockInputSource input;
+		ScriptRuntime runtime;
+		GameplayState gameplay;
+
+		SceneFixture()
+		{
+			bus.setHandler([this](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+		}
+
+		void start()
+		{
+			runtime.initialize(scene, bus, input, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+			runtime.setGameplayState(&gameplay);
+			for (const SceneEntity& entity : scene.entities())
+			{
+				for (const std::string& script : entity.scripts)
+				{
+					(void)runtime.startScript(entity.id, script, ".");
+				}
+			}
+		}
+
+		const SceneEntity* find(const std::string& name) const { return scene.findEntity(name); }
+	};
+}
+
+void testScriptPropertyOverrides()
+{
+	const std::string scriptPath = "Game/Scripts/test_item_props.lua";
+	writeTextFile(scriptPath, R"(-- @property item_name string Item
+-- @property icon icon Game/Icons/a.png
+-- @property weapon enum none|sword|axe sword
+-- @property power number 2
+local T = {}
+function T:on_start()
+	self.seen_name = self.item_name
+	self.seen_power = self.power
+end
+return T
+)");
+
+	const auto props = ScriptRuntime::parseScriptProperties(scriptPath);
+	TEST_ASSERT(props.size() == 4, "Must parse 4 properties including icon and enum");
+	TEST_ASSERT(props[1].type == ScriptRuntime::ExposedScriptProperty::Type::Icon, "icon type parsed");
+	TEST_ASSERT(props[1].defaultString == "Game/Icons/a.png", "icon default parsed");
+	TEST_ASSERT(props[2].type == ScriptRuntime::ExposedScriptProperty::Type::Enum, "enum type parsed");
+	TEST_ASSERT(props[2].options.size() == 3 && props[2].defaultString == "sword", "enum options/default parsed");
+
+	SceneFixture fx;
+	TEST_ASSERT(fx.bus.execute(CreateEntityCommand{"A"}).success, "create A");
+	TEST_ASSERT(fx.bus.execute(CreateEntityCommand{"B"}).success, "create B");
+	TEST_ASSERT(fx.bus.execute(AttachScriptCommand{"A", scriptPath}).success, "attach to A");
+	TEST_ASSERT(fx.bus.execute(AttachScriptCommand{"B", scriptPath}).success, "attach to B");
+	TEST_ASSERT(fx.bus.execute(SetPropertyCommand{"A", "ScriptProperty", scriptPath + "#item_name", std::string("Magic Sword")}).success,
+		"override item_name on A");
+	TEST_ASSERT(fx.bus.execute(SetPropertyCommand{"A", "ScriptProperty", scriptPath + "#power", std::string("5")}).success,
+		"override power on A");
+	TEST_ASSERT(!fx.bus.execute(SetPropertyCommand{"A", "ScriptProperty", "no-separator", std::string("x")}).success,
+		"malformed script property name is rejected");
+
+	fx.start();
+	const int idA = fx.find("A")->id;
+	const int idB = fx.find("B")->id;
+	TEST_ASSERT(fx.runtime.getScriptStringField(idA, scriptPath, "seen_name", "") == "Magic Sword",
+		"A's own value is visible in on_start");
+	TEST_ASSERT(std::abs(fx.runtime.getScriptNumberField(idA, scriptPath, "seen_power", 0.0F) - 5.0F) < 0.001F,
+		"numeric override converted to a number");
+	TEST_ASSERT(fx.runtime.getScriptStringField(idA, scriptPath, "weapon", "") == "sword", "enum default applied");
+	TEST_ASSERT(fx.runtime.getScriptStringField(idB, scriptPath, "seen_name", "") == "Item", "B keeps the default");
+	fx.runtime.shutdown();
+
+	TEST_ASSERT(fx.bus.execute(SetPropertyCommand{"A", "ScriptPropertyReset", scriptPath + "#item_name", std::string()}).success,
+		"reset override");
+	TEST_ASSERT(findScriptProperty(*fx.find("A"), scriptPath, "item_name") == nullptr, "override removed by reset");
+	TEST_ASSERT(findScriptProperty(*fx.find("A"), scriptPath, "power") != nullptr, "other override kept");
+	std::filesystem::remove(scriptPath);
+}
+
+void testScriptPropertySerialization()
+{
+	SceneEntity entity;
+	entity.name = "Pickup \"One\"";
+	entity.scripts.push_back("Game/Scripts/items.lua");
+	entity.scriptProperties.push_back({"Game/Scripts/items.lua", "icon", "Game/Icons/My Icon.png"});
+	entity.scriptProperties.push_back({"Game/Scripts/items.lua", "item_name", "Axe \"of\" Doom"});
+	const std::filesystem::path path = "test_script_properties.gfprod";
+	TEST_ASSERT(saveScene(path, {entity}).success, "save scene with script properties");
+	const SceneLoadResult loaded = loadScene(path);
+	TEST_ASSERT(loaded.success && loaded.entities.size() == 1, "load it back");
+	const auto& props = loaded.entities[0].scriptProperties;
+	TEST_ASSERT(props.size() == 2, "both overrides round-trip");
+	TEST_ASSERT(props[0].value == "Game/Icons/My Icon.png" && props[1].value == "Axe \"of\" Doom",
+		"override values round-trip (incl. quotes/spaces)");
+	std::filesystem::remove(path);
+}
+
+void testRenameKeepsChildrenAttached()
+{
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"Parent"});
+	(void)fx.bus.execute(CreateEntityCommand{"Child"});
+	(void)fx.bus.execute(SetPropertyCommand{"Child", "Parent", "parentName", std::string("Parent")});
+	TEST_ASSERT(fx.bus.execute(RenameEntityCommand{"Parent", "Base"}).success, "rename parent");
+	TEST_ASSERT(fx.find("Child")->parentName == "Base", "child follows the renamed parent");
+}
+
+void testActiveInHierarchy()
+{
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"Root"});
+	(void)fx.bus.execute(CreateEntityCommand{"Mid"});
+	(void)fx.bus.execute(CreateEntityCommand{"Leaf"});
+	(void)fx.bus.execute(SetPropertyCommand{"Mid", "Parent", "parentName", std::string("Root")});
+	(void)fx.bus.execute(SetPropertyCommand{"Leaf", "Parent", "parentName", std::string("Mid")});
+	TEST_ASSERT(fx.scene.isActiveInHierarchy(*fx.find("Leaf")), "all active");
+	TEST_ASSERT(fx.bus.execute(SetPropertyCommand{"Root", "Entity", "active", false}).success, "Entity/active command");
+	TEST_ASSERT(!fx.scene.isActiveInHierarchy(*fx.find("Leaf")), "hidden root hides grandchild");
+	TEST_ASSERT(fx.find("Leaf")->active, "grandchild keeps its own flag");
+	// A parent cycle must not hang.
+	(void)fx.bus.execute(SetPropertyCommand{"Root", "Parent", "parentName", std::string("Leaf")});
+	(void)fx.scene.isActiveInHierarchy(*fx.find("Leaf"));
+}
+
+void testInventorySlotsAndStacking()
+{
+	GameplayState gameplay;
+	ensureInventorySlots(gameplay);
+	TEST_ASSERT(static_cast<int>(gameplay.inventoryItems.size()) == kInventorySlotCount, "fixed slot count");
+
+	GameplayState::InventoryItem potion;
+	potion.itemName = "Potion";
+	potion.stackable = true;
+	potion.maxStack = 3;
+	TEST_ASSERT(addInventoryItem(gameplay, potion) == 0, "first potion -> slot 0");
+	TEST_ASSERT(addInventoryItem(gameplay, potion) == 0, "second potion stacks");
+	TEST_ASSERT(addInventoryItem(gameplay, potion) == 0, "third potion stacks");
+	TEST_ASSERT(addInventoryItem(gameplay, potion) == 1, "fourth potion exceeds max_stack -> new slot");
+
+	GameplayState::InventoryItem sword;
+	sword.itemName = "Sword";
+	sword.stackable = false;
+	TEST_ASSERT(addInventoryItem(gameplay, sword) == 2, "sword -> next slot");
+	TEST_ASSERT(addInventoryItem(gameplay, sword) == 3, "non-stackable never stacks");
+	for (int index = 4; index < kInventorySlotCount; ++index)
+	{
+		(void)addInventoryItem(gameplay, sword);
+	}
+	TEST_ASSERT(addInventoryItem(gameplay, sword) == -1, "full bag refuses");
+
+	// Old saves (compact lists) are compacted into fixed slots.
+	GameplayState legacy;
+	legacy.inventoryItems.push_back(potion);
+	legacy.inventoryItems.back().count = 2;
+	ensureInventorySlots(legacy);
+	TEST_ASSERT(legacy.inventoryItems[0].count == 2 && legacy.inventoryItems[1].empty(), "legacy list padded");
+}
+
+void testItemPickupHideAndDrop()
+{
+	const std::string itemScript = kItemScriptPath;
+	const bool hadRealItemScript = std::filesystem::exists(itemScript);
+	if (!hadRealItemScript)
+	{
+		writeTextFile(itemScript, R"(-- @property item_name string Item
+-- @property icon icon Game/Icons/x.png
+-- @property item_type enum weapon|consumable|ammo|misc misc
+-- @property weapon enum none|sword|axe none
+-- @property stackable bool false
+-- @property max_stack number 99
+local Item = {}
+function Item:on_start() end
+return Item
+)");
+	}
+
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"Player", PrimitiveType::Capsule, glm::vec3(0.0F)});
+	(void)fx.bus.execute(CreateEntityCommand{"SwordProp", PrimitiveType::Cube, glm::vec3(1.0F, 0.5F, 0.0F)});
+	(void)fx.bus.execute(CreateEntityCommand{"SwordBlade", PrimitiveType::Cube, glm::vec3(1.0F, 1.0F, 0.0F)});
+	(void)fx.bus.execute(SetPropertyCommand{"SwordBlade", "Parent", "parentName", std::string("SwordProp")});
+	TEST_ASSERT(fx.bus.execute(AttachScriptCommand{"SwordProp", itemScript}).success, "attach items.lua");
+	(void)fx.bus.execute(SetPropertyCommand{"SwordProp", "ScriptProperty", itemScript + "#item_name", std::string("Sword")});
+	(void)fx.bus.execute(SetPropertyCommand{"SwordProp", "ScriptProperty", itemScript + "#weapon", std::string("sword")});
+	(void)fx.bus.execute(SetPropertyCommand{"SwordProp", "ScriptProperty", itemScript + "#item_type", std::string("weapon")});
+	(void)fx.bus.execute(SetPropertyCommand{"SwordProp", "ScriptProperty", itemScript + "#icon", std::string("Game/Icons/sword.png")});
+	ensureInventorySlots(fx.gameplay);
+	fx.start();
+
+	const SceneEntity* player = fx.find("Player");
+	const SceneEntity* candidate = findPickupItemCandidate(fx.scene, player->position, 3.0F, 2.5F, player->id);
+	TEST_ASSERT(candidate != nullptr && candidate->name == "SwordProp", "items.lua object is a pickup candidate");
+	TEST_ASSERT(pickupDisplayName(*candidate, fx.runtime) == "Sword", "display name from item_name");
+	TEST_ASSERT(pickUpItem(fx.scene, fx.bus, fx.gameplay, fx.runtime, *candidate), "pick it up");
+
+	const GameplayState::InventoryItem& slot = fx.gameplay.inventoryItems[0];
+	TEST_ASSERT(slot.itemName == "Sword" && slot.weapon == "sword" && slot.itemType == "weapon", "slot carries item data");
+	TEST_ASSERT(slot.iconPath == "Game/Icons/sword.png", "slot carries the object's own icon");
+	TEST_ASSERT(fx.find("SwordProp") != nullptr, "items.lua object is kept, not deleted");
+	TEST_ASSERT(!fx.scene.isActiveInHierarchy(*fx.find("SwordBlade")), "stored item and its children are hidden");
+	TEST_ASSERT(findPickupItemCandidate(fx.scene, player->position, 3.0F, 2.5F, player->id) == nullptr,
+		"a stored item can't be picked up again");
+
+	TEST_ASSERT(dropInventoryItem(fx.scene, fx.bus, fx.gameplay, 0, glm::vec3(4.0F, 0.6F, 4.0F), 90.0F), "drop it");
+	TEST_ASSERT(fx.gameplay.inventoryItems[0].empty(), "slot emptied");
+	TEST_ASSERT(fx.scene.isActiveInHierarchy(*fx.find("SwordBlade")), "dropped item visible again");
+	TEST_ASSERT(glm::length(fx.find("SwordProp")->position - glm::vec3(4.0F, 0.6F, 4.0F)) < 0.001F, "dropped where asked");
+
+	fx.runtime.shutdown();
+	if (!hadRealItemScript)
+	{
+		std::filesystem::remove(itemScript);
+	}
+}
+
+void testFpsRigBuilder()
+{
+	const std::vector<std::string> stubScripts{
+		"Game/Scripts/fps_player.lua", "Game/Scripts/items.lua", "Game/Scripts/health.lua", "Game/Scripts/enemy_ai.lua",
+		"Game/Scripts/projectiles.lua", "Game/Scripts/effects.lua", "Game/Scripts/xp_system.lua",
+		"Game/Scripts/game_manager.lua"};
+	std::vector<std::string> createdStubs;
+	for (const std::string& path : stubScripts)
+	{
+		if (!std::filesystem::exists(path))
+		{
+			writeTextFile(path, "local S = {}\nreturn S\n");
+			createdStubs.push_back(path);
+		}
+	}
+
+	SceneFixture fx;
+	FpsRigOptions options;
+	options.includeDemoContent = true;
+	options.includeGround = true;
+	const FpsRigBuildResult result = buildFpsPlayerRig(fx.scene, fx.bus, options);
+	TEST_ASSERT(result.success, "rig builds without failed steps: " + result.message);
+	TEST_ASSERT(result.entitiesCreated > 150, "rig + demo content is a full set of parts");
+
+	// Regenerates the shipped demo scene (Game/Scenes/FPSDemo.gfprod) when
+	// GAMEFORGER_WRITE_FPS_DEMO is set to an output path.
+	{
+		char* demoPath = nullptr;
+		std::size_t demoPathLength = 0;
+		if (_dupenv_s(&demoPath, &demoPathLength, "GAMEFORGER_WRITE_FPS_DEMO") == 0 && demoPath != nullptr)
+		{
+			TEST_ASSERT(saveScene(demoPath, fx.scene.entities()).success, "write the demo scene");
+			std::cout << "  wrote demo scene to " << demoPath << '\n';
+			std::free(demoPath);
+		}
+	}
+
+	const SceneEntity* player = fx.find(result.playerName);
+	TEST_ASSERT(player != nullptr && hasTag(*player, "Player"), "player tagged Player");
+	for (const std::string& script : fpsOpusPlayerScripts())
+	{
+		TEST_ASSERT(hasScript(*player, script), "player has the FPS Opus script " + script);
+	}
+	const ScriptPropertyOverride* rigName = findScriptProperty(*player, "Game/Scripts/fps_player.lua", "rig_name");
+	TEST_ASSERT(rigName != nullptr && rigName->value == result.rigName, "player points at its rig");
+	TEST_ASSERT(player->cameraRig.lockCursor, "cursor lock on for mouse look");
+
+	for (const std::string& weapon : fpsWeaponIds())
+	{
+		const SceneEntity* node = fx.find(result.rigName + ".W." + weapon);
+		TEST_ASSERT(node != nullptr, "weapon node exists: " + weapon);
+		TEST_ASSERT(!node->active, "weapon hidden until equipped: " + weapon);
+		TEST_ASSERT(node->parentName == result.rigName + ".HandR", "weapon held in the right hand: " + weapon);
+	}
+	TEST_ASSERT(fx.find(result.rigName + ".W.ak47.Muzzle") != nullptr, "AK-47 has a muzzle marker");
+	TEST_ASSERT(fx.find(result.rigName + ".W.ak47.Support.Index") != nullptr, "AK-47 brings its support hand");
+	TEST_ASSERT(fx.find(result.rigName + ".HandR.Index") != nullptr, "right hand has fingers");
+
+	// Every rig part is tagged so raycasts and weapon hits ignore it.
+	int rigParts = 0;
+	for (const SceneEntity& entity : fx.scene.entities())
+	{
+		if (entity.name.rfind(result.rigName, 0) == 0)
+		{
+			++rigParts;
+			TEST_ASSERT(hasTag(entity, "Viewmodel"), "rig part tagged Viewmodel: " + entity.name);
+		}
+	}
+	TEST_ASSERT(rigParts > 80, "rig has all its parts");
+
+	// Demo pickups are items.lua weapons.
+	const SceneEntity* akPickup = fx.find("AK-47 Pickup");
+	TEST_ASSERT(akPickup != nullptr && hasScript(*akPickup, kItemScriptPath), "AK-47 pickup uses items.lua");
+	const ScriptPropertyOverride* weaponOverride = findScriptProperty(*akPickup, kItemScriptPath, "weapon");
+	TEST_ASSERT(weaponOverride != nullptr && weaponOverride->value == "ak47", "pickup says which weapon it is");
+
+	// The hierarchy resolves: the rig's hand ends up in front of the eye.
+	applyParentConstraints(fx.scene, fx.bus);
+	applyParentConstraints(fx.scene, fx.bus);
+	const SceneEntity* rigRoot = fx.find(result.rigName);
+	const SceneEntity* hand = fx.find(result.rigName + ".HandR");
+	TEST_ASSERT(hand->position.z > rigRoot->position.z + 0.2F, "right hand sits in front of the eye (+Z)");
+	// The game camera shows +X on screen-LEFT, so the right hand sits at -X.
+	TEST_ASSERT(hand->position.x < rigRoot->position.x, "right hand is on the screen's right (-X)");
+
+	// A second rig gets its own names.
+	const FpsRigBuildResult second = buildFpsPlayerRig(fx.scene, fx.bus, FpsRigOptions{});
+	TEST_ASSERT(second.success && second.rigName != result.rigName && second.playerName != result.playerName,
+		"second rig doesn't collide with the first");
+
+	for (const std::string& path : createdStubs)
+	{
+		std::filesystem::remove(path);
+	}
+}
+
+void testWeaponLuaApi()
+{
+	const std::string targetScript = "Game/Scripts/test_target_health.lua";
+	const std::string shooterScript = "Game/Scripts/test_shooter.lua";
+	writeTextFile(targetScript, R"(local H = {}
+function H:on_start() self.health = 100 self.stunned = 0 end
+function H:on_damage(amount, source) self.health = self.health - amount self.last_source = source end
+function H:on_stun(seconds) self.stunned = seconds end
+return H
+)");
+	writeTextFile(shooterScript, R"(local S = {}
+function S:on_start()
+	self.fired = 0
+	self.inventory_enabled = true
+end
+function S:on_update(dt)
+	if self.fired == 1 then return end
+	self.fired = 1
+	local point, distance, name = self.world:raycast({x = 0, y = 1, z = 0}, {x = 0, y = 0, z = 1}, 50)
+	self.hit_name = name or ""
+	self.hit_distance = distance or -1
+	if name then
+		self.damaged = self.world:damage(name, 30) and 1 or 0
+		self.world:stun(name, 2)
+	end
+	local near = self.world:findDamageable({x = 0, y = 1, z = 5}, 3)
+	self.damageable_count = #near
+	self.world:spawnBeam({x = 0, y = 1, z = 0}, point, {r = 1, g = 0, b = 0}, 0.5, 2, true)
+	self.world:spawnFlash(point, {r = 1, g = 1, b = 1}, 10, 0.2)
+	self.inventory:select(3)
+	local selected = self.inventory:getSelected()
+	self.selected_name = selected and selected.name or ""
+	self.selected_weapon = selected and selected.weapon or ""
+end
+return S
+)");
+
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"Shooter", PrimitiveType::Capsule, glm::vec3(0.0F, 0.0F, 0.0F)});
+	(void)fx.bus.execute(CreateEntityCommand{"Target", PrimitiveType::Cube, glm::vec3(0.0F, 1.0F, 5.0F)});
+	(void)fx.bus.execute(CreateEntityCommand{"Viewmodel Part", PrimitiveType::Cube, glm::vec3(0.0F, 1.0F, 2.0F)});
+	(void)fx.bus.execute(AddTagCommand{"Viewmodel Part", "Viewmodel"});
+	(void)fx.bus.execute(AttachScriptCommand{"Target", targetScript});
+	(void)fx.bus.execute(AttachScriptCommand{"Shooter", shooterScript});
+	ensureInventorySlots(fx.gameplay);
+	fx.gameplay.inventoryItems[2].itemName = "AK-47";
+	fx.gameplay.inventoryItems[2].weapon = "ak47";
+	fx.gameplay.inventoryItems[2].count = 1;
+	fx.start();
+
+	const int shooterId = fx.find("Shooter")->id;
+	const int targetId = fx.find("Target")->id;
+	fx.runtime.updateEntity(shooterId, 0.016F);
+
+	TEST_ASSERT(fx.runtime.getScriptStringField(shooterId, shooterScript, "hit_name", "") == "Target",
+		"raycast skips the Viewmodel-tagged part and the caller, hits the target");
+	TEST_ASSERT(std::abs(fx.runtime.getScriptNumberField(shooterId, shooterScript, "hit_distance", -1.0F) - 4.0F) < 0.01F,
+		"raycast distance is to the target's box face");
+	TEST_ASSERT(fx.runtime.getScriptNumberField(shooterId, shooterScript, "damaged", 0.0F) == 1.0F, "damage() reports handled");
+	TEST_ASSERT(std::abs(fx.runtime.getScriptNumberField(targetId, targetScript, "health", 0.0F) - 70.0F) < 0.001F,
+		"on_damage received the amount");
+	TEST_ASSERT(fx.runtime.getScriptStringField(targetId, targetScript, "last_source", "") == "Shooter",
+		"on_damage received the attacker's name");
+	TEST_ASSERT(std::abs(fx.runtime.getScriptNumberField(targetId, targetScript, "stunned", 0.0F) - 2.0F) < 0.001F,
+		"on_stun received the seconds");
+	TEST_ASSERT(fx.runtime.getScriptNumberField(shooterId, shooterScript, "damageable_count", 0.0F) == 1.0F,
+		"findDamageable finds the target");
+	TEST_ASSERT(fx.gameplay.beams.size() == 1 && fx.gameplay.beams[0].jagged, "spawnBeam queues a jagged beam");
+	TEST_ASSERT(fx.gameplay.flashes.size() == 1, "spawnFlash queues a flash");
+	TEST_ASSERT(fx.gameplay.selectedSlot == 2, "inventory:select is 1-based");
+	TEST_ASSERT(fx.runtime.getScriptStringField(shooterId, shooterScript, "selected_weapon", "") == "ak47",
+		"inventory:getSelected returns the slot's weapon");
+	TEST_ASSERT(entityProvidesInventory(*fx.find("Shooter"), fx.runtime), "inventory_enabled field is recognized");
+
+	// tickEffects clamps each step to 0.1s (like every gameplay tick).
+	tickEffects(fx.gameplay, true, 0.1F);
+	tickEffects(fx.gameplay, true, 0.1F);
+	tickEffects(fx.gameplay, true, 0.1F);
+	TEST_ASSERT(fx.gameplay.flashes.empty() && fx.gameplay.beams.size() == 1, "effects age out by their own lifetime");
+
+	fx.runtime.shutdown();
+	std::filesystem::remove(targetScript);
+	std::filesystem::remove(shooterScript);
+}
+
+void testScriptMessagingApi()
+{
+	const std::string a = "Game/Scripts/test_msg_a.lua";
+	const std::string b = "Game/Scripts/test_msg_b.lua";
+	writeTextFile(a, R"(-- @property logo image Game/Branding/x.png
+local A = {}
+function A:on_start() self.got = 0 end
+function A:on_update(dt)
+	local handled, value = self.entity:send("double_it", 21)
+	self.doubled = value or -1
+	local h2, v2 = self.world:send("Other", "ping", "hello")
+	self.pong = v2 or ""
+	local handledDamage, killed = self.world:damage("Other", 500, {crit = true, element = "fire"})
+	self.killed = killed and 1 or 0
+	self.world:spawnText({x = 0, y = 1, z = 0}, "+10 XP", {r = 1, g = 1, b = 1}, 1.0, 1.0)
+	self.world:setHudBar("mana", "Mana", 0.5, {r = 0, g = 0, b = 1}, 3)
+	self.world:showMessage("Hi", 2)
+	self.world:particle({x = 0, y = 0, z = 0}, {r = 1, g = 0, b = 0}, 0.1, 1)
+end
+return A
+-- @preset Test Kit | player
+)");
+	writeTextFile(b, R"(local B = {}
+function B:double_it(x) return x * 2 end
+function B:ping(text) return text .. " back" end
+function B:on_damage(amount, attacker, info)
+	self.last_element = info and info.element or ""
+	self.last_crit = (info and info.crit) and 1 or 0
+	return amount >= 100
+end
+return B
+)");
+	TEST_ASSERT(ScriptRuntime::cachedScriptPreset(a).name == "Test Kit" &&
+			ScriptRuntime::cachedScriptPreset(a).role == "player",
+		"@preset tag parsed");
+	TEST_ASSERT(ScriptRuntime::cachedScriptPreset(b).name.empty(), "no @preset = not part of a preset");
+	TEST_ASSERT(ScriptRuntime::parseScriptProperties(a).front().type == ScriptRuntime::ExposedScriptProperty::Type::Image,
+		"image property type parsed");
+
+	SceneFixture fx;
+	(void)fx.bus.execute(CreateEntityCommand{"Self"});
+	(void)fx.bus.execute(CreateEntityCommand{"Other"});
+	(void)fx.bus.execute(AttachScriptCommand{"Self", a});
+	(void)fx.bus.execute(AttachScriptCommand{"Self", b});
+	(void)fx.bus.execute(AttachScriptCommand{"Other", b});
+	fx.start();
+	const int selfId = fx.find("Self")->id;
+	const int otherId = fx.find("Other")->id;
+	fx.runtime.updateEntity(selfId, 0.016F);
+	TEST_ASSERT(fx.runtime.getScriptNumberField(selfId, a, "doubled", 0.0F) == 42.0F, "entity:send reaches sibling scripts");
+	TEST_ASSERT(fx.runtime.getScriptStringField(selfId, a, "pong", "") == "hello back", "world:send reaches other objects");
+	TEST_ASSERT(fx.runtime.getScriptNumberField(selfId, a, "killed", 0.0F) == 1.0F, "damage returns on_damage's result");
+	TEST_ASSERT(fx.runtime.getScriptStringField(otherId, b, "last_element", "") == "fire" &&
+			fx.runtime.getScriptNumberField(otherId, b, "last_crit", 0.0F) == 1.0F,
+		"damage passes its info table");
+	TEST_ASSERT(fx.gameplay.floatingTexts.size() == 1 && fx.gameplay.hudBars.size() == 1 &&
+			fx.gameplay.messageText == "Hi",
+		"spawnText / setHudBar / showMessage");
+	TEST_ASSERT(fx.gameplay.flashes.size() == 1 && fx.gameplay.flashes.front().particle, "particle queued");
+	tickEffects(fx.gameplay, true, 0.016F);
+	TEST_ASSERT(fx.gameplay.flashes.size() == 1, "a particle survives the frame it was made in");
+	tickEffects(fx.gameplay, true, 0.016F);
+	TEST_ASSERT(fx.gameplay.flashes.empty(), "a particle is gone the next frame");
+	fx.runtime.shutdown();
+	std::filesystem::remove(a);
+	std::filesystem::remove(b);
+}
+
+// ----------------------------------------------------------------------------
+// End-to-end: the REAL fps_player.lua / items.lua / health.lua / enemy_ai.lua
+// (from the source tree) driving a real demo arena for a few hundred frames
+// with simulated input - walking, picking up weapons, switching, firing,
+// melee. Catches Lua runtime errors the C++ build can't.
+// ----------------------------------------------------------------------------
+namespace
+{
+	class ScriptedInput final : public InputSource
+	{
+	public:
+		std::vector<std::string> keysDown;
+		std::vector<std::string> keysPressed;
+		bool leftMouse = false;
+		bool rightMouse = false;
+		float mouseDx = 0.0F;
+
+		[[nodiscard]] bool isKeyDown(const std::string& name) const override
+		{
+			return std::find(keysDown.begin(), keysDown.end(), name) != keysDown.end();
+		}
+		[[nodiscard]] bool isKeyPressed(const std::string& name) const override
+		{
+			return std::find(keysPressed.begin(), keysPressed.end(), name) != keysPressed.end();
+		}
+		[[nodiscard]] float getAxis(const std::string& positive, const std::string& negative) const override
+		{
+			return (isKeyDown(positive) ? 1.0F : 0.0F) - (isKeyDown(negative) ? 1.0F : 0.0F);
+		}
+		[[nodiscard]] float getMouseDeltaX() const override { return mouseDx; }
+		[[nodiscard]] float getMouseDeltaY() const override { return 0.0F; }
+		[[nodiscard]] bool isMouseButtonDown(const std::string& name) const override
+		{
+			return name == "Left" ? leftMouse : (name == "Right" ? rightMouse : false);
+		}
+		[[nodiscard]] float getScrollDelta() const override { return 0.0F; }
+	};
+}
+
+void testFpsPlayerEndToEnd()
+{
+#ifndef GAMEFORGER_SOURCE_DIR
+	std::cout << "  (skipped: GAMEFORGER_SOURCE_DIR not defined)\n";
+	return;
+#else
+	const std::filesystem::path sourceScripts = std::filesystem::path(GAMEFORGER_SOURCE_DIR) / "Game" / "Scripts";
+	const std::filesystem::path projectRoot = "fps_e2e_project";
+	std::filesystem::remove_all(projectRoot);
+	std::filesystem::create_directories(projectRoot / "Game" / "Scripts");
+	for (const char* name : {"fps_player.lua", "items.lua", "health.lua", "enemy_ai.lua", "projectiles.lua",
+			 "effects.lua", "xp_system.lua", "game_manager.lua"})
+	{
+		std::error_code copyError;
+		std::filesystem::copy_file(sourceScripts / name, projectRoot / "Game" / "Scripts" / name,
+			std::filesystem::copy_options::overwrite_existing, copyError);
+		TEST_ASSERT(!copyError, std::string("copy real script ") + name);
+	}
+
+	EditorScene scene(projectRoot);
+	AICommandBus bus;
+	bus.setHandler([&scene](const AIEditorCommand& cmd) { return scene.execute(cmd); });
+	FpsRigOptions options;
+	options.includeDemoContent = true;
+	options.includeGround = true;
+	const FpsRigBuildResult rig = buildFpsPlayerRig(scene, bus, options);
+	TEST_ASSERT(rig.success, "demo arena builds with the real scripts attached: " + rig.message);
+
+	// A tiny driver the test pokes through a field: grant XP / hurt the player.
+	writeTextFile(projectRoot / "Game" / "Scripts" / "test_driver.lua", R"(local D = {}
+function D:on_start() self.cmd = "" end
+function D:on_update(dt)
+	if self.cmd == "xp" then
+		self.entity:send("on_weapon_hit", "gun", 5000, true, false, self.entity:getPosition())
+	elseif self.cmd == "hurt" then
+		self.world:damage(self.entity:getName(), 40)
+	end
+	self.cmd = ""
+end
+return D
+)");
+	TEST_ASSERT(bus.execute(AttachScriptCommand{rig.playerName, "Game/Scripts/test_driver.lua"}).success, "attach driver");
+	std::vector<std::string> chasers;
+	for (const SceneEntity& entity : scene.entities())
+	{
+		if (entity.name.rfind("Chaser", 0) == 0)
+		{
+			chasers.push_back(entity.name);
+		}
+	}
+	TEST_ASSERT(chasers.size() == 2, "demo arena has two chasers");
+	for (const std::string& chaser : chasers)
+	{
+		(void)bus.execute(SetPropertyCommand{chaser, "Entity", "active", false});
+	}
+	const SceneEntity* managerEntity = nullptr;
+	for (const SceneEntity& entity : scene.entities())
+	{
+		if (hasScript(entity, "Game/Scripts/game_manager.lua"))
+		{
+			managerEntity = &entity;
+		}
+	}
+	TEST_ASSERT(managerEntity != nullptr, "demo arena has a Game Manager");
+	TEST_ASSERT(ScriptRuntime::scriptPropertyText(*managerEntity, "Game/Scripts/game_manager.lua", "splash_logo", projectRoot) ==
+			"Game/Branding/logo.jpg",
+		"Game Manager's splash logo readable without running scripts");
+
+	ScriptedInput input;
+	ScriptRuntime runtime;
+	GameplayState gameplay;
+	ensureInventorySlots(gameplay);
+	std::vector<std::string> errors;
+	runtime.initialize(
+		scene, bus, input,
+		[&errors](const bool isError, const std::string& message)
+		{
+			if (isError)
+			{
+				errors.push_back(message);
+			}
+		},
+		nullptr, nullptr, nullptr, nullptr, nullptr);
+	runtime.setGameplayState(&gameplay);
+	for (const SceneEntity& entity : scene.entities())
+	{
+		for (const std::string& script : entity.scripts)
+		{
+			TEST_ASSERT(runtime.startScript(entity.id, script, projectRoot), "start " + script + " on " + entity.name);
+		}
+	}
+	TEST_ASSERT(errors.empty(), "no errors starting scripts: " + (errors.empty() ? std::string() : errors.front()));
+
+	const int playerId = scene.findEntity(rig.playerName)->id;
+	const std::string playerScript = "Game/Scripts/fps_player.lua";
+	std::size_t mostBeams = 0;
+	const auto frames = [&](const int count)
+	{
+		for (int frame = 0; frame < count; ++frame)
+		{
+			gameplay.lookPitchDegrees = 0.0F;
+			applyParentConstraints(scene, bus);
+			tickScripts(scene, runtime, true, 1.0F / 60.0F);
+			applyParentConstraints(scene, bus);
+			tickProjectiles(scene, bus, gameplay, true, 1.0F / 60.0F);
+			mostBeams = std::max(mostBeams, gameplay.beams.size());
+			tickEffects(gameplay, true, 1.0F / 60.0F);
+			input.keysPressed.clear();
+		}
+	};
+
+	// Walk forward a little, look around.
+	input.keysDown = {"W"};
+	input.mouseDx = 3.0F;
+	frames(30);
+	input.keysDown.clear();
+	input.mouseDx = 0.0F;
+	TEST_ASSERT(errors.empty(), "no errors while walking: " + (errors.empty() ? std::string() : errors.front()));
+	TEST_ASSERT(runtime.hasActiveCamera() && runtime.activeCameraEntityId() == playerId, "player claimed the camera");
+	TEST_ASSERT(runtime.getScriptStringField(playerId, playerScript, "hud_text", "").rfind("Fists", 0) == 0,
+		"starts with fists");
+	const auto hasHudBar = [&gameplay](const std::string& id)
+	{
+		return std::any_of(gameplay.hudBars.begin(), gameplay.hudBars.end(), [&id](const auto& bar) { return bar.id == id; });
+	};
+	TEST_ASSERT(hasHudBar("health") && hasHudBar("xp"), "player health and XP bars are on the HUD");
+
+	// Pick up every weapon pickup (as the E key would).
+	for (const std::string& weaponName : {"Sword", "Axe", "War Hammer", "Pickaxe", "Pistol", "AK-47", "Taser", "Storm Caster"})
+	{
+		const SceneEntity* pickup = scene.findEntity(weaponName + " Pickup");
+		TEST_ASSERT(pickup != nullptr, "pickup exists: " + weaponName);
+		TEST_ASSERT(pickUpItem(scene, bus, gameplay, runtime, *pickup), "pick up " + weaponName);
+	}
+	TEST_ASSERT(gameplay.inventoryItems[5].weapon == "ak47", "AK-47 went into hotbar slot 6");
+
+	// Punch, then each weapon in turn: select its hotbar key, fire/swing.
+	input.leftMouse = true;
+	frames(20);
+	input.leftMouse = false;
+	frames(10);
+	for (int slot = 1; slot <= 8; ++slot)
+	{
+		input.keysPressed = {std::to_string(slot)};
+		frames(30); // equip animation
+		input.leftMouse = true;
+		frames(45);
+		input.leftMouse = false;
+		frames(20);
+		TEST_ASSERT(errors.empty(),
+			"no script errors using slot " + std::to_string(slot) + ": " + (errors.empty() ? std::string() : errors.front()));
+		const std::string& expected = gameplay.inventoryItems[static_cast<std::size_t>(slot - 1)].weapon;
+		const SceneEntity* weaponNode = scene.findEntity(rig.rigName + ".W." + expected);
+		TEST_ASSERT(weaponNode != nullptr && weaponNode->active, "equipped weapon model is shown: " + expected);
+	}
+	TEST_ASSERT(mostBeams > 0, "guns/taser/lightning produced beams");
+
+	// Reload the AK and aim down sights.
+	input.keysPressed = {"6"};
+	frames(30);
+	input.keysPressed = {"R"};
+	frames(5);
+	TEST_ASSERT(runtime.getScriptStringField(playerId, playerScript, "hud_text", "").find("RELOADING") != std::string::npos,
+		"R starts a reload");
+	frames(150);
+	{
+		// "AK-47  Lv N   <ammo> / <max>" - full after the reload (max grows with weapon level).
+		const std::string hud = runtime.getScriptStringField(playerId, playerScript, "hud_text", "");
+		const std::size_t slash = hud.find(" / ");
+		TEST_ASSERT(slash != std::string::npos, "AK hud shows ammo: " + hud);
+		const std::size_t ammoStart = hud.rfind(' ', slash - 1) + 1;
+		const int ammo = std::stoi(hud.substr(ammoStart, slash - ammoStart));
+		const int maxAmmo = std::stoi(hud.substr(slash + 3));
+		TEST_ASSERT(ammo == maxAmmo && maxAmmo >= 30, "reload refills the magazine: " + hud);
+	}
+	input.rightMouse = true;
+	frames(30);
+	TEST_ASSERT(runtime.getScriptNumberField(playerId, playerScript, "ads", 0.0F) > 0.9F, "right mouse aims down sights");
+	input.rightMouse = false;
+
+	// Melee a dummy: stand in front of it with the sword.
+	const SceneEntity* dummy = nullptr;
+	for (const SceneEntity& entity : scene.entities())
+	{
+		if (entity.name.rfind("Training Dummy", 0) == 0)
+		{
+			dummy = &entity;
+			break;
+		}
+	}
+	TEST_ASSERT(dummy != nullptr, "a training dummy exists");
+	const std::string dummyName = dummy->name;
+	const glm::vec3 dummyPosition = dummy->position;
+	(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "position",
+		glm::vec3(dummyPosition.x, 0.0F, dummyPosition.z - 1.6F)});
+	(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "rotation", glm::vec3(0.0F)});
+	input.keysPressed = {"1"};
+	frames(30);
+	const float healthBefore = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/health.lua", "health", -1.0F);
+	input.leftMouse = true;
+	frames(40);
+	input.leftMouse = false;
+	frames(10);
+	const float healthAfter = runtime.getScriptNumberField(scene.findEntity(dummyName)->id, "Game/Scripts/health.lua", "health", -1.0F);
+	TEST_ASSERT(healthBefore > 0.0F && healthAfter < healthBefore, "the sword damages the dummy in front of you");
+
+	const std::string driver = "Game/Scripts/test_driver.lua";
+	const std::string health = "Game/Scripts/health.lua";
+	const std::string xpScript = "Game/Scripts/xp_system.lua";
+	const auto slotOf = [&gameplay](const std::string& weapon)
+	{
+		for (int index = 0; index < static_cast<int>(gameplay.inventoryItems.size()); ++index)
+		{
+			if (gameplay.inventoryItems[static_cast<std::size_t>(index)].weapon == weapon)
+			{
+				return index;
+			}
+		}
+		return -1;
+	};
+
+	// XP: a big batch of XP levels the player up and unlocks every caster.
+	TEST_ASSERT(slotOf("fire") < 0, "Fire Caster starts locked");
+	runtime.setScriptStringField(playerId, driver, "cmd", "xp");
+	frames(3);
+	TEST_ASSERT(runtime.getScriptNumberField(playerId, xpScript, "level", 0.0F) >= 4.0F, "XP levels the player up");
+	TEST_ASSERT(slotOf("fire") >= 0 && slotOf("frost") >= 0 && slotOf("heal") >= 0,
+		"level-ups unlock the Fire, Frost and Life Casters into the inventory");
+
+	const auto aimAt = [&](const std::string& targetName, const float distance)
+	{
+		const glm::vec3 target = scene.findEntity(targetName)->position;
+		(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "position",
+			glm::vec3(target.x, 0.0F, target.z - distance)});
+		(void)bus.execute(SetPropertyCommand{rig.playerName, "Transform", "rotation", glm::vec3(0.0F)});
+	};
+	const auto castOnce = [&](const std::string& weapon)
+	{
+		gameplay.selectedSlot = slotOf(weapon);
+		frames(30); // equip
+		input.leftMouse = true;
+		frames(2);
+		input.leftMouse = false;
+	};
+
+	// Fire Caster: the fireball flies, explodes, sets the dummy on fire.
+	std::string otherDummy;
+	for (const SceneEntity& entity : scene.entities())
+	{
+		if (entity.name.rfind("Training Dummy", 0) == 0 && entity.name != dummyName)
+		{
+			otherDummy = entity.name;
+		}
+	}
+	TEST_ASSERT(!otherDummy.empty(), "a second dummy exists");
+	aimAt(otherDummy, 7.0F);
+	const int otherDummyId = scene.findEntity(otherDummy)->id;
+	const float fireBefore = runtime.getScriptNumberField(otherDummyId, health, "health", -1.0F);
+	std::size_t mostParticles = 0;
+	bool sawBurning = false;
+	castOnce("fire");
+	for (int frame = 0; frame < 60; ++frame)
+	{
+		frames(1);
+		mostParticles = std::max<std::size_t>(mostParticles, static_cast<std::size_t>(std::count_if(gameplay.flashes.begin(),
+			gameplay.flashes.end(), [](const auto& flash) { return flash.particle; })));
+		sawBurning = sawBurning || runtime.getScriptNumberField(otherDummyId, health, "burning", 0.0F) > 0.5F;
+	}
+	TEST_ASSERT(runtime.getScriptNumberField(otherDummyId, health, "health", -1.0F) < fireBefore,
+		"the fireball damages the dummy");
+	TEST_ASSERT(sawBurning, "the fireball sets the dummy on fire");
+	TEST_ASSERT(mostParticles > 20, "effects.lua draws particles for the explosion");
+	TEST_ASSERT(!gameplay.floatingTexts.empty() || mostParticles > 0, "damage numbers / effects appear");
+
+	// Frost Caster: the ice shard freezes what it hits.
+	aimAt(dummyName, 6.0F);
+	const int dummyId = scene.findEntity(dummyName)->id;
+	bool sawFrozen = false;
+	castOnce("frost");
+	for (int frame = 0; frame < 45 && !sawFrozen; ++frame)
+	{
+		frames(1);
+		sawFrozen = runtime.getScriptNumberField(dummyId, health, "frozen", 0.0F) > 0.5F;
+	}
+	TEST_ASSERT(sawFrozen, "the frost shard freezes the dummy");
+
+	// Life Caster heals the player.
+	runtime.setScriptStringField(playerId, driver, "cmd", "hurt");
+	frames(2);
+	const float hurtHealth = runtime.getScriptNumberField(playerId, health, "health", -1.0F);
+	TEST_ASSERT(hurtHealth > 0.0F && hurtHealth <= 60.5F, "the player can be hurt");
+	castOnce("heal");
+	frames(5);
+	TEST_ASSERT(runtime.getScriptNumberField(playerId, health, "health", -1.0F) > hurtHealth, "the Life Caster heals you");
+
+	// Chasers hit back.
+	const float beforeChaser = runtime.getScriptNumberField(playerId, health, "health", -1.0F);
+	const glm::vec3 playerFeet = scene.findEntity(rig.playerName)->position;
+	(void)bus.execute(SetPropertyCommand{chasers.front(), "Transform", "position", playerFeet + glm::vec3(1.0F, 0.95F, 1.0F)});
+	(void)bus.execute(SetPropertyCommand{chasers.front(), "Entity", "active", true});
+	frames(120);
+	TEST_ASSERT(runtime.getScriptNumberField(playerId, health, "health", -1.0F) < beforeChaser, "the chaser damages the player");
+
+	// Third person hides the hands rig.
+	input.keysPressed = {"C"};
+	frames(2);
+	TEST_ASSERT(!scene.findEntity(rig.rigName)->active, "third-person hides the first-person rig");
+
+	TEST_ASSERT(errors.empty(), "no script errors at all: " + (errors.empty() ? std::string() : errors.front()));
+	runtime.shutdown();
+	std::filesystem::remove_all(projectRoot);
+#endif
+}
+
+// ----------------------------------------------------------------------------
 // Main
 // ----------------------------------------------------------------------------
 int main()
@@ -524,6 +1362,16 @@ int main()
 	RUN_TEST(testAssetDatabase);
 	RUN_TEST(testMaterialSerialization);
 	RUN_TEST(testScriptPropertyReflection);
+	RUN_TEST(testScriptPropertyOverrides);
+	RUN_TEST(testScriptPropertySerialization);
+	RUN_TEST(testRenameKeepsChildrenAttached);
+	RUN_TEST(testActiveInHierarchy);
+	RUN_TEST(testInventorySlotsAndStacking);
+	RUN_TEST(testItemPickupHideAndDrop);
+	RUN_TEST(testFpsRigBuilder);
+	RUN_TEST(testWeaponLuaApi);
+	RUN_TEST(testScriptMessagingApi);
+	RUN_TEST(testFpsPlayerEndToEnd);
 
 	std::cout << "====================================================\n";
 	std::cout << " Tests Passed: " << g_testsPassed << " | Tests Failed: " << g_testsFailed << "\n";

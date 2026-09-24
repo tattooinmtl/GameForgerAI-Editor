@@ -99,6 +99,23 @@ namespace gameforger::editor
 		return result;
 	}
 
+	LoadedTexture loadTextureImageTopDown(const std::filesystem::path& filePath)
+	{
+		LoadedTexture image = loadTextureImage(filePath);
+		if (!image.success)
+		{
+			return image;
+		}
+		const std::size_t rowBytes = static_cast<std::size_t>(image.width) * 4;
+		for (int top = 0, bottom = image.height - 1; top < bottom; ++top, --bottom)
+		{
+			std::swap_ranges(image.rgba.begin() + static_cast<std::ptrdiff_t>(top * rowBytes),
+				image.rgba.begin() + static_cast<std::ptrdiff_t>((top + 1) * rowBytes),
+				image.rgba.begin() + static_cast<std::ptrdiff_t>(bottom * rowBytes));
+		}
+		return image;
+	}
+
 	LoadedTexture generateNormalMapFromDiffuse(const LoadedTexture& sourceDiffuse, const float strength)
 	{
 		if (!sourceDiffuse.success)

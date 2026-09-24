@@ -29,6 +29,12 @@ function EnemyAI:on_start()
     self.wander_speed = 2.0
     self.chase_speed = 3.5
     self.gravity = -18.0
+    -- Melee attack once close enough (hurts anything with health.lua,
+    -- e.g. the FPS Opus player).
+    self.attack_range = 1.5
+    self.attack_damage = 8
+    self.attack_cooldown = 1.2
+    self.attack_timer = 0.0
 
     local position = self.entity:getPosition()
     self.spawn_x = position.x
@@ -53,11 +59,27 @@ function EnemyAI:pick_new_wander_target()
     self.wander_wait_remaining = 1.0 + math.random() * 2.0
 end
 
+-- Called by self.world:stun(name, seconds) - e.g. fps_player.lua's taser
+-- and chain lightning. Stops chasing/wandering (gravity still applies).
+function EnemyAI:on_stun(seconds, attacker_name)
+    self.stunned_time = math.max(self.stunned_time or 0.0, seconds)
+end
+
 function EnemyAI:on_update(delta_time)
     local position = self.entity:getPosition()
-    local target_position, target_distance = self.world:findNearestWithTag(self.target_tag)
+    local stunned = (self.stunned_time or 0.0) > 0.0
+    if stunned then
+        self.stunned_time = self.stunned_time - delta_time
+    end
+    local target_position, target_distance, target_name = self.world:findNearestWithTag(self.target_tag)
+    self.attack_timer = math.max(0.0, self.attack_timer - delta_time)
 
     local move_x, move_z, speed = 0.0, 0.0, 0.0
+    if stunned then
+        target_position = nil
+        self.state = "wander"
+        self.wander_wait_remaining = math.max(self.wander_wait_remaining, 0.5)
+    end
 
     if self.state == "wander" then
         self.detected = 0
@@ -65,7 +87,9 @@ function EnemyAI:on_update(delta_time)
             self.state = "chase"
         else
             local to_target_dist = distance_xz(position.x, position.z, self.wander_target_x, self.wander_target_z)
-            if to_target_dist < 0.3 then
+            if stunned then
+                -- frozen in place
+            elseif to_target_dist < 0.3 then
                 if self.wander_wait_remaining > 0.0 then
                     self.wander_wait_remaining = self.wander_wait_remaining - delta_time
                 else
@@ -92,6 +116,17 @@ function EnemyAI:on_update(delta_time)
                 move_z = (target_position.z - position.z) / to_target_dist
             end
             speed = self.chase_speed
+            if to_target_dist <= self.attack_range and target_name ~= nil and self.attack_timer <= 0.0 then
+                self.attack_timer = self.attack_cooldown
+                local handled = self.world:damage(target_name, self.attack_damage, {element = "physical"})
+                if handled then
+                    self.world:spawnFlash({x = target_position.x, y = target_position.y + 1.2, z = target_position.z},
+                        {r = 1.0, g = 0.2, b = 0.15}, 22, 0.15)
+                end
+            end
+            if to_target_dist <= self.attack_range * 0.8 then
+                speed = 0.0 -- close enough, stop pushing into the target
+            end
         end
     end
 

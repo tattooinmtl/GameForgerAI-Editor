@@ -54,6 +54,25 @@
 
 ---
 
+## 1d. Session Log: 2026-09-23 (FPS Opus preset: magic, XP, runtime showcase - Alpha 0.81)
+
+### Claude - completed & verified this session
+* **New scripts:** `projectiles.lua`, `effects.lua`, `xp_system.lua`, `game_manager.lua`; `fps_player.lua` (Fire/Frost/Life Casters, XP bonuses, crits, charges), `health.lua` (heal, burn/frost, damage numbers, player mode/respawn), `enemy_ai.lua` (melee attack), `items.lua` (new weapon ids). Every preset script ends with `-- @preset FPS Opus | <role>`.
+* **Engine:** `GameplayHud.{hpp,cpp}` (shared HUD layout over an abstract canvas), messaging/combat/HUD Lua API in `ScriptRuntime.cpp`, `@preset` + `image` property parsing, `scriptPropertyText`, `loadTextureImageTopDown`, one-frame particles, 3 casters + Game Manager + demo changes in `FpsRigBuilder.cpp`.
+* **Runtime:** `RuntimeHud.{hpp,cpp}` (GL implementation of the HUD canvas + font fallback), Game Manager splash/title, save-to-startup-scene matching (`Game/Saves/save.meta.json`), inventory panel.
+* **Editor:** preset grouping + "Link all" checkbox, FPS Opus group in Add Script, `image` property UI (Change Image...), GameObject > Game Manager, Game view uses the shared HUD.
+* **Fixed:** splash screens and 2D icons upside down (global `stbi_set_flip_vertically_on_load` vs. old UV assumptions).
+* **Verified:** Debug build of all targets, zero new warnings on changed lines; `GameForgerTests` 19/19 incl. end-to-end on the real scripts; runtime screenshots (splash, fire, frost, lightning) via a scratch copy of the project.
+
+## 1c. Session Log: 2026-09-23 (Opus 5.5 audit + FPS player / weapons / items)
+
+### Claude - completed & verified this session (Alpha 0.80)
+* **Audit:** `opus5.5Audit.md` (repo root) - whole-app audit plus a phase-by-phase UI regrouping plan, not started yet (waiting on the user's go-ahead per phase).
+* **FPS player + weapons + items (user request):** `Game/Scripts/fps_player.lua`, `items.lua`, `health.lua`; `Engine/src/Editor/FpsRigBuilder.cpp` (hands + 8 weapons rig, demo arena); inventory/pickup/effects moved into `GameplayLoop.cpp` (shared with Runtime); new Lua API in `ScriptRuntime.cpp`; per-object script properties (`SceneEntity::scriptProperties`, serialized); `icon`/`enum` property types with an Inspector icon picker ("Change Icon..."); hotbar/beam/flash/health-bar HUD and a new inventory grid in the Editor Game view.
+* **Fixed along the way:** audit B3 (rename orphans children), B8 (script property edits discarded outside Play), B9 (Viewport picks hidden objects); ImGuizmo `GIT_SHALLOW` + commit-hash clone failure on fresh configures.
+* **Found, not changed (needs the user's call):** `self.entity:getRight()` returns screen-LEFT (the game camera shows +X on the left when looking down +Z), so D strafes left in `fps_controller.lua`/`third_person_controller.lua`. `fps_player.lua` computes its own correct right vector.
+* **Verified:** Debug build of Engine/Editor/Runtime/Tests clean with zero new warnings on changed lines; `GameForgerTests` 18/18 (9 new, incl. an end-to-end run of the real scripts through walking, pickups, all 8 weapons, reload, ADS, melee damage); runtime screenshots of the viewmodel for AK-47, pistol, sword, axe, war hammer, Storm Caster.
+
 ## 1b. Session Log: 2026-08-21 (Master Roadmap Consolidation)
 
 **What happened:** the user asked for a single new master roadmap consolidating everything left to build — all phases, from the current gauntlet-audit work through Beta 1.0 — with tasks split between Claude and Gemini, verification delegated to fresh subagents on both sides, and nothing lost from any older planning document (several of which had accumulated real, never-promoted findings). Also asked that old plans become references rather than being deleted, renamed instead with a version suffix, and that a `docs/phases/` progress-log folder be set up for ongoing work.

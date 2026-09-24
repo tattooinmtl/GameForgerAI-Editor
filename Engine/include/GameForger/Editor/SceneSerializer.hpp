@@ -21,6 +21,10 @@ namespace gameforger::editor
 		std::vector<SceneEntity> entities; // valid only when success is true
 	};
 
+	// The exact JSON text saveScene() writes. The editor compares it with the
+	// text of the last save/load to know whether the scene has unsaved changes.
+	[[nodiscard]] std::string serializeScene(const std::vector<SceneEntity>& entities);
+
 	// Writes every entity's full state (transform, tag, color, pivot, camera
 	// rig, attached script paths, animation keyframes) to `filePath` as JSON.
 	[[nodiscard]] SceneSaveResult saveScene(

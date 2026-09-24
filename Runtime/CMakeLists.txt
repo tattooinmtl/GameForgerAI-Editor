@@ -6,6 +6,7 @@
     # would ever use it - same reasoning as keeping findPickupCandidate
     # local to main.cpp.
     src/GameMenu.cpp
+    src/RuntimeHud.cpp
 )
 
 if(WIN32)

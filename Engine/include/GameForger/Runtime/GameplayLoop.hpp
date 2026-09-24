@@ -10,6 +10,7 @@
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/ScriptRuntime.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
 
 namespace gameforger::editor
 {
@@ -31,21 +32,111 @@ namespace gameforger::editor
 
 		bool cursorCurrentlyLocked = false;
 
-		// One entry per distinct item name, with a count rather than one
-		// entry per pickup - see the Editor's original PlayModeState
-		// comment (now here) for why.
+		// Degrees - the player's current mouse-look, copied in by the host
+		// (Editor Game view / Runtime main loop) every frame before scripts
+		// tick, so scripts can read where the camera actually points
+		// (self.camera:getPitch()/getAim()) - e.g. to tilt first-person
+		// hands with the view or aim a hitscan weapon.
+		float lookPitchDegrees = 0.0F;
+		float lookYawDegrees = 0.0F;
+
+		// One inventory slot. Slots are fixed (kInventorySlotCount of them,
+		// see ensureInventorySlots) so the grid can show empty slots and
+		// keep an item where the player dragged it; count == 0 = empty.
+		// A slot stacks several of the same item (same itemName) when the
+		// item allows stacking.
 		struct InventoryItem
 		{
 			std::string itemName;
 			std::string iconPath;
 			int count = 0;
+			// Legacy "Is Pickup Item" pickups are deleted on pickup and
+			// re-spawned as a cube on drop, so their look is captured here.
 			glm::vec3 scale{1.0F};
 			glm::vec3 color{0.8F};
 			glm::vec3 materialBlendWeight{0.0F};
 			std::array<TerrainLayerData, 3> materialLayers;
 			glm::vec2 materialUvScale{2.0F, 2.0F};
+			// items.lua pickups (see kItemScriptPath) - the real object is
+			// kept, just hidden (active = false) while it's in the bag, and
+			// shown again in front of the player on drop, so its mesh,
+			// children, material and scripts all survive the round trip.
+			std::string itemType;  // items.lua item_type, e.g. "weapon", "consumable", "misc"
+			std::string weapon;    // items.lua weapon, e.g. "sword" - empty for non-weapons
+			bool stackable = true;
+			int maxStack = 99;
+			std::vector<std::string> storedEntityNames;
+
+			[[nodiscard]] bool empty() const noexcept { return count <= 0; }
 		};
 		std::vector<InventoryItem> inventoryItems;
+		// 0-based index into inventoryItems of the equipped/selected slot.
+		// Slots 0..kHotbarSlotCount-1 are the hotbar (keys 1-8).
+		int selectedSlot = 0;
+		// True while the host shows the inventory grid (I) - the mouse
+		// belongs to the UI then (self.inventory:isOpen()).
+		bool inventoryOpen = false;
+
+		// Short-lived visual effects spawned by scripts (self.world:
+		// spawnBeam/spawnFlash) - tracers, taser arcs, chain lightning,
+		// muzzle flashes, impact sparks. Pure visuals: drawn by the host
+		// as a screen-space overlay, no collision. Aged by tickEffects.
+		struct Beam
+		{
+			glm::vec3 from{0.0F};
+			glm::vec3 to{0.0F};
+			glm::vec3 color{1.0F};
+			float width = 2.0F;
+			float remainingSeconds = 0.1F;
+			float totalSeconds = 0.1F;
+			// Zig-zag lightning look instead of a straight line; re-rolled
+			// every frame from `seed` + time so it crackles.
+			bool jagged = false;
+			unsigned int seed = 0;
+		};
+		std::vector<Beam> beams;
+		struct Flash
+		{
+			glm::vec3 position{0.0F};
+			glm::vec3 color{1.0F};
+			float size = 12.0F; // pixels at full strength
+			float remainingSeconds = 0.08F;
+			float totalSeconds = 0.08F;
+			// A particle (self.world:particle) lives exactly one frame at a
+			// fixed `intensity` - scripts that simulate their own particles
+			// (effects.lua) re-emit them every frame.
+			bool particle = false;
+			int framesLeft = 0;
+			float intensity = 1.0F;
+		};
+		std::vector<Flash> flashes;
+		// Rising, fading world-space text (damage numbers, "+25 XP",
+		// "LEVEL UP") - self.world:spawnText.
+		struct FloatingText
+		{
+			glm::vec3 position{0.0F};
+			std::string text;
+			glm::vec3 color{1.0F};
+			float scale = 1.0F;
+			float remainingSeconds = 1.0F;
+			float totalSeconds = 1.0F;
+		};
+		std::vector<FloatingText> floatingTexts;
+		// Screen bars stacked in the bottom-left corner (player health, XP,
+		// mana...) - self.world:setHudBar(id, ...). Sorted by `order`.
+		struct HudBar
+		{
+			std::string id;
+			std::string label;
+			float fraction = 1.0F;
+			glm::vec3 color{1.0F};
+			int order = 0;
+		};
+		std::vector<HudBar> hudBars;
+		// One centered message line ("Picked up Sword", "LEVEL 3 - Fire
+		// Caster unlocked!") - self.world:showMessage / pickups.
+		std::string messageText;
+		float messageSecondsRemaining = 0.0F;
 
 		// Engine-managed projectiles, spawned via a script's self.world:
 		// fireProjectile(...) - see ScriptRuntime::ProjectileSpawnCallback -
@@ -123,4 +214,54 @@ namespace gameforger::editor
 	void tickProjectiles(
 		const EditorScene& scene, AICommandBus& commandBus, GameplayState& gameplay, bool isPlaying,
 		float deltaTime);
+
+	// Ages/despawns GameplayState::beams/flashes. No-op unless isPlaying.
+	void tickEffects(GameplayState& gameplay, bool isPlaying, float deltaTime);
+
+	// ---- Inventory (shared by the Editor's Play mode and Runtime) ----
+
+	// Any object with this script attached can be picked up with E and
+	// stored in the inventory - its item name/icon/type/weapon come from
+	// the script's own @property values (per object, see
+	// SceneEntity::scriptProperties).
+	inline constexpr const char* kItemScriptPath = fpsdemo::kItems;
+	inline constexpr int kInventorySlotCount = 24;
+	inline constexpr int kHotbarSlotCount = 8;
+
+	// Pads/trims inventoryItems to exactly kInventorySlotCount slots and
+	// keeps selectedSlot in range. Call when Play starts.
+	void ensureInventorySlots(GameplayState& gameplay);
+
+	// Stacks onto an existing slot with the same itemName (when both allow
+	// stacking and the stack isn't full), otherwise fills the first empty
+	// slot. Returns the slot index used, or -1 if the bag is full.
+	int addInventoryItem(GameplayState& gameplay, GameplayState::InventoryItem item);
+
+	// True if `entity` has an inventory-providing script: the legacy
+	// inventory_system.lua, or any running script that sets the field
+	// `inventory_enabled = true` (e.g. fps_player.lua).
+	[[nodiscard]] bool entityProvidesInventory(const SceneEntity& entity, const ScriptRuntime& scriptRuntime);
+
+	// Nearest pickable object (legacy "Is Pickup Item" or an items.lua
+	// object) that is active in the hierarchy, within horizontalRange (X/Z)
+	// and heightTolerance (Y) of `origin`, excluding `excludeId` - or null.
+	[[nodiscard]] const SceneEntity* findPickupItemCandidate(
+		const EditorScene& scene, const glm::vec3& origin, float horizontalRange, float heightTolerance,
+		int excludeId);
+
+	// Display name for the "[E] Pick up X" hint.
+	[[nodiscard]] std::string pickupDisplayName(const SceneEntity& entity, const ScriptRuntime& scriptRuntime);
+
+	// Moves `candidate` into the inventory. Legacy pickups are deleted (their
+	// look captured for re-spawn); items.lua objects are hidden and kept.
+	// Returns false (nothing changes) if the bag is full.
+	bool pickUpItem(
+		EditorScene& scene, AICommandBus& commandBus, GameplayState& gameplay, const ScriptRuntime& scriptRuntime,
+		const SceneEntity& candidate);
+
+	// Takes one item out of `slotIndex` and puts it back into the world at
+	// `dropPosition` facing `yawDegrees`. Returns false if the slot is empty.
+	bool dropInventoryItem(
+		EditorScene& scene, AICommandBus& commandBus, GameplayState& gameplay, int slotIndex,
+		const glm::vec3& dropPosition, float yawDegrees);
 }

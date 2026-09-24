@@ -1,8 +1,12 @@
 #include "GameForger/Editor/ScriptRuntime.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
+#include <limits>
+#include <unordered_map>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -12,6 +16,9 @@
 
 #include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/Terrain.hpp"
+#include "GameForger/Editor/Transform.hpp"
+#include "GameForger/Runtime/GameCamera.hpp"
+#include "GameForger/Runtime/GameplayLoop.hpp"
 
 extern "C"
 {
@@ -171,6 +178,17 @@ namespace gameforger::editor
 			return 1;
 		}
 
+		// The pivot offset in the object's own [-1,1] box (0,0,0 = center,
+		// 0,-1,0 = bottom) - with getPosition/getScale/getRotation a script
+		// can work out the object's real box (climbable.lua does).
+		int luaEntityGetPivot(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			pushVec3(L, entity != nullptr ? entity->pivotOffset : glm::vec3(0.0F));
+			return 1;
+		}
+
 		int luaEntityGetForward(lua_State* L)
 		{
 			ScriptRuntime* runtime = runtimeFrom(L);
@@ -185,11 +203,928 @@ namespace gameforger::editor
 			ScriptRuntime* runtime = runtimeFrom(L);
 			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
 			const float yawRadians = glm::radians(entity != nullptr ? entity->rotationEuler.y : 0.0F);
-			// Y up, Z forward (right-handed): right = +X = cross(+Y, forward).
-			// The previous cross(forward, +Y) returned -X, so D pressed while
-			// facing +Z strafed the player in the wrong direction.
+			// Screen-right for a camera looking along `forward`. The game camera
+			// is glm::lookAt (right-handed), whose right axis is
+			// cross(forward, up) - i.e. -X when looking down +Z (+X shows on
+			// screen-LEFT). The 2026-08-13 "fix" (audit H-Script-1) switched this
+			// to cross(up, forward) = +X on paper, which made D strafe left.
 			const glm::vec3 forward(std::sin(yawRadians), 0.0F, std::cos(yawRadians));
-			pushVec3(L, glm::normalize(glm::cross(glm::vec3(0.0F, 1.0F, 0.0F), forward)));
+			pushVec3(L, glm::normalize(glm::cross(forward, glm::vec3(0.0F, 1.0F, 0.0F))));
+			return 1;
+		}
+
+		// ---- Shared helpers for the weapon/inventory/effects API ----
+
+		GameplayState* gameplayFrom(lua_State* L)
+		{
+			return runtimeFrom(L)->gameplayState();
+		}
+
+		// Accepts {r=,g=,b=} or {x=,y=,z=} (0..1) - colors read naturally
+		// either way in a script.
+		glm::vec3 optColor(lua_State* L, const int index, const glm::vec3& fallback)
+		{
+			if (!lua_istable(L, index))
+			{
+				return fallback;
+			}
+			glm::vec3 color = fallback;
+			const char* keys[3][2] = {{"r", "x"}, {"g", "y"}, {"b", "z"}};
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				for (const char* key : keys[channel])
+				{
+					lua_getfield(L, index, key);
+					if (lua_isnumber(L, -1))
+					{
+						color[channel] = static_cast<float>(lua_tonumber(L, -1));
+						lua_pop(L, 1);
+						break;
+					}
+					lua_pop(L, 1);
+				}
+			}
+			return color;
+		}
+
+		// Calls `functionName(self, number, text)` on each running instance
+		// of entityId (see ScriptRuntime::invokeHook). Uses the CALLING
+		// thread's L so it's safe from inside a coroutine too.
+		bool invokeHookOn(
+			lua_State* L, ScriptRuntime& runtime, const std::vector<int>& refs, const char* functionName,
+			const float number, const std::string& text)
+		{
+			bool handled = false;
+			for (const int ref : refs)
+			{
+				lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+				lua_getfield(L, -1, functionName);
+				if (!lua_isfunction(L, -1))
+				{
+					lua_pop(L, 2);
+					continue;
+				}
+				lua_pushvalue(L, -2);
+				lua_pushnumber(L, static_cast<lua_Number>(number));
+				lua_pushstring(L, text.c_str());
+				if (lua_pcall(L, 3, 0, 0) != LUA_OK)
+				{
+					runtime.log(true, std::string("Error in ") + functionName + "(): " + lua_tostring(L, -1));
+					lua_pop(L, 1);
+				}
+				else
+				{
+					handled = true;
+				}
+				lua_pop(L, 1);
+			}
+			return handled;
+		}
+
+		// ---- self.entity additions ----
+
+		int luaEntityGetName(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			lua_pushstring(L, entity != nullptr ? entity->name.c_str() : "");
+			return 1;
+		}
+
+		int luaEntitySetActive(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const bool active = lua_toboolean(L, 2) != 0;
+			if (const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L)))
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Entity", "active", active});
+			}
+			return 0;
+		}
+
+		// ---- self.camera additions ----
+
+		// First-person eye height above the entity's feet (crouching lowers
+		// it). A Play-time change, discarded on Stop like any other.
+		int luaCameraSetEyeHeight(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			const float height = static_cast<float>(luaL_checknumber(L, 2));
+			if (entity != nullptr && std::abs(entity->cameraRig.fpsEyeHeight - height) > 1e-4F)
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Camera", "fpsEyeHeight", height});
+			}
+			return 0;
+		}
+
+		int luaCameraGetEyeHeight(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			lua_pushnumber(L, static_cast<lua_Number>(entity != nullptr ? entity->cameraRig.fpsEyeHeight : 0.0F));
+			return 1;
+		}
+
+		int luaCameraGetPitch(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			lua_pushnumber(L, static_cast<lua_Number>(gameplay != nullptr ? gameplay->lookPitchDegrees : 0.0F));
+			return 1;
+		}
+
+		// eye, forward - exactly where the Game view camera is and points
+		// right now (first- or third-person), for aiming.
+		int luaCameraGetAim(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const int entityId = entityIdFromUpvalue(L);
+			const SceneEntity* entity = runtime->scene().findEntity(entityId);
+			if (entity == nullptr)
+			{
+				lua_pushnil(L);
+				lua_pushnil(L);
+				return 2;
+			}
+			const GameplayState* gameplay = gameplayFrom(L);
+			const float pitch = gameplay != nullptr ? gameplay->lookPitchDegrees : 0.0F;
+			const float yaw = gameplay != nullptr ? gameplay->lookYawDegrees : 0.0F;
+			const bool isActive = runtime->hasActiveCamera() && runtime->activeCameraEntityId() == entityId;
+			const std::string mode = isActive ? runtime->activeCameraMode() : std::string("fps");
+			glm::vec3 eye;
+			glm::vec3 forward;
+			if (mode == "third_person")
+			{
+				const GameCameraState camera = scriptedPlayCamera(*entity, mode, yaw, pitch);
+				eye = camera.target + camera.distance * glm::vec3(
+					std::cos(camera.pitch) * std::sin(camera.yaw),
+					std::sin(camera.pitch),
+					std::cos(camera.pitch) * std::cos(camera.yaw));
+				forward = glm::normalize(camera.target - eye);
+			}
+			else
+			{
+				eye = entity->position + glm::vec3(0.0F, entity->cameraRig.fpsEyeHeight, 0.0F);
+				forward = yawPitchForward(entity->rotationEuler.y, pitch);
+			}
+			pushVec3(L, eye);
+			pushVec3(L, forward);
+			return 2;
+		}
+
+		// ---- self.world additions ----
+
+		int luaWorldGetEntityPosition(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(std::string(luaL_checkstring(L, 2)));
+			if (entity == nullptr)
+			{
+				lua_pushnil(L);
+				return 1;
+			}
+			pushVec3(L, entity->position);
+			return 1;
+		}
+
+		// Moves a DIFFERENT named entity. Writes the local position when the
+		// target is parented (same reasoning as setEntityRotation above).
+		int luaWorldSetEntityPosition(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string entityName = luaL_checkstring(L, 2);
+			const glm::vec3 position = checkVec3(L, 3);
+			const SceneEntity* entity = runtime->scene().findEntity(entityName);
+			if (entity == nullptr)
+			{
+				return 0;
+			}
+			if (entity->parentName.empty())
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Transform", "position", position});
+			}
+			else
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Parent", "localPosition", position});
+			}
+			return 0;
+		}
+
+		int luaWorldSetEntityActive(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string entityName = luaL_checkstring(L, 2);
+			const bool active = lua_toboolean(L, 3) != 0;
+			const SceneEntity* entity = runtime->scene().findEntity(entityName);
+			if (entity != nullptr && entity->active != active)
+			{
+				(void)runtime->commandBus().execute(SetPropertyCommand{entity->name, "Entity", "active", active});
+			}
+			return 0;
+		}
+
+		int luaWorldIsEntityActive(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(std::string(luaL_checkstring(L, 2)));
+			lua_pushboolean(L, entity != nullptr && runtime->scene().isActiveInHierarchy(*entity) ? 1 : 0);
+			return 1;
+		}
+
+		// Entities a ray/area query should never see: the caller itself,
+		// hidden things (incl. items stored in an inventory), cine
+		// cameras, and first-person viewmodel parts (tag "Viewmodel") or
+		// anything tagged "NoRaycast".
+		bool isQueryable(const EditorScene& scene, const SceneEntity& entity, const int selfEntityId)
+		{
+			return entity.id != selfEntityId && !entity.isCineCamera && !hasTag(entity, "Viewmodel") &&
+				!hasTag(entity, "NoRaycast") && scene.isActiveInHierarchy(entity);
+		}
+
+		// hitPoint, distance, name - or nil. Boxes are each entity's
+		// world AABB (position +/- scale, the same rotation-blind box the
+		// collider uses); terrain is sampled along the ray.
+		int luaWorldRaycast(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const glm::vec3 origin = checkVec3(L, 2);
+			glm::vec3 direction = checkVec3(L, 3);
+			const float maxDistance = static_cast<float>(luaL_optnumber(L, 4, 100.0));
+			const float length = glm::length(direction);
+			if (length < 0.0001F || maxDistance <= 0.0F)
+			{
+				lua_pushnil(L);
+				return 1;
+			}
+			direction /= length;
+			const int selfEntityId = entityIdFromUpvalue(L);
+			const EditorScene& scene = runtime->scene();
+
+			const SceneEntity* bestEntity = nullptr;
+			float bestDistance = maxDistance;
+			for (const SceneEntity& entity : scene.entities())
+			{
+				if (!isQueryable(scene, entity, selfEntityId))
+				{
+					continue;
+				}
+				if (entity.isTerrain)
+				{
+					const float half = entity.terrain.worldSize * 0.5F;
+					constexpr float kStep = 0.25F;
+					for (float t = 0.0F; t <= bestDistance; t += kStep)
+					{
+						const glm::vec3 point = origin + direction * t;
+						const float localX = point.x - entity.position.x;
+						const float localZ = point.z - entity.position.z;
+						if (localX < -half || localX > half || localZ < -half || localZ > half)
+						{
+							continue;
+						}
+						const float groundY = entity.position.y +
+							sampleTerrainHeight(
+								entity.terrain.resolution, entity.terrain.worldSize, entity.terrain.heightScale,
+								entity.terrain.heights, localX, localZ);
+						if (point.y <= groundY)
+						{
+							bestDistance = t;
+							bestEntity = &entity;
+							break;
+						}
+					}
+					continue;
+				}
+				const glm::vec3 boxMin = entity.position - glm::abs(entity.scale);
+				const glm::vec3 boxMax = entity.position + glm::abs(entity.scale);
+				float tNear = 0.0F;
+				float tFar = bestDistance;
+				bool hit = true;
+				for (int axis = 0; axis < 3 && hit; ++axis)
+				{
+					if (std::abs(direction[axis]) < 1e-6F)
+					{
+						hit = origin[axis] >= boxMin[axis] && origin[axis] <= boxMax[axis];
+						continue;
+					}
+					float t1 = (boxMin[axis] - origin[axis]) / direction[axis];
+					float t2 = (boxMax[axis] - origin[axis]) / direction[axis];
+					if (t1 > t2)
+					{
+						std::swap(t1, t2);
+					}
+					tNear = std::max(tNear, t1);
+					tFar = std::min(tFar, t2);
+					hit = tNear <= tFar;
+				}
+				if (hit && tNear < bestDistance)
+				{
+					bestDistance = tNear;
+					bestEntity = &entity;
+				}
+			}
+			if (bestEntity == nullptr)
+			{
+				lua_pushnil(L);
+				return 1;
+			}
+			pushVec3(L, origin + direction * bestDistance);
+			lua_pushnumber(L, static_cast<lua_Number>(bestDistance));
+			lua_pushstring(L, bestEntity->name.c_str());
+			return 3;
+		}
+
+		void pushTargetList(lua_State* L, std::vector<std::pair<float, const SceneEntity*>>& found)
+		{
+			std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			lua_createtable(L, static_cast<int>(found.size()), 0);
+			int index = 1;
+			for (const auto& [distance, entity] : found)
+			{
+				lua_createtable(L, 0, 3);
+				lua_pushstring(L, entity->name.c_str());
+				lua_setfield(L, -2, "name");
+				pushVec3(L, entity->position);
+				lua_setfield(L, -2, "position");
+				lua_pushnumber(L, static_cast<lua_Number>(distance));
+				lua_setfield(L, -2, "distance");
+				lua_rawseti(L, -2, index++);
+			}
+		}
+
+		// Every OTHER active entity carrying `tag` within `radius` of
+		// `center`, nearest first: { {name=, position=, distance=}, ... }.
+		int luaWorldFindAllWithTag(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string tag = luaL_checkstring(L, 2);
+			const glm::vec3 center = checkVec3(L, 3);
+			const float radius = static_cast<float>(luaL_checknumber(L, 4));
+			const EditorScene& scene = runtime->scene();
+			std::vector<std::pair<float, const SceneEntity*>> found;
+			for (const SceneEntity& entity : scene.entities())
+			{
+				if (!isQueryable(scene, entity, entityIdFromUpvalue(L)) || !hasTag(entity, tag))
+				{
+					continue;
+				}
+				const float distance = glm::length(entity.position - center);
+				if (distance <= radius)
+				{
+					found.emplace_back(distance, &entity);
+				}
+			}
+			pushTargetList(L, found);
+			return 1;
+		}
+
+		// Same shape as findAllWithTag, but matches anything that can take
+		// damage (has a running script defining on_damage, e.g. health.lua)
+		// instead of a tag.
+		int luaWorldFindDamageable(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const glm::vec3 center = checkVec3(L, 2);
+			const float radius = static_cast<float>(luaL_checknumber(L, 3));
+			const EditorScene& scene = runtime->scene();
+			std::vector<std::pair<float, const SceneEntity*>> found;
+			for (const SceneEntity& entity : scene.entities())
+			{
+				if (!isQueryable(scene, entity, entityIdFromUpvalue(L)) || !runtime->hasHook(entity.id, "on_damage"))
+				{
+					continue;
+				}
+				const float distance = glm::length(entity.position - center);
+				if (distance <= radius)
+				{
+					found.emplace_back(distance, &entity);
+				}
+			}
+			pushTargetList(L, found);
+			return 1;
+		}
+
+		// spawnBeam(from, to, color, seconds, width, jagged) - a tracer /
+		// electric arc drawn by the host for `seconds`. Visual only.
+		int luaWorldSpawnBeam(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr)
+			{
+				return 0;
+			}
+			GameplayState::Beam beam;
+			beam.from = checkVec3(L, 2);
+			beam.to = checkVec3(L, 3);
+			beam.color = optColor(L, 4, glm::vec3(1.0F, 0.9F, 0.5F));
+			beam.totalSeconds = std::clamp(static_cast<float>(luaL_optnumber(L, 5, 0.08)), 0.01F, 5.0F);
+			beam.remainingSeconds = beam.totalSeconds;
+			beam.width = std::clamp(static_cast<float>(luaL_optnumber(L, 6, 2.0)), 0.5F, 12.0F);
+			beam.jagged = lua_toboolean(L, 7) != 0;
+			beam.seed = static_cast<unsigned int>(gameplay->beams.size() * 7919U + gameplay->flashes.size() * 104729U) ^
+				static_cast<unsigned int>(gameplay->playElapsedTime * 1000.0F);
+			constexpr std::size_t kMaxBeams = 1024;
+			if (gameplay->beams.size() < kMaxBeams)
+			{
+				gameplay->beams.push_back(beam);
+			}
+			return 0;
+		}
+
+		// spawnFlash(position, color, size, seconds) - muzzle flash /
+		// impact spark. Visual only.
+		int luaWorldSpawnFlash(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr)
+			{
+				return 0;
+			}
+			GameplayState::Flash flash;
+			flash.position = checkVec3(L, 2);
+			flash.color = optColor(L, 3, glm::vec3(1.0F, 0.85F, 0.4F));
+			flash.size = std::clamp(static_cast<float>(luaL_optnumber(L, 4, 12.0)), 1.0F, 80.0F);
+			flash.totalSeconds = std::clamp(static_cast<float>(luaL_optnumber(L, 5, 0.08)), 0.01F, 5.0F);
+			flash.remainingSeconds = flash.totalSeconds;
+			constexpr std::size_t kMaxFlashes = 2048;
+			if (gameplay->flashes.size() < kMaxFlashes)
+			{
+				gameplay->flashes.push_back(flash);
+			}
+			return 0;
+		}
+
+		// particle(position, color, worldSize, intensity) - one frame of one
+		// particle (size in world units, so it shrinks with distance). For
+		// scripts running their own particle simulation (effects.lua).
+		int luaWorldParticle(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr)
+			{
+				return 0;
+			}
+			constexpr std::size_t kMaxFlashes = 2048;
+			if (gameplay->flashes.size() >= kMaxFlashes)
+			{
+				return 0;
+			}
+			GameplayState::Flash flash;
+			flash.position = checkVec3(L, 2);
+			flash.color = optColor(L, 3, glm::vec3(1.0F));
+			flash.size = std::clamp(static_cast<float>(luaL_optnumber(L, 4, 0.05)), 0.001F, 5.0F);
+			flash.intensity = std::clamp(static_cast<float>(luaL_optnumber(L, 5, 1.0)), 0.0F, 1.0F);
+			flash.particle = true;
+			flash.framesLeft = 1;
+			flash.totalSeconds = 1.0F;
+			flash.remainingSeconds = 1.0F;
+			gameplay->flashes.push_back(flash);
+			return 0;
+		}
+
+		// ---- self.inventory ----
+
+		void pushInventorySlot(lua_State* L, const GameplayState::InventoryItem& item, const int slotIndex)
+		{
+			lua_createtable(L, 0, 7);
+			lua_pushinteger(L, slotIndex + 1);
+			lua_setfield(L, -2, "slot");
+			lua_pushstring(L, item.itemName.c_str());
+			lua_setfield(L, -2, "name");
+			lua_pushstring(L, item.iconPath.c_str());
+			lua_setfield(L, -2, "icon");
+			lua_pushstring(L, item.itemType.c_str());
+			lua_setfield(L, -2, "type");
+			lua_pushstring(L, item.weapon.c_str());
+			lua_setfield(L, -2, "weapon");
+			lua_pushinteger(L, item.count);
+			lua_setfield(L, -2, "count");
+		}
+
+		// The equipped slot's item table, or nil if that slot is empty.
+		int luaInventoryGetSelected(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr || gameplay->selectedSlot < 0 ||
+				gameplay->selectedSlot >= static_cast<int>(gameplay->inventoryItems.size()) ||
+				gameplay->inventoryItems[static_cast<std::size_t>(gameplay->selectedSlot)].empty())
+			{
+				lua_pushnil(L);
+				return 1;
+			}
+			pushInventorySlot(
+				L, gameplay->inventoryItems[static_cast<std::size_t>(gameplay->selectedSlot)], gameplay->selectedSlot);
+			return 1;
+		}
+
+		int luaInventoryGetSlot(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			const int slotIndex = static_cast<int>(luaL_checkinteger(L, 2)) - 1;
+			if (gameplay == nullptr || slotIndex < 0 || slotIndex >= static_cast<int>(gameplay->inventoryItems.size()) ||
+				gameplay->inventoryItems[static_cast<std::size_t>(slotIndex)].empty())
+			{
+				lua_pushnil(L);
+				return 1;
+			}
+			pushInventorySlot(L, gameplay->inventoryItems[static_cast<std::size_t>(slotIndex)], slotIndex);
+			return 1;
+		}
+
+		int luaInventoryGetSelectedSlot(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			lua_pushinteger(L, gameplay != nullptr ? gameplay->selectedSlot + 1 : 1);
+			return 1;
+		}
+
+		int luaInventorySelect(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			const int slotIndex = static_cast<int>(luaL_checkinteger(L, 2)) - 1;
+			if (gameplay != nullptr && slotIndex >= 0 && slotIndex < kInventorySlotCount)
+			{
+				gameplay->selectedSlot = slotIndex;
+			}
+			return 0;
+		}
+
+		int luaInventoryGetSlotCount(lua_State* L)
+		{
+			lua_pushinteger(L, kInventorySlotCount);
+			return 1;
+		}
+
+		int luaInventoryGetHotbarSize(lua_State* L)
+		{
+			lua_pushinteger(L, kHotbarSlotCount);
+			return 1;
+		}
+
+		// True while the inventory grid is open - the mouse belongs to the
+		// UI then, so a controller should stop looking/attacking.
+		int luaInventoryIsOpen(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			lua_pushboolean(L, gameplay != nullptr && gameplay->inventoryOpen ? 1 : 0);
+			return 1;
+		}
+
+		// Uses up `count` (default 1) of the equipped item - e.g. drinking
+		// a potion. The used-up objects are deleted from the scene.
+		int luaInventoryConsumeSelected(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			GameplayState* gameplay = gameplayFrom(L);
+			const int count = static_cast<int>(luaL_optinteger(L, 2, 1));
+			if (gameplay == nullptr || count <= 0 || gameplay->selectedSlot < 0 ||
+				gameplay->selectedSlot >= static_cast<int>(gameplay->inventoryItems.size()))
+			{
+				lua_pushboolean(L, 0);
+				return 1;
+			}
+			GameplayState::InventoryItem& item = gameplay->inventoryItems[static_cast<std::size_t>(gameplay->selectedSlot)];
+			if (item.count < count)
+			{
+				lua_pushboolean(L, 0);
+				return 1;
+			}
+			for (int used = 0; used < count; ++used)
+			{
+				if (!item.storedEntityNames.empty())
+				{
+					(void)runtime->commandBus().execute(DeleteEntityCommand{item.storedEntityNames.back()});
+					item.storedEntityNames.pop_back();
+				}
+			}
+			item.count -= count;
+			if (item.count <= 0)
+			{
+				item = GameplayState::InventoryItem{};
+			}
+			lua_pushboolean(L, 1);
+			return 1;
+		}
+
+		// Defined further down with the other messaging/combat bindings.
+		int luaInventoryAddEntity(lua_State* L);
+		int luaInventoryFindWeapon(lua_State* L);
+
+		void pushInventoryProxy(lua_State* L, const int entityId)
+		{
+			lua_newtable(L);
+			const auto addMethod = [L, entityId](const char* name, lua_CFunction function)
+			{
+				lua_pushinteger(L, entityId);
+				lua_pushcclosure(L, function, 1);
+				lua_setfield(L, -2, name);
+			};
+			addMethod("getSelected", luaInventoryGetSelected);
+			addMethod("getSlot", luaInventoryGetSlot);
+			addMethod("getSelectedSlot", luaInventoryGetSelectedSlot);
+			addMethod("select", luaInventorySelect);
+			addMethod("getSlotCount", luaInventoryGetSlotCount);
+			addMethod("getHotbarSize", luaInventoryGetHotbarSize);
+			addMethod("isOpen", luaInventoryIsOpen);
+			addMethod("consumeSelected", luaInventoryConsumeSelected);
+			addMethod("addEntity", luaInventoryAddEntity);
+			addMethod("findWeapon", luaInventoryFindWeapon);
+		}
+
+		// ---- input additions ----
+
+		int luaInputIsMouseButtonDown(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushboolean(L, runtime->inputSource().isMouseButtonDown(luaL_checkstring(L, 2)));
+			return 1;
+		}
+
+		int luaInputGetScrollDelta(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			lua_pushnumber(L, static_cast<lua_Number>(runtime->inputSource().getScrollDelta()));
+			return 1;
+		}
+
+		// ---- @property values ----
+
+		glm::vec3 parseVec3Text(const std::string& text, const glm::vec3& fallback)
+		{
+			std::string spaced = text;
+			std::replace(spaced.begin(), spaced.end(), ',', ' ');
+			std::istringstream stream(spaced);
+			glm::vec3 value = fallback;
+			stream >> value.x >> value.y >> value.z;
+			return stream.fail() && !stream.eof() ? fallback : value;
+		}
+
+		void pushPropertyValue(
+			lua_State* L, const ScriptRuntime::ExposedScriptProperty& property, const std::string& text)
+		{
+			using Type = ScriptRuntime::ExposedScriptProperty::Type;
+			switch (property.type)
+			{
+				case Type::Number:
+				case Type::Slider:
+				{
+					char* end = nullptr;
+					const float value = std::strtof(text.c_str(), &end);
+					lua_pushnumber(L, static_cast<lua_Number>(end != text.c_str() ? value : property.defaultNumber));
+					break;
+				}
+				case Type::Bool:
+					lua_pushboolean(L, text == "true" || text == "1" ? 1 : 0);
+					break;
+				case Type::Vec3:
+					pushVec3(L, parseVec3Text(text, property.defaultVec3));
+					break;
+				default:
+					lua_pushstring(L, text.c_str());
+					break;
+			}
+		}
+
+		// ---- Script-to-script messaging ----
+
+		// Calls `functionName(self, <the top argCount stack values>)` on every
+		// running script instance of entityId that defines it, using the
+		// calling thread's L. Pops the arguments and pushes two results:
+		// handled (bool) and the first non-nil value any handler returned.
+		int callScriptsWithTopArgs(
+			lua_State* L, ScriptRuntime& runtime, const int entityId, const char* functionName, const int argCount)
+		{
+			const int firstArg = lua_gettop(L) - argCount + 1;
+			lua_pushnil(L);
+			const int resultIndex = lua_gettop(L);
+			bool handled = false;
+			for (const int ref : runtime.instanceRefs(entityId))
+			{
+				lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+				lua_getfield(L, -1, functionName);
+				if (!lua_isfunction(L, -1))
+				{
+					lua_pop(L, 2);
+					continue;
+				}
+				lua_pushvalue(L, -2); // self
+				for (int arg = 0; arg < argCount; ++arg)
+				{
+					lua_pushvalue(L, firstArg + arg);
+				}
+				if (lua_pcall(L, argCount + 1, 1, 0) != LUA_OK)
+				{
+					runtime.log(true, std::string("Error in ") + functionName + "(): " + lua_tostring(L, -1));
+					lua_pop(L, 1);
+				}
+				else
+				{
+					handled = true;
+					if (lua_isnil(L, resultIndex) && !lua_isnil(L, -1))
+					{
+						lua_replace(L, resultIndex);
+					}
+					else
+					{
+						lua_pop(L, 1);
+					}
+				}
+				lua_pop(L, 1); // instance table
+			}
+			// Leave: handled, result - and drop the argument copies below them.
+			lua_pushboolean(L, handled ? 1 : 0);
+			lua_insert(L, resultIndex);
+			lua_rotate(L, firstArg, 2);
+			lua_settop(L, firstArg + 1);
+			return 2;
+		}
+
+		// self.entity:send(fn, ...) - call fn on the OTHER scripts attached to
+		// this same object (e.g. fps_player.lua -> projectiles.lua). Returns
+		// handled, firstResult.
+		int luaEntitySend(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string functionName = luaL_checkstring(L, 2);
+			const int argCount = lua_gettop(L) - 2;
+			return callScriptsWithTopArgs(L, *runtime, entityIdFromUpvalue(L), functionName.c_str(), argCount);
+		}
+
+		// self.world:send(entityName, fn, ...) - same, on another object.
+		int luaWorldSend(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string targetName = luaL_checkstring(L, 2);
+			const std::string functionName = luaL_checkstring(L, 3);
+			const int argCount = lua_gettop(L) - 3;
+			const SceneEntity* target = runtime->scene().findEntity(targetName);
+			if (target == nullptr)
+			{
+				lua_pushboolean(L, 0);
+				lua_pushnil(L);
+				return 2;
+			}
+			return callScriptsWithTopArgs(L, *runtime, target->id, functionName.c_str(), argCount);
+		}
+
+		// Shared by damage/stun/heal: fn(self, amount, attackerName, info).
+		int callCombatHook(lua_State* L, const char* functionName)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			const std::string targetName = luaL_checkstring(L, 2);
+			const lua_Number amount = luaL_checknumber(L, 3);
+			const SceneEntity* self = runtime->scene().findEntity(entityIdFromUpvalue(L));
+			const SceneEntity* target = runtime->scene().findEntity(targetName);
+			if (target == nullptr || !runtime->scene().isActiveInHierarchy(*target))
+			{
+				lua_pushboolean(L, 0);
+				lua_pushnil(L);
+				return 2;
+			}
+			lua_pushnumber(L, amount);
+			lua_pushstring(L, self != nullptr ? self->name.c_str() : "");
+			if (lua_istable(L, 4))
+			{
+				lua_pushvalue(L, 4);
+			}
+			else
+			{
+				lua_newtable(L);
+			}
+			return callScriptsWithTopArgs(L, *runtime, target->id, functionName, 3);
+		}
+
+		// damage(name, amount [, info]) -> handled, result. Calls the target's
+		// on_damage(amount, attackerName, info) - info is an optional table
+		// (e.g. {crit = true, element = "fire"}); health.lua returns true
+		// from on_damage when that hit killed it.
+		int luaWorldDamage(lua_State* L)
+		{
+			return callCombatHook(L, "on_damage");
+		}
+
+		// stun(name, seconds [, info]) -> handled. on_stun(seconds, attacker, info).
+		int luaWorldStun(lua_State* L)
+		{
+			return callCombatHook(L, "on_stun");
+		}
+
+		// heal(name, amount [, info]) -> handled. on_heal(amount, healer, info).
+		int luaWorldHeal(lua_State* L)
+		{
+			return callCombatHook(L, "on_heal");
+		}
+
+		// spawnText(position, text, color, seconds, scale) - floating text.
+		int luaWorldSpawnText(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr)
+			{
+				return 0;
+			}
+			GameplayState::FloatingText text;
+			text.position = checkVec3(L, 2);
+			text.text = luaL_checkstring(L, 3);
+			text.color = optColor(L, 4, glm::vec3(1.0F));
+			text.totalSeconds = std::clamp(static_cast<float>(luaL_optnumber(L, 5, 1.0)), 0.1F, 10.0F);
+			text.remainingSeconds = text.totalSeconds;
+			text.scale = std::clamp(static_cast<float>(luaL_optnumber(L, 6, 1.0)), 0.5F, 3.0F);
+			constexpr std::size_t kMaxTexts = 128;
+			if (gameplay->floatingTexts.size() < kMaxTexts)
+			{
+				gameplay->floatingTexts.push_back(std::move(text));
+			}
+			return 0;
+		}
+
+		// setHudBar(id, label, fraction, color, order) - bottom-left bar.
+		int luaWorldSetHudBar(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay == nullptr)
+			{
+				return 0;
+			}
+			const std::string id = luaL_checkstring(L, 2);
+			GameplayState::HudBar bar;
+			bar.id = id;
+			bar.label = luaL_optstring(L, 3, "");
+			bar.fraction = std::clamp(static_cast<float>(luaL_optnumber(L, 4, 1.0)), 0.0F, 1.0F);
+			bar.color = optColor(L, 5, glm::vec3(0.3F, 0.8F, 0.3F));
+			bar.order = static_cast<int>(luaL_optinteger(L, 6, 0));
+			auto& bars = gameplay->hudBars;
+			const auto existing = std::find_if(bars.begin(), bars.end(), [&id](const auto& b) { return b.id == id; });
+			if (existing != bars.end())
+			{
+				*existing = std::move(bar);
+			}
+			else
+			{
+				bars.push_back(std::move(bar));
+				std::stable_sort(bars.begin(), bars.end(), [](const auto& a, const auto& b) { return a.order < b.order; });
+			}
+			return 0;
+		}
+
+		int luaWorldClearHudBar(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay != nullptr)
+			{
+				const std::string id = luaL_checkstring(L, 2);
+				std::erase_if(gameplay->hudBars, [&id](const auto& b) { return b.id == id; });
+			}
+			return 0;
+		}
+
+		// showMessage(text, seconds) - one centered message line.
+		int luaWorldShowMessage(lua_State* L)
+		{
+			GameplayState* gameplay = gameplayFrom(L);
+			if (gameplay != nullptr)
+			{
+				gameplay->messageText = luaL_checkstring(L, 2);
+				gameplay->messageSecondsRemaining = std::clamp(static_cast<float>(luaL_optnumber(L, 3, 2.0)), 0.2F, 30.0F);
+			}
+			return 0;
+		}
+
+		// inventory:addEntity(name) -> bool. Puts a scene object carrying
+		// items.lua into the inventory (hidden) - e.g. xp_system.lua granting
+		// a weapon unlock. Works on hidden objects too.
+		int luaInventoryAddEntity(lua_State* L)
+		{
+			ScriptRuntime* runtime = runtimeFrom(L);
+			GameplayState* gameplay = gameplayFrom(L);
+			const SceneEntity* entity = runtime->scene().findEntity(std::string(luaL_checkstring(L, 2)));
+			if (gameplay == nullptr || entity == nullptr)
+			{
+				lua_pushboolean(L, 0);
+				return 1;
+			}
+			const bool added = pickUpItem(runtime->scene(), runtime->commandBus(), *gameplay, *runtime, *entity);
+			lua_pushboolean(L, added ? 1 : 0);
+			return 1;
+		}
+
+		// inventory:findWeapon(weaponId) -> slot (1-based) or nil.
+		int luaInventoryFindWeapon(lua_State* L)
+		{
+			const GameplayState* gameplay = gameplayFrom(L);
+			const std::string weapon = luaL_checkstring(L, 2);
+			if (gameplay != nullptr)
+			{
+				for (std::size_t index = 0; index < gameplay->inventoryItems.size(); ++index)
+				{
+					const auto& item = gameplay->inventoryItems[index];
+					if (!item.empty() && item.weapon == weapon)
+					{
+						lua_pushinteger(L, static_cast<lua_Integer>(index) + 1);
+						return 1;
+					}
+				}
+			}
+			lua_pushnil(L);
 			return 1;
 		}
 
@@ -208,8 +1143,12 @@ namespace gameforger::editor
 			addMethod("getRotation", luaEntityGetRotation);
 			addMethod("setRotation", luaEntitySetRotation);
 			addMethod("getScale", luaEntityGetScale);
+			addMethod("getPivot", luaEntityGetPivot);
 			addMethod("getForward", luaEntityGetForward);
 			addMethod("getRight", luaEntityGetRight);
+			addMethod("getName", luaEntityGetName);
+			addMethod("setActive", luaEntitySetActive);
+			addMethod("send", luaEntitySend);
 		}
 
 		int luaCameraSetMode(lua_State* L)
@@ -245,6 +1184,10 @@ namespace gameforger::editor
 			};
 			addMethod("setMode", luaCameraSetMode);
 			addMethod("getMode", luaCameraGetMode);
+			addMethod("getPitch", luaCameraGetPitch);
+			addMethod("setEyeHeight", luaCameraSetEyeHeight);
+			addMethod("getEyeHeight", luaCameraGetEyeHeight);
+			addMethod("getAim", luaCameraGetAim);
 		}
 
 		struct BoxCollisionResult
@@ -253,14 +1196,116 @@ namespace gameforger::editor
 			bool grounded = false;
 		};
 
-		// Treats the moving entity as an axis-aligned box (halfWidth in X/Z,
+		// Pushes the mover (an upright box: halfWidth in X/Z, height in Y,
+		// `position` is its feet) out of a TURNED collider box (any rotation)
+		// along the axis of least penetration (separating-axis test: the 3
+		// world axes, the box's 3 axes and their 9 cross products). Pushes
+		// that are mostly upward are done straight up and count as standing
+		// on it (grounded) - so a tilted box is a ramp you can stand on, not
+		// a slide. Returns false if they don't overlap.
+		bool pushOutOfOrientedBox(glm::vec3& position, const float halfWidth, const float height,
+			const OrientedBox& box, bool& grounded)
+		{
+			const glm::vec3 half(halfWidth, height * 0.5F, halfWidth);
+			const glm::vec3 center = position + glm::vec3(0.0F, height * 0.5F, 0.0F);
+			const glm::vec3 toBox = box.center - center;
+			std::array<glm::vec3, 15> axes{};
+			std::size_t count = 0;
+			const std::array<glm::vec3, 3> world{glm::vec3(1.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F),
+				glm::vec3(0.0F, 0.0F, 1.0F)};
+			for (const glm::vec3& axis : world)
+			{
+				axes[count++] = axis;
+			}
+			for (const glm::vec3& axis : box.axes)
+			{
+				axes[count++] = axis;
+			}
+			for (const glm::vec3& a : world)
+			{
+				for (const glm::vec3& b : box.axes)
+				{
+					const glm::vec3 c = glm::cross(a, b);
+					const float length = glm::length(c);
+					if (length > 1e-3F)
+					{
+						axes[count++] = c / length;
+					}
+				}
+			}
+
+			float bestOverlap = std::numeric_limits<float>::max();
+			glm::vec3 bestPush(0.0F);
+			for (std::size_t i = 0; i < count; ++i)
+			{
+				const glm::vec3& axis = axes[i];
+				const float moverRadius = half.x * std::abs(axis.x) + half.y * std::abs(axis.y) + half.z * std::abs(axis.z);
+				float boxRadius = 0.0F;
+				for (std::size_t k = 0; k < 3; ++k)
+				{
+					boxRadius += box.halfExtents[static_cast<int>(k)] * std::abs(glm::dot(box.axes[k], axis));
+				}
+				const float distance = glm::dot(toBox, axis);
+				const float overlap = moverRadius + boxRadius - std::abs(distance);
+				if (overlap <= 0.0F)
+				{
+					return false; // a separating axis: no contact
+				}
+				if (overlap < bestOverlap)
+				{
+					bestOverlap = overlap;
+					bestPush = distance > 0.0F ? -axis : axis; // away from the box
+				}
+			}
+
+			// Standing on it: the mover's middle is over the box's top face
+			// and above its center - resolve up the box's own "up" axis, even
+			// when a sideways push is smaller (a thick platform fallen into
+			// deep in one frame would otherwise shove it sideways).
+			const glm::vec3& boxUp = box.axes[1];
+			const glm::vec3 local(glm::dot(-toBox, box.axes[0]), glm::dot(-toBox, box.axes[1]), glm::dot(-toBox, box.axes[2]));
+			if (std::abs(boxUp.y) > 0.7F && std::abs(local.x) < box.halfExtents.x && std::abs(local.z) < box.halfExtents.z &&
+				local.y * boxUp.y > 0.0F)
+			{
+				const glm::vec3 up = boxUp.y > 0.0F ? boxUp : -boxUp;
+				const float moverRadius = half.x * std::abs(up.x) + half.y * std::abs(up.y) + half.z * std::abs(up.z);
+				const float along = glm::dot(-toBox, up);
+				bestOverlap = moverRadius + box.halfExtents.y - along;
+				bestPush = up;
+			}
+
+			if (bestPush.y > 0.7F)
+			{
+				position.y += bestOverlap / bestPush.y;
+				grounded = true;
+			}
+			else if (bestPush.y < -0.7F)
+			{
+				position.y -= bestOverlap / -bestPush.y;
+			}
+			else
+			{
+				// A wall: push sideways only, so walking into a slanted wall
+				// never lifts or sinks the mover.
+				glm::vec3 flat(bestPush.x, 0.0F, bestPush.z);
+				const float flatLength = glm::length(flat);
+				if (flatLength > 1e-4F)
+				{
+					position += flat / flatLength * (bestOverlap / flatLength);
+				}
+			}
+			return true;
+		}
+
+		// Treats the moving entity as an upright box (halfWidth in X/Z,
 		// height in Y, `position` is its feet/base per this project's
-		// convention) and pushes it out of any overlapping Collider-enabled
-		// entity's world-space AABB, along whichever axis has the least
-		// penetration. A push along Y means "resting on top" (grounded) or
-		// "bumped a ceiling"; a push along X or Z means a wall/object blocked
-		// movement. This is a deliberately simple approximation - no rotation-
-		// aware colliders, no swept collision - not a general physics engine.
+		// convention) and pushes it out of every overlapping Collider-enabled
+		// entity's box as drawn - rotation, scale and pivot included (see
+		// colliderBox, Transform.hpp). Unturned boxes use the axis-aligned
+		// path below; turned ones pushOutOfOrientedBox. A push along Y means
+		// "resting on top" (grounded) or "bumped a ceiling"; a sideways push
+		// means a wall/object blocked movement. No swept collision - not a
+		// general physics engine.
 		BoxCollisionResult resolveBoxCollision(
 			const EditorScene& scene,
 			const int selfEntityId,
@@ -277,7 +1322,7 @@ namespace gameforger::editor
 				bool resolvedAny = false;
 				for (const SceneEntity& other : scene.entities())
 				{
-					if (other.id == selfEntityId || !other.hasCollider)
+					if (other.id == selfEntityId || !other.hasCollider || !scene.isActiveInHierarchy(other))
 					{
 						continue;
 					}
@@ -321,8 +1366,30 @@ namespace gameforger::editor
 						continue;
 					}
 
-					const glm::vec3 otherMin = other.position - other.scale;
-					const glm::vec3 otherMax = other.position + other.scale;
+					const OrientedBox box = colliderBox(other);
+					{
+						// Quick reject on the box's world bounds.
+						const glm::vec3 reach = box.worldHalfSize();
+						if (result.position.x + halfWidth < box.center.x - reach.x ||
+							result.position.x - halfWidth > box.center.x + reach.x ||
+							result.position.z + halfWidth < box.center.z - reach.z ||
+							result.position.z - halfWidth > box.center.z + reach.z ||
+							result.position.y + height < box.center.y - reach.y || result.position.y > box.center.y + reach.y)
+						{
+							continue;
+						}
+					}
+					if (!box.axisAligned)
+					{
+						if (pushOutOfOrientedBox(result.position, halfWidth, height, box, result.grounded))
+						{
+							resolvedAny = true;
+						}
+						continue;
+					}
+
+					const glm::vec3 otherMin = box.center - box.halfExtents;
+					const glm::vec3 otherMax = box.center + box.halfExtents;
 					const glm::vec3 selfMin(
 						result.position.x - halfWidth, result.position.y, result.position.z - halfWidth);
 					const glm::vec3 selfMax(
@@ -357,7 +1424,7 @@ namespace gameforger::editor
 						overlapX >= (2.0F * halfWidth - 0.001F) && overlapZ >= (2.0F * halfWidth - 0.001F);
 					if (fullyContainedHorizontally || (overlapY <= overlapX && overlapY <= overlapZ))
 					{
-						if (selfCenterY > other.position.y)
+						if (selfCenterY > box.center.y)
 						{
 							result.position.y = otherMax.y;
 							result.grounded = true;
@@ -370,12 +1437,12 @@ namespace gameforger::editor
 					else if (overlapX <= overlapZ)
 					{
 						result.position.x =
-							result.position.x > other.position.x ? otherMax.x + halfWidth : otherMin.x - halfWidth;
+							result.position.x > box.center.x ? otherMax.x + halfWidth : otherMin.x - halfWidth;
 					}
 					else
 					{
 						result.position.z =
-							result.position.z > other.position.z ? otherMax.z + halfWidth : otherMin.z - halfWidth;
+							result.position.z > box.center.z ? otherMax.z + halfWidth : otherMin.z - halfWidth;
 					}
 				}
 				if (!resolvedAny)
@@ -603,6 +1670,24 @@ namespace gameforger::editor
 			addMethod("setOperatingCatapult", luaWorldSetOperatingCatapult);
 			addMethod("setEntityRotation", luaWorldSetEntityRotation);
 			addMethod("fireGravityProjectile", luaWorldFireGravityProjectile);
+			addMethod("getEntityPosition", luaWorldGetEntityPosition);
+			addMethod("setEntityPosition", luaWorldSetEntityPosition);
+			addMethod("setEntityActive", luaWorldSetEntityActive);
+			addMethod("isEntityActive", luaWorldIsEntityActive);
+			addMethod("raycast", luaWorldRaycast);
+			addMethod("findAllWithTag", luaWorldFindAllWithTag);
+			addMethod("findDamageable", luaWorldFindDamageable);
+			addMethod("damage", luaWorldDamage);
+			addMethod("stun", luaWorldStun);
+			addMethod("spawnBeam", luaWorldSpawnBeam);
+			addMethod("spawnFlash", luaWorldSpawnFlash);
+			addMethod("particle", luaWorldParticle);
+			addMethod("heal", luaWorldHeal);
+			addMethod("send", luaWorldSend);
+			addMethod("spawnText", luaWorldSpawnText);
+			addMethod("setHudBar", luaWorldSetHudBar);
+			addMethod("clearHudBar", luaWorldClearHudBar);
+			addMethod("showMessage", luaWorldShowMessage);
 		}
 
 		// Answered by whichever InputSource the host (Editor or Runtime)
@@ -736,6 +1821,10 @@ namespace gameforger::editor
 		lua_setfield(state_, -2, "getMouseDeltaX");
 		lua_pushcfunction(state_, luaInputGetMouseDeltaY);
 		lua_setfield(state_, -2, "getMouseDeltaY");
+		lua_pushcfunction(state_, luaInputIsMouseButtonDown);
+		lua_setfield(state_, -2, "isMouseButtonDown");
+		lua_pushcfunction(state_, luaInputGetScrollDelta);
+		lua_setfield(state_, -2, "getScrollDelta");
 		lua_setglobal(state_, "input");
 	}
 
@@ -758,6 +1847,7 @@ namespace gameforger::editor
 		aimingCatapultQueryCallback_ = nullptr;
 		operatingCatapultSetCallback_ = nullptr;
 		gravityProjectileSpawnCallback_ = nullptr;
+		gameplayState_ = nullptr;
 	}
 
 	bool ScriptRuntime::isRunning() const noexcept
@@ -828,6 +1918,21 @@ namespace gameforger::editor
 		lua_setfield(state_, -2, "physics");
 		pushWorldProxy(state_, entityId);
 		lua_setfield(state_, -2, "world");
+		pushInventoryProxy(state_, entityId);
+		lua_setfield(state_, -2, "inventory");
+
+		// @property values (this object's own, else the annotated
+		// default) - set before on_start() so the script sees them.
+		{
+			const SceneEntity* owner = scene_ != nullptr ? scene_->findEntity(entityId) : nullptr;
+			for (const ExposedScriptProperty& property : cachedScriptProperties(*fullPath))
+			{
+				const ScriptPropertyOverride* entry =
+					owner != nullptr ? findScriptProperty(*owner, scriptPath, property.name) : nullptr;
+				pushPropertyValue(state_, property, entry != nullptr ? entry->value : property.defaultAsText());
+				lua_setfield(state_, -2, property.name.c_str());
+			}
+		}
 
 		lua_getfield(state_, -1, "on_start");
 		if (lua_isfunction(state_, -1))
@@ -989,12 +2094,75 @@ namespace gameforger::editor
 					prop.defaultBool = (boolStr == "true" || boolStr == "1");
 				}
 			}
-			else if (typeStr == "string")
+			else if (typeStr == "string" || typeStr == "icon" || typeStr == "image")
 			{
-				prop.type = ExposedScriptProperty::Type::String;
+				prop.type = typeStr == "icon" ? ExposedScriptProperty::Type::Icon
+					: typeStr == "image"      ? ExposedScriptProperty::Type::Image
+											  : ExposedScriptProperty::Type::String;
 				std::string rest;
 				std::getline(iss >> std::ws, rest);
+				while (!rest.empty() && std::isspace(static_cast<unsigned char>(rest.back())) != 0)
+				{
+					rest.pop_back();
+				}
+				if (rest.size() >= 2 && rest.front() == '"' && rest.back() == '"')
+				{
+					rest = rest.substr(1, rest.size() - 2);
+				}
 				prop.defaultString = rest;
+			}
+			else if (typeStr == "enum")
+			{
+				// -- @property weapon enum none|sword|axe sword
+				prop.type = ExposedScriptProperty::Type::Enum;
+				std::string optionList;
+				iss >> optionList;
+				std::size_t start = 0;
+				while (start <= optionList.size())
+				{
+					const std::size_t bar = optionList.find('|', start);
+					const std::string option =
+						optionList.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+					if (!option.empty())
+					{
+						prop.options.push_back(option);
+					}
+					if (bar == std::string::npos)
+					{
+						break;
+					}
+					start = bar + 1;
+				}
+				if (prop.options.empty())
+				{
+					continue;
+				}
+				if (!(iss >> prop.defaultString) ||
+					std::find(prop.options.begin(), prop.options.end(), prop.defaultString) == prop.options.end())
+				{
+					prop.defaultString = prop.options.front();
+				}
+			}
+			else if (typeStr == "slider")
+			{
+				// -- @property climb_angle slider 0|360 0   (a number shown as a slider)
+				prop.type = ExposedScriptProperty::Type::Slider;
+				std::string range;
+				iss >> range;
+				const std::size_t bar = range.find('|');
+				if (bar == std::string::npos)
+				{
+					continue;
+				}
+				prop.sliderMin = std::strtof(range.substr(0, bar).c_str(), nullptr);
+				prop.sliderMax = std::strtof(range.substr(bar + 1).c_str(), nullptr);
+				if (prop.sliderMax <= prop.sliderMin)
+				{
+					continue;
+				}
+				prop.defaultNumber = prop.sliderMin;
+				iss >> prop.defaultNumber;
+				prop.defaultNumber = std::clamp(prop.defaultNumber, prop.sliderMin, prop.sliderMax);
 			}
 			else if (typeStr == "vec3" || typeStr == "Vector3")
 			{
@@ -1004,6 +2172,199 @@ namespace gameforger::editor
 			properties.push_back(std::move(prop));
 		}
 		return properties;
+	}
+
+	std::string ScriptRuntime::ExposedScriptProperty::defaultAsText() const
+	{
+		switch (type)
+		{
+			case Type::Number:
+			case Type::Slider:
+			{
+				std::ostringstream stream;
+				stream << defaultNumber;
+				return stream.str();
+			}
+			case Type::Bool:
+				return defaultBool ? "true" : "false";
+			case Type::Vec3:
+			{
+				std::ostringstream stream;
+				stream << defaultVec3.x << ' ' << defaultVec3.y << ' ' << defaultVec3.z;
+				return stream.str();
+			}
+			default:
+				return defaultString;
+		}
+	}
+
+	const std::vector<ScriptRuntime::ExposedScriptProperty>& ScriptRuntime::cachedScriptProperties(
+		const std::filesystem::path& fullScriptPath)
+	{
+		struct CacheEntry
+		{
+			std::filesystem::file_time_type writeTime{};
+			std::vector<ExposedScriptProperty> properties;
+		};
+		static std::unordered_map<std::string, CacheEntry> cache;
+		std::error_code timeError;
+		const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fullScriptPath, timeError);
+		const std::string key = fullScriptPath.generic_string();
+		const auto found = cache.find(key);
+		if (found != cache.end() && !timeError && found->second.writeTime == writeTime)
+		{
+			return found->second.properties;
+		}
+		CacheEntry& entry = cache[key];
+		entry.writeTime = timeError ? std::filesystem::file_time_type{} : writeTime;
+		entry.properties = parseScriptProperties(fullScriptPath);
+		return entry.properties;
+	}
+
+	ScriptRuntime::ScriptPresetTag ScriptRuntime::cachedScriptPreset(const std::filesystem::path& fullScriptPath)
+	{
+		struct CacheEntry
+		{
+			std::filesystem::file_time_type writeTime{};
+			ScriptPresetTag tag;
+		};
+		static std::unordered_map<std::string, CacheEntry> cache;
+		std::error_code timeError;
+		const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fullScriptPath, timeError);
+		const std::string key = fullScriptPath.generic_string();
+		const auto found = cache.find(key);
+		if (found != cache.end() && !timeError && found->second.writeTime == writeTime)
+		{
+			return found->second.tag;
+		}
+		ScriptPresetTag tag;
+		std::ifstream file(fullScriptPath);
+		std::string line;
+		while (std::getline(file, line))
+		{
+			const std::size_t tagPos = line.find("@preset");
+			if (tagPos == std::string::npos)
+			{
+				continue;
+			}
+			// -- @preset FPS Demo | player
+			std::string rest = line.substr(tagPos + 7);
+			const std::size_t bar = rest.find('|');
+			const auto trim = [](std::string text)
+			{
+				while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+				{
+					text.erase(text.begin());
+				}
+				while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+				{
+					text.pop_back();
+				}
+				return text;
+			};
+			tag.name = trim(bar == std::string::npos ? rest : rest.substr(0, bar));
+			tag.role = bar == std::string::npos ? std::string("player") : trim(rest.substr(bar + 1));
+			break;
+		}
+		CacheEntry& entry = cache[key];
+		entry.writeTime = timeError ? std::filesystem::file_time_type{} : writeTime;
+		entry.tag = tag;
+		return tag;
+	}
+
+	std::string ScriptRuntime::scriptPropertyText(const SceneEntity& entity, const std::string& scriptPath,
+		const std::string& propertyName, const std::filesystem::path& projectRoot)
+	{
+		if (const ScriptPropertyOverride* entry = findScriptProperty(entity, scriptPath, propertyName))
+		{
+			return entry->value;
+		}
+		const std::optional<std::filesystem::path> fullPath =
+			core::resolveProjectFile(projectRoot, scriptPath, "Game/Scripts", {".lua"});
+		if (!fullPath.has_value())
+		{
+			return {};
+		}
+		for (const ExposedScriptProperty& property : cachedScriptProperties(*fullPath))
+		{
+			if (property.name == propertyName)
+			{
+				return property.defaultAsText();
+			}
+		}
+		return {};
+	}
+
+	std::vector<int> ScriptRuntime::instanceRefs(const int entityId) const
+	{
+		std::vector<int> refs;
+		const auto found = instancesByEntity_.find(entityId);
+		if (found != instancesByEntity_.end())
+		{
+			for (const ScriptInstance& instance : found->second)
+			{
+				refs.push_back(instance.ref);
+			}
+		}
+		return refs;
+	}
+
+	void ScriptRuntime::setGameplayState(GameplayState* gameplayState) noexcept
+	{
+		gameplayState_ = gameplayState;
+	}
+
+	GameplayState* ScriptRuntime::gameplayState() const noexcept
+	{
+		return gameplayState_;
+	}
+
+	bool ScriptRuntime::invokeHook(
+		const int entityId, const char* functionName, const float number, const std::string& text)
+	{
+		if (state_ == nullptr)
+		{
+			return false;
+		}
+		const auto found = instancesByEntity_.find(entityId);
+		if (found == instancesByEntity_.end())
+		{
+			return false;
+		}
+		// Copy the refs first so the loop never walks a vector a hook
+		// could change underneath it.
+		std::vector<int> refs;
+		refs.reserve(found->second.size());
+		for (const ScriptInstance& instance : found->second)
+		{
+			refs.push_back(instance.ref);
+		}
+		return invokeHookOn(state_, *this, refs, functionName, number, text);
+	}
+
+	bool ScriptRuntime::hasHook(const int entityId, const char* functionName) const
+	{
+		if (state_ == nullptr)
+		{
+			return false;
+		}
+		const auto found = instancesByEntity_.find(entityId);
+		if (found == instancesByEntity_.end())
+		{
+			return false;
+		}
+		for (const ScriptInstance& instance : found->second)
+		{
+			lua_rawgeti(state_, LUA_REGISTRYINDEX, instance.ref);
+			lua_getfield(state_, -1, functionName);
+			const bool isFunction = lua_isfunction(state_, -1);
+			lua_pop(state_, 2);
+			if (isFunction)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	float ScriptRuntime::getScriptNumberField(

@@ -262,6 +262,28 @@ namespace gameforger::editor
 				}
 			}
 
+			if (const json::Value* scriptProperties = obj.find("scriptProperties"))
+			{
+				if (scriptProperties->type == json::Value::Type::Array)
+				{
+					for (const json::Value& entryValue : scriptProperties->arrayValue)
+					{
+						if (entryValue.type != json::Value::Type::Object)
+						{
+							continue;
+						}
+						ScriptPropertyOverride entry;
+						entry.scriptPath = readString(entryValue, "script");
+						entry.name = readString(entryValue, "name");
+						entry.value = readString(entryValue, "value");
+						if (!entry.scriptPath.empty() && !entry.name.empty())
+						{
+							entity.scriptProperties.push_back(std::move(entry));
+						}
+					}
+				}
+			}
+
 			if (const json::Value* animation = obj.find("animation"))
 			{
 				entity.animation.enabled = readBool(*animation, "enabled", false);
@@ -514,6 +536,16 @@ namespace gameforger::editor
 			}
 			json += entity.scripts.empty() ? "],\n" : ("\n" + indent + "  ],\n");
 
+			json += indent + "  \"scriptProperties\": [";
+			for (std::size_t index = 0; index < entity.scriptProperties.size(); ++index)
+			{
+				const ScriptPropertyOverride& entry = entity.scriptProperties[index];
+				json += (index == 0 ? "\n" : ",\n");
+				json += indent + "    {\"script\": \"" + escapeJson(entry.scriptPath) + "\", \"name\": \"" +
+					escapeJson(entry.name) + "\", \"value\": \"" + escapeJson(entry.value) + "\"}";
+			}
+			json += entity.scriptProperties.empty() ? "],\n" : ("\n" + indent + "  ],\n");
+
 			json += indent + "  \"animation\": {\n";
 			json += indent + "    \"enabled\": " + std::string(entity.animation.enabled ? "true" : "false") + ",\n";
 			json += indent + "    \"looping\": " + std::string(entity.animation.looping ? "true" : "false") + ",\n";
@@ -530,6 +562,22 @@ namespace gameforger::editor
 		}
 	}
 
+	std::string serializeScene(const std::vector<SceneEntity>& entities)
+	{
+		std::string json = "{\n";
+		json += "  \"format\": \"GameForgerScene\",\n";
+		json += "  \"version\": 8,\n";
+		json += "  \"entities\": [";
+		for (std::size_t index = 0; index < entities.size(); ++index)
+		{
+			json += (index == 0 ? "\n" : ",\n");
+			appendEntity(json, entities[index], "    ");
+		}
+		json += entities.empty() ? "]\n" : "\n  ]\n";
+		json += "}\n";
+		return json;
+	}
+
 	SceneSaveResult saveScene(const std::filesystem::path& filePath, const std::vector<SceneEntity>& entities)
 	{
 		if (filePath.has_parent_path() && !filePath.parent_path().empty())
@@ -542,17 +590,7 @@ namespace gameforger::editor
 			}
 		}
 
-		std::string json = "{\n";
-		json += "  \"format\": \"GameForgerScene\",\n";
-		json += "  \"version\": 8,\n";
-		json += "  \"entities\": [";
-		for (std::size_t index = 0; index < entities.size(); ++index)
-		{
-			json += (index == 0 ? "\n" : ",\n");
-			appendEntity(json, entities[index], "    ");
-		}
-		json += entities.empty() ? "]\n" : "\n  ]\n";
-		json += "}\n";
+		const std::string json = serializeScene(entities);
 
 		// Atomic write: serialize into a sibling temp file, flush + close,
 		// then rename it over the destination. A crash, disk-full, or kill

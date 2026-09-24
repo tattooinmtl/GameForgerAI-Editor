@@ -25,6 +25,19 @@ namespace gameforger::editor
 	// pitchDegrees too - used for the scripted Game view camera's mouse-look.
 	[[nodiscard]] glm::vec3 yawPitchForward(float yawDegrees, float pitchDegrees);
 
+	// Screen directions for a camera looking along `forward` with the
+	// renderer's glm::lookAt(eye, target, +Y). Screen-right is
+	// cross(forward, up); cross(up, forward) is +X "on paper" but points to
+	// screen-LEFT - that mistake swapped the editor camera's A/D and
+	// inverted its middle-mouse pan (both axes).
+	struct CameraBasis
+	{
+		glm::vec3 forward{0.0F, 0.0F, 1.0F};
+		glm::vec3 right{-1.0F, 0.0F, 0.0F};
+		glm::vec3 up{0.0F, 1.0F, 0.0F};
+	};
+	[[nodiscard]] CameraBasis cameraBasis(const glm::vec3& forward);
+
 	// ViewportRenderer::cameraPosition() computes eye = target + distance *
 	// dir(yaw, pitch). This inverts that relationship: given a desired eye
 	// position and look-at point, it solves for the (yaw, pitch, distance,

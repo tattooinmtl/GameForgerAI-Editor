@@ -20,6 +20,11 @@ namespace gameforger::editor
 	// split as ModelImport.hpp/TextMesh.hpp.
 	[[nodiscard]] LoadedTexture loadTextureImage(const std::filesystem::path& filePath);
 
+	// Same, but rows in top-to-bottom order (undoing the process-wide
+	// stbi_set_flip_vertically_on_load) - for 2D UI images drawn with a
+	// top-left texture origin (ImGui::Image, the runtime HUD): icons, logos.
+	[[nodiscard]] LoadedTexture loadTextureImageTopDown(const std::filesystem::path& filePath);
+
 	// Derives a normal map from a color image's own luminance (bright =
 	// high, dark = low) via a central-difference pass, encoded the standard
 	// way (RGB = normal.xyz * 0.5 + 0.5) - the fallback used when a

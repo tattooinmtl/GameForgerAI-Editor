@@ -65,7 +65,26 @@ namespace gameforger::editor
 					{
 						return {false, false, "Entity was not found in the editor scene."};
 					}
+					const std::string oldName = entity->name;
 					entity->name = value.newName;
+					// Parent links and catapult references are by name -
+					// carry them over so renaming a parent doesn't orphan
+					// its children.
+					for (SceneEntity& other : entities_)
+					{
+						if (other.parentName == oldName)
+						{
+							other.parentName = value.newName;
+						}
+						if (other.catapult.yawEntityName == oldName)
+						{
+							other.catapult.yawEntityName = value.newName;
+						}
+						if (other.catapult.armEntityName == oldName)
+						{
+							other.catapult.armEntityName = value.newName;
+						}
+					}
 					return {true, false, "Entity renamed."};
 				}
 				else if constexpr (std::is_same_v<Command, DuplicateEntityCommand>)
@@ -436,6 +455,53 @@ namespace gameforger::editor
 						return {true, false, "Local scale updated."};
 					}
 				}
+				else if (value.component == "Entity" && value.property == "active")
+				{
+					if (const auto* enabled = std::get_if<bool>(&value.value))
+					{
+						entity->active = *enabled;
+						return {true, false, "Entity active flag updated."};
+					}
+				}
+				else if (value.component == "ScriptProperty" || value.component == "ScriptPropertyReset")
+				{
+					// property = "<scriptPath>#<propertyName>"
+					const std::size_t separator = value.property.rfind('#');
+					if (separator == std::string::npos || separator == 0 ||
+						separator + 1 >= value.property.size())
+					{
+						return {false, false, "Script property must be named \"<script>#<property>\"."};
+					}
+					const std::string scriptPath = value.property.substr(0, separator);
+					const std::string propertyName = value.property.substr(separator + 1);
+					auto& overrides = entity->scriptProperties;
+					const auto existing = std::find_if(
+						overrides.begin(), overrides.end(),
+						[&](const ScriptPropertyOverride& entry)
+						{ return entry.scriptPath == scriptPath && entry.name == propertyName; });
+					if (value.component == "ScriptPropertyReset")
+					{
+						if (existing != overrides.end())
+						{
+							overrides.erase(existing);
+						}
+						return {true, false, "Script property reset to its default."};
+					}
+					const auto* text = std::get_if<std::string>(&value.value);
+					if (text == nullptr)
+					{
+						return {false, false, "Script property values are stored as text."};
+					}
+					if (existing != overrides.end())
+					{
+						existing->value = *text;
+					}
+					else
+					{
+						overrides.push_back(ScriptPropertyOverride{scriptPath, propertyName, *text});
+					}
+					return {true, false, "Script property updated."};
+				}
 				else if (value.component == "Collider" && value.property == "enabled")
 					{
 						if (const auto* enabled = std::get_if<bool>(&value.value))
@@ -704,6 +770,25 @@ namespace gameforger::editor
 			entities_.end(),
 			[&name](const SceneEntity& entity) { return entity.name == name; });
 		return iterator == entities_.end() ? nullptr : &(*iterator);
+	}
+
+	bool EditorScene::isActiveInHierarchy(const SceneEntity& entity) const noexcept
+	{
+		const SceneEntity* current = &entity;
+		// Depth cap doubles as the cycle guard (a parent loop just stops).
+		for (std::size_t depth = 0; current != nullptr && depth <= entities_.size(); ++depth)
+		{
+			if (!current->active)
+			{
+				return false;
+			}
+			if (current->parentName.empty())
+			{
+				return true;
+			}
+			current = findEntity(current->parentName);
+		}
+		return true;
 	}
 
 	SceneEntity* EditorScene::findEntityMutable(int id) noexcept

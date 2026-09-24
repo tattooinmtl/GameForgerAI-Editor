@@ -26,6 +26,8 @@ add_library(GameForgerEngine STATIC
     src/Editor/StbImageImpl.cpp
     src/Editor/StbTrueTypeImpl.cpp
     src/Editor/Animation.cpp
+    # Builds the first-person player + hands + weapons rig (Create menu).
+    src/Editor/FpsRigBuilder.cpp
     # Embeds/runs entity Lua scripts (see ScriptRuntime.hpp) - moved here
     # (from Editor/) alongside ViewportRenderer/InputSource below so
     # GameForgerRuntime can run the exact same Play-mode gameplay loop the
@@ -52,6 +54,8 @@ add_library(GameForgerEngine STATIC
     # Editor/'s main.cpp) so GameForgerRuntime can drive the exact same
     # logic standalone, not just the Editor's own Play sandbox.
     src/Runtime/GameplayLoop.cpp
+    src/Runtime/GameplayHud.cpp
+    src/Runtime/FpsDemoKit.cpp
     # Scripted-camera math (yaw/pitch/distance framing for the followed
     # entity's self.camera:setMode fps/third_person view) - moved here
     # alongside GameplayLoop.cpp for the same reason.
@@ -113,6 +117,8 @@ target_link_libraries(GameForgerTests
 )
 
 target_compile_features(GameForgerTests PRIVATE cxx_std_20)
+# Lets the end-to-end test load the real Game/Scripts/*.lua from the source tree.
+target_compile_definitions(GameForgerTests PRIVATE GAMEFORGER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 if(MSVC)
     target_compile_options(GameForgerTests PRIVATE /W4 /permissive- /EHsc)

@@ -131,14 +131,16 @@ void main()
 		glDeleteShader(vertexShader);
 		glDeleteShader(fragmentShader);
 
-		// Fullscreen quad, position(2) + uv(2). stb_image's row 0 (the top of the
-		// source image) lands at OpenGL texture v=0; pairing it with the screen's
-		// top edge here keeps the splash image right-side up.
+		// Fullscreen quad, position(2) + uv(2). stb_image loads bottom-up
+		// (StbImageImpl.cpp turns on stbi_set_flip_vertically_on_load for the
+		// whole process), so texture v=0 is the BOTTOM of the source image -
+		// pair it with the screen's bottom edge. (The previous mapping
+		// predated that global flip and drew every splash upside down.)
 		constexpr std::array<float, 16> quadVertices{
-			-1.0F, -1.0F, 0.0F, 1.0F,
-			1.0F, -1.0F, 1.0F, 1.0F,
-			1.0F, 1.0F, 1.0F, 0.0F,
-			-1.0F, 1.0F, 0.0F, 0.0F,
+			-1.0F, -1.0F, 0.0F, 0.0F,
+			1.0F, -1.0F, 1.0F, 0.0F,
+			1.0F, 1.0F, 1.0F, 1.0F,
+			-1.0F, 1.0F, 0.0F, 1.0F,
 		};
 		constexpr std::array<unsigned int, 6> quadIndices{0, 1, 2, 0, 2, 3};
 

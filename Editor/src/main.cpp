@@ -10,6 +10,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -31,6 +32,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_internal.h> // DockBuilder API, for the default panel layout
 
 #include <ImGuizmo.h>
 #include <stb_image.h>
@@ -49,6 +51,8 @@
 #include "GameForger/Editor/AIProviderClient.hpp"
 #include "GameForger/Editor/Animation.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
+#include "GameForger/Editor/FpsRigBuilder.hpp"
+#include "GameForger/Editor/Json.hpp"
 #include "GameForger/Editor/ImGuiInputSource.hpp"
 #include "GameForger/Editor/ModelImport.hpp"
 #include "GameForger/Editor/SceneSerializer.hpp"
@@ -62,6 +66,8 @@
 #include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Editor/ViewportRenderer.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
+#include "GameForger/Runtime/GameplayHud.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
 namespace
@@ -101,6 +107,7 @@ namespace
     using gameforger::editor::ScriptRuntime;
     using gameforger::editor::loadScene;
     using gameforger::editor::saveScene;
+    using gameforger::editor::serializeScene;
     using gameforger::editor::buildTextMesh;
     using gameforger::editor::loadModelMesh;
     using gameforger::editor::ModelImportResult;
@@ -129,6 +136,27 @@ namespace
     using gameforger::editor::scriptedPlayCamera;
     using gameforger::editor::yawPitchForward;
     using gameforger::editor::composeEntityPivotFrame;
+    using gameforger::editor::buildFpsPlayerRig;
+    using gameforger::editor::createGameManager;
+    using gameforger::editor::fpsDemoPlayerScripts;
+    using gameforger::editor::dropInventoryItem;
+    using gameforger::editor::ensureInventorySlots;
+    using gameforger::editor::entityProvidesInventory;
+    using gameforger::editor::findPickupItemCandidate;
+    using gameforger::editor::FpsRigOptions;
+    using gameforger::editor::FpsRigBuildResult;
+    using gameforger::editor::hasScript;
+    using gameforger::editor::hasTag;
+    using gameforger::editor::kHotbarSlotCount;
+    using gameforger::editor::kInventorySlotCount;
+    using gameforger::editor::kItemScriptPath;
+    using gameforger::editor::pickUpItem;
+    using gameforger::editor::pickupDisplayName;
+    using gameforger::editor::tickEffects;
+    using gameforger::editor::drawGameplayHud;
+    using gameforger::editor::HudCanvas;
+    using gameforger::editor::HudColor;
+    using gameforger::editor::HudFrame;
     using gameforger::editor::composeEntityTransform;
 
     enum class CameraDragMode
@@ -545,7 +573,8 @@ namespace
         bool resultSuccess = false;
         std::string resultContent;
 
-        std::array<char, 8192> previewBuffer{};
+        // std::string (not a fixed array) so long generated scripts are never cut off.
+        std::string previewText;
         bool previewSynced = false;
         bool resultLogged = false;
     };
@@ -554,10 +583,36 @@ namespace
     {
         bool requestOpen = false;
         std::string scriptPath;
-        std::array<char, 16384> buffer{};
+        // Whole file text - grows as needed, so Save never writes a truncated script.
+        std::string text;
         std::string status;
         bool statusSuccess = false;
     };
+
+    // Multi-line text box bound to a std::string that grows as the user types
+    // (ImGuiInputTextFlags_CallbackResize), so there is no size limit.
+    int resizeStringCallback(ImGuiInputTextCallbackData* data)
+    {
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+        {
+            auto* text = static_cast<std::string*>(data->UserData);
+            text->resize(static_cast<std::size_t>(data->BufTextLen));
+            data->Buf = text->data();
+        }
+        return 0;
+    }
+
+    bool inputTextMultilineString(const char* label, std::string& text, const ImVec2& size)
+    {
+        return ImGui::InputTextMultiline(
+            label,
+            text.data(),
+            text.capacity() + 1,
+            size,
+            ImGuiInputTextFlags_CallbackResize,
+            resizeStringCallback,
+            &text);
+    }
 
     struct Ray
     {
@@ -565,20 +620,72 @@ namespace
         glm::vec3 direction;
     };
 
+    // One entry of Game/AI/Providers.json - the only provider list (audit
+    // A3: it used to be hard-coded here too, and the file's activeProvider
+    // was ignored).
     struct AIProvider
     {
-        const char* id;
-        const char* displayName;
-        const char* endpoint;
-        const char* model;
-        const char* keySource;
+        std::string id;
+        std::string displayName;
+        std::string endpoint;
+        std::string model;
+        std::string keySource;
     };
+
+    struct AIProviderList
+    {
+        std::vector<AIProvider> providers;
+        std::string activeProvider; // the file's "activeProvider"
+    };
+
+    AIProviderList loadProviderList(const std::filesystem::path& providersFile)
+    {
+        namespace json = gameforger::editor::json;
+        AIProviderList list;
+        std::ifstream input(providersFile, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const std::optional<json::Value> root = json::parse(text);
+        if (!root.has_value())
+        {
+            return list;
+        }
+        const auto stringField = [](const json::Value& object, const char* key)
+        {
+            const json::Value* value = object.find(key);
+            return value != nullptr ? value->asString().value_or("") : std::string();
+        };
+        list.activeProvider = stringField(*root, "activeProvider");
+        if (const json::Value* entries = root->find("providers"))
+        {
+            for (const json::Value& entry : entries->arrayValue)
+            {
+                AIProvider provider;
+                provider.id = stringField(entry, "id");
+                if (provider.id.empty())
+                {
+                    continue;
+                }
+                provider.displayName = stringField(entry, "displayName");
+                if (provider.displayName.empty())
+                {
+                    provider.displayName = provider.id;
+                }
+                provider.endpoint = stringField(entry, "endpoint");
+                provider.model = stringField(entry, "model");
+                provider.keySource = stringField(entry, "apiKeyEnvironmentVariable");
+                list.providers.push_back(std::move(provider));
+            }
+        }
+        return list;
+    }
 
     struct AISetupState
     {
-        int selectedProvider = 0;
-        std::array<char, 256> endpoint{};
-        std::array<char, 128> model{};
+        // Filled from Game/AI/Providers.json (re-read while Settings > AI
+        // Setup is open). The selection is kept by id; it starts on the
+        // file's activeProvider.
+        std::vector<AIProvider> providers;
+        std::string selectedProviderId;
         bool calibrated = false;
         bool setupChanged = false;
         // Filled in by the Test provider button: true if a probe request
@@ -587,6 +694,16 @@ namespace
         bool tested = false;
         bool testSucceeded = false;
         std::string testMessage;
+
+        // The probe runs on this worker thread (audit A2) so the editor keeps
+        // drawing while it waits (up to the provider's timeoutSeconds).
+        // pollProviderTest() picks the result up on the UI thread.
+        std::atomic<bool> testing{false};
+        std::thread testWorker;
+        std::mutex testMutex;
+        bool hasTestResult = false;
+        std::string testProviderId;
+        AIProviderResponse testResponse;
     };
 
     enum class ThemeChoice
@@ -625,20 +742,6 @@ namespace
         bool hasPlanResult = false;
         AIPlanResult planResult;
     };
-
-    constexpr std::array<AIProvider, 2> providers{
-        AIProvider{
-            "nvidia",
-            "NVIDIA NIM",
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            "nvidia/nemotron-3-nano-30b-a3b",
-            "NVIDIA_API_KEY"},
-        AIProvider{
-            "agnes-ai",
-            "Agnes-AI",
-            "https://apihub.agnes-ai.com/v1/chat/completions",
-            "agnes-2.0-flash",
-            "AGNES_AI_API_KEY"}};
 
     const char* primitiveTypeName(const PrimitiveType type)
     {
@@ -747,22 +850,40 @@ namespace
         }
     }
 
+    // Names of every selected entity (the whole multi-selection, audit B5),
+    // taken up front because the commands below change the entity list.
+    std::vector<std::string> selectedEntityNames(const EditorScene& scene, const SelectionState& selection)
+    {
+        std::vector<std::string> names;
+        for (const int id : selection.multiSelectedIds)
+        {
+            if (const SceneEntity* entity = scene.findEntity(id))
+            {
+                names.push_back(entity->name);
+            }
+        }
+        return names;
+    }
+
+    // Duplicates every selected entity and selects the copies. All commands
+    // run in the same frame, so the undo snapshot coalesces them into one step.
     void duplicateSelected(EditorScene& scene, AICommandBus& commandBus, SelectionState& selection)
     {
-        if (!selection.selectedEntityId.has_value())
+        std::vector<int> duplicateIds;
+        for (const std::string& name : selectedEntityNames(scene, selection))
         {
-            return;
+            const AICommandResult result = commandBus.execute(DuplicateEntityCommand{name});
+            if (result.success && !scene.entities().empty())
+            {
+                // DuplicateEntityCommand always appends the new entity at the end.
+                duplicateIds.push_back(scene.entities().back().id);
+            }
         }
-        const SceneEntity* entity = scene.findEntity(*selection.selectedEntityId);
-        if (entity == nullptr)
+        if (!duplicateIds.empty())
         {
-            return;
-        }
-        const AICommandResult result = commandBus.execute(DuplicateEntityCommand{entity->name});
-        if (result.success && !scene.entities().empty())
-        {
-            // DuplicateEntityCommand always appends the new entity at the end.
-            selectOnly(selection, scene.entities().back().id);
+            selection.multiSelectedIds = duplicateIds;
+            selection.shiftAnchorId.reset();
+            syncPrimarySelection(selection);
         }
     }
 
@@ -953,6 +1074,93 @@ namespace
             return std::nullopt;
         }
         return std::filesystem::path(fileBuffer.data());
+    }
+
+    // The open scene file (audit B2): its text at the last New/Open/Save, so
+    // New, Open and closing the window can ask "Save / Don't Save / Cancel"
+    // when there are unsaved changes.
+    struct SceneDocumentState
+    {
+        enum class PendingAction
+        {
+            None,
+            NewScene,
+            OpenScene,
+            Quit
+        };
+
+        std::string savedText;
+        PendingAction pending = PendingAction::None;
+        bool openPrompt = false;    // open the popup on the next drawMainMenu
+        bool quitConfirmed = false; // the user chose to close the editor
+    };
+
+    // The scene as it is in edit mode. During Play the live scene is the
+    // game's state, so the copy taken when Play started is what is saved.
+    const std::vector<SceneEntity>& editModeEntities(const EditorScene& scene, const PlayModeState& playMode)
+    {
+        return playMode.isPlaying ? playMode.savedEntities : scene.entities();
+    }
+
+    bool sceneHasUnsavedChanges(
+        const EditorScene& scene, const PlayModeState& playMode, const SceneDocumentState& document)
+    {
+        return serializeScene(editModeEntities(scene, playMode)) != document.savedText;
+    }
+
+    // Saves to `path`; on success it becomes the current scene file.
+    bool saveSceneToPath(
+        const std::vector<SceneEntity>& entities,
+        const std::filesystem::path& path,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console)
+    {
+        const SceneSaveResult result = saveScene(path, entities);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Error, result.message);
+        if (!result.success)
+        {
+            return false;
+        }
+        currentScenePath = path;
+        document.savedText = serializeScene(entities);
+        return true;
+    }
+
+    bool saveSceneAsDialog(
+        const EditorScene& scene,
+        const PlayModeState& playMode,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console,
+        const HWND owner,
+        const std::filesystem::path& scenesDirectory)
+    {
+        const std::optional<std::filesystem::path> picked = showSaveSceneDialog(owner, scenesDirectory);
+        if (!picked.has_value())
+        {
+            return false;
+        }
+        return saveSceneToPath(editModeEntities(scene, playMode), *picked, currentScenePath, document, console);
+    }
+
+    // Save Scene (Ctrl+S). A scene that has no file yet (New Scene,
+    // or the empty scene the editor starts with) asks where to save it,
+    // instead of overwriting the file that was open before.
+    bool saveCurrentScene(
+        const EditorScene& scene,
+        const PlayModeState& playMode,
+        std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
+        ConsoleState& console,
+        const HWND owner,
+        const std::filesystem::path& scenesDirectory)
+    {
+        if (currentScenePath.empty())
+        {
+            return saveSceneAsDialog(scene, playMode, currentScenePath, document, console, owner, scenesDirectory);
+        }
+        return saveSceneToPath(editModeEntities(scene, playMode), currentScenePath, currentScenePath, document, console);
     }
 
     // Native "Open" dialog filtered to font files, for the Toolbox's Text
@@ -1324,7 +1532,8 @@ namespace
         }
 
         GLuint textureId = 0;
-        const LoadedTexture image = loadTextureImage(projectRoot / relativePath);
+        // Top-down rows: ImGui::Image samples with a top-left origin.
+        const LoadedTexture image = gameforger::editor::loadTextureImageTopDown(projectRoot / relativePath);
         if (image.success)
         {
             glGenTextures(1, &textureId);
@@ -1342,29 +1551,286 @@ namespace
         return textureId;
     }
 
+    // The shared gameplay HUD (GameplayHud.hpp) drawn onto an ImGui draw
+    // list - the Game view's implementation; GameForgerRuntime has its own
+    // GL one (RuntimeHud), so both show the same effects/HUD.
+    class ImGuiHudCanvas final : public HudCanvas
+    {
+    public:
+        ImGuiHudCanvas(ImDrawList* drawList, std::filesystem::path projectRoot)
+            : drawList_(drawList), projectRoot_(std::move(projectRoot))
+        {
+        }
+
+        void line(const glm::vec2& from, const glm::vec2& to, const HudColor& color, const float thickness) override
+        {
+            drawList_->AddLine(ImVec2(from.x, from.y), ImVec2(to.x, to.y), toU32(color), thickness);
+        }
+        void rectFilled(const glm::vec2& min, const glm::vec2& max, const HudColor& color, const float rounding) override
+        {
+            drawList_->AddRectFilled(ImVec2(min.x, min.y), ImVec2(max.x, max.y), toU32(color), rounding);
+        }
+        void rect(const glm::vec2& min, const glm::vec2& max, const HudColor& color, const float rounding,
+            const float thickness) override
+        {
+            drawList_->AddRect(ImVec2(min.x, min.y), ImVec2(max.x, max.y), toU32(color), rounding, 0, thickness);
+        }
+        void circleFilled(const glm::vec2& center, const float radius, const HudColor& color) override
+        {
+            drawList_->AddCircleFilled(ImVec2(center.x, center.y), radius, toU32(color));
+        }
+        void text(const glm::vec2& position, const HudColor& color, const std::string& text, const float scale) override
+        {
+            drawList_->AddText(
+                ImGui::GetFont(), ImGui::GetFontSize() * scale, ImVec2(position.x, position.y), toU32(color), text.c_str());
+        }
+        [[nodiscard]] glm::vec2 textSize(const std::string& text, const float scale) override
+        {
+            const ImVec2 size = ImGui::GetFont()->CalcTextSizeA(
+                ImGui::GetFontSize() * scale, std::numeric_limits<float>::max(), 0.0F, text.c_str());
+            return {size.x, size.y};
+        }
+        void image(const std::string& projectRelativePath, const glm::vec2& min, const glm::vec2& max) override
+        {
+            const GLuint texture = ensureIconTextureGpu(projectRelativePath, projectRoot_);
+            if (texture != 0)
+            {
+                drawList_->AddImage(static_cast<ImTextureID>(texture), ImVec2(min.x, min.y), ImVec2(max.x, max.y));
+            }
+        }
+
+    private:
+        static ImU32 toU32(const HudColor& color)
+        {
+            return ImGui::ColorConvertFloat4ToU32(ImVec4(color.r, color.g, color.b, color.a));
+        }
+
+        ImDrawList* drawList_;
+        std::filesystem::path projectRoot_;
+    };
+
+    // Scripts grouped by their `-- @preset <Name> | <role>` tag (see
+    // ScriptRuntime::ScriptPresetTag), e.g. "FPS Demo" -> fps_player.lua
+    // (player), health.lua (damageable), items.lua (item)... Re-scanned at
+    // most once a second.
+    struct PresetScript
+    {
+        std::string path; // relative to projectRoot
+        std::string role;
+    };
+    const std::map<std::string, std::vector<PresetScript>>& scriptPresets(const std::filesystem::path& projectRoot)
+    {
+        static std::map<std::string, std::vector<PresetScript>> presets;
+        static double lastScanTime = -1000.0;
+        const double now = ImGui::GetTime();
+        if (now - lastScanTime < 1.0)
+        {
+            return presets;
+        }
+        lastScanTime = now;
+        presets.clear();
+        std::error_code error;
+        const std::filesystem::path scriptsRoot = projectRoot / "Game" / "Scripts";
+        for (const auto& entry : std::filesystem::directory_iterator(scriptsRoot, error))
+        {
+            if (entry.path().extension() != ".lua")
+            {
+                continue;
+            }
+            const ScriptRuntime::ScriptPresetTag tag = ScriptRuntime::cachedScriptPreset(entry.path());
+            if (!tag.name.empty())
+            {
+                presets[tag.name].push_back(
+                    {"Game/Scripts/" + entry.path().filename().string(), tag.role});
+            }
+        }
+        return presets;
+    }
+
+    // The preset scripts that belong on the same object as a "player" /
+    // "damageable" script (everything but items/managers), in the order the
+    // FPS Demo preset lists them when it's that preset.
+    std::vector<std::string> presetLinkableScripts(
+        const std::filesystem::path& projectRoot, const std::string& presetName)
+    {
+        std::vector<std::string> paths;
+        const auto& presets = scriptPresets(projectRoot);
+        const auto found = presets.find(presetName);
+        if (found == presets.end())
+        {
+            return paths;
+        }
+        for (const std::string& known : fpsDemoPlayerScripts())
+        {
+            for (const PresetScript& script : found->second)
+            {
+                if (script.path == known && (script.role == "player" || script.role == "damageable"))
+                {
+                    paths.push_back(script.path);
+                }
+            }
+        }
+        for (const PresetScript& script : found->second)
+        {
+            if ((script.role == "player" || script.role == "damageable") &&
+                std::find(paths.begin(), paths.end(), script.path) == paths.end())
+            {
+                paths.push_back(script.path);
+            }
+        }
+        return paths;
+    }
+
+    // Copies a picked file into <projectRoot>/<relativeFolder> (keeping an
+    // existing same-named file), returns the new project-relative path.
+    std::optional<std::string> importFileIntoFolder(
+        const std::filesystem::path& source, const std::filesystem::path& projectRoot, const std::string& relativeFolder)
+    {
+        const std::filesystem::path folder = projectRoot / relativeFolder;
+        std::error_code error;
+        std::filesystem::create_directories(folder, error);
+        if (error)
+        {
+            return std::nullopt;
+        }
+        const std::filesystem::path destination = folder / source.filename();
+        if (!std::filesystem::exists(destination))
+        {
+            std::filesystem::copy_file(source, destination, error);
+            if (error)
+            {
+                return std::nullopt;
+            }
+        }
+        const std::filesystem::path relative = std::filesystem::relative(destination, projectRoot, error);
+        if (error)
+        {
+            return std::nullopt;
+        }
+        return relative.generic_string();
+    }
+
+    // Every image under the built-in icon pack and Game/Icons/ (where
+    // "Change Icon..." imports land), relative to projectRoot. Re-scanned at
+    // most once a second - it's called from the Inspector every frame
+    // while an icon combo is open.
+    const std::vector<std::string>& projectIconPaths(const std::filesystem::path& projectRoot)
+    {
+        static std::vector<std::string> paths;
+        static double lastScanTime = -1000.0;
+        const double now = ImGui::GetTime();
+        if (now - lastScanTime < 1.0)
+        {
+            return paths;
+        }
+        lastScanTime = now;
+        paths.clear();
+        const std::array<std::filesystem::path, 2> iconRoots{
+            projectRoot / "Game" / "Icons", projectRoot / "Game" / "Models" / "iconpack1" / "128"};
+        for (const std::filesystem::path& iconRoot : iconRoots)
+        {
+            std::error_code walkError;
+            if (!std::filesystem::exists(iconRoot, walkError))
+            {
+                continue;
+            }
+            for (const std::filesystem::directory_entry& fileEntry :
+                std::filesystem::recursive_directory_iterator(iconRoot, walkError))
+            {
+                if (!fileEntry.is_regular_file())
+                {
+                    continue;
+                }
+                std::string extension = fileEntry.path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".bmp" &&
+                    extension != ".tga")
+                {
+                    continue;
+                }
+                std::error_code relativeError;
+                const std::string relative =
+                    std::filesystem::relative(fileEntry.path(), projectRoot, relativeError).generic_string();
+                if (!relativeError)
+                {
+                    paths.push_back(relative);
+                }
+            }
+        }
+        return paths;
+    }
+
+    // Deletes every selected entity (audit B5) - one undo step, same
+    // same-frame coalescing as duplicateSelected.
     void deleteSelected(EditorScene& scene, AICommandBus& commandBus, SelectionState& selection)
     {
-        if (!selection.selectedEntityId.has_value())
+        const std::vector<std::string> names = selectedEntityNames(scene, selection);
+        if (names.empty())
         {
             return;
         }
-        const SceneEntity* entity = scene.findEntity(*selection.selectedEntityId);
-        if (entity == nullptr)
+        for (const std::string& name : names)
         {
-            return;
+            // An entity may already be gone if deleting its parent removed it.
+            if (scene.findEntity(name) != nullptr)
+            {
+                (void)commandBus.execute(DeleteEntityCommand{name});
+            }
         }
-        commandBus.execute(DeleteEntityCommand{entity->name});
         clearSelection(selection);
     }
 
-    void selectProvider(AISetupState& state, const int providerIndex)
+    void selectProvider(AISetupState& state, const std::string& providerId)
     {
-        state.selectedProvider = providerIndex;
-        const AIProvider& provider = providers[static_cast<std::size_t>(providerIndex)];
-        std::snprintf(state.endpoint.data(), state.endpoint.size(), "%s", provider.endpoint);
-        std::snprintf(state.model.data(), state.model.size(), "%s", provider.model);
+        state.selectedProviderId = providerId;
         state.calibrated = false;
         state.setupChanged = true;
+    }
+
+    // The editor's default panel layout (audit B20). It used to exist only in
+    // the user's own GameForgerEditorLayout.ini, so a fresh folder - and
+    // Edit > Reset Editor Layout - opened every panel small and floating.
+    // Same arrangement as that file: Hierarchy over Project on the left,
+    // Inspector over Toolbox on the right, Viewport/Game/Cine Camera Preview
+    // tabs in the middle, AI Forge/Animation/Console/Storyboard tabs below.
+    void buildDefaultDockLayout(const ImGuiID dockspaceId, const ImGuiViewport* viewport)
+    {
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodePos(dockspaceId, viewport->WorkPos);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+
+        ImGuiID center = dockspaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.19F, nullptr, &center);
+        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.24F, nullptr, &center);
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30F, nullptr, &center);
+        const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.42F, nullptr, &left);
+        const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.38F, nullptr, &right);
+
+        ImGui::DockBuilderDockWindow("Hierarchy", left);
+        ImGui::DockBuilderDockWindow("Project", leftBottom);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Toolbox", rightBottom);
+        ImGui::DockBuilderDockWindow("Viewport", center);
+        ImGui::DockBuilderDockWindow("Game", center);
+        ImGui::DockBuilderDockWindow("Cine Camera Preview", center);
+        ImGui::DockBuilderDockWindow("AI Forge", bottom);
+        ImGui::DockBuilderDockWindow("Animation", bottom);
+        ImGui::DockBuilderDockWindow("Console", bottom);
+        ImGui::DockBuilderDockWindow("Storyboard", bottom);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    // Shows `name`'s tab in its dock group. Focus alone doesn't do it, and
+    // a group always shows the tab of the focused window if it holds it.
+    void selectDockedTab(const char* name)
+    {
+        ImGuiWindow* window = ImGui::FindWindowByName(name);
+        if (window != nullptr && window->DockNode != nullptr && window->DockNode->TabBar != nullptr)
+        {
+            window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+        }
     }
 
     void glfwErrorCallback(const int error, const char* description)
@@ -1400,6 +1866,32 @@ namespace
             nullptr);
     }
 
+    // Create > FPS Player / FPS Demo Arena - builds the player, hands and
+    // weapons rig (FpsRigBuilder.cpp) where the editor camera is looking,
+    // and selects the player.
+    void createFpsPlayer(
+        EditorScene& scene,
+        AICommandBus& commandBus,
+        SelectionState& selection,
+        ConsoleState& console,
+        const EditorCameraState& camera,
+        const bool demoArena)
+    {
+        FpsRigOptions options;
+        options.position = glm::vec3(camera.target.x, 0.0F, camera.target.z);
+        options.includeDemoContent = demoArena;
+        options.includeGround = demoArena;
+        const FpsRigBuildResult result = buildFpsPlayerRig(scene, commandBus, options);
+        logMessage(console, result.success ? LogLevel::Info : LogLevel::Warning, result.message);
+        if (const SceneEntity* player = scene.findEntity(result.playerName))
+        {
+            selectOnly(selection, player->id);
+        }
+        logMessage(console, LogLevel::Info,
+            "Press Play: WASD move, mouse look, E pick up, I inventory, 1-8 weapons, Left Mouse attack, "
+            "Right Mouse aim, R reload, C camera.");
+    }
+
     void drawMainMenu(
         EditorScene& scene,
         AICommandBus& commandBus,
@@ -1413,9 +1905,11 @@ namespace
         SettingsState& settings,
         EditHistoryState& history,
         std::filesystem::path& currentScenePath,
+        SceneDocumentState& document,
         const HWND nativeWindowHandle,
         bool& resetLayout)
     {
+        using PendingAction = SceneDocumentState::PendingAction;
         const std::filesystem::path scenesDirectory = projectRoot / "Game" / "Scenes";
 
         const auto newScene = [&]()
@@ -1424,6 +1918,9 @@ namespace
             clearSelection(selection);
             history.undoStack.clear();
             history.redoStack.clear();
+            // No file yet: the next Save asks where (audit B2).
+            currentScenePath.clear();
+            document.savedText = serializeScene(scene.entities());
             logMessage(console, LogLevel::Info, "New scene created.");
         };
         const auto openScene = [&]()
@@ -1434,7 +1931,43 @@ namespace
                 if (loadSceneAndLog(scene, *picked, selection, history, console))
                 {
                     currentScenePath = *picked;
+                    document.savedText = serializeScene(scene.entities());
                 }
+            }
+        };
+        const auto saveCurrent = [&]()
+        {
+            return saveCurrentScene(
+                scene, playMode, currentScenePath, document, console, nativeWindowHandle, scenesDirectory);
+        };
+        const auto runSceneAction = [&](const PendingAction action)
+        {
+            switch (action)
+            {
+            case PendingAction::NewScene:
+                newScene();
+                break;
+            case PendingAction::OpenScene:
+                openScene();
+                break;
+            case PendingAction::Quit:
+                document.quitConfirmed = true;
+                break;
+            case PendingAction::None:
+                break;
+            }
+        };
+        // New and Open come through here: with unsaved changes, ask first.
+        const auto requestSceneAction = [&](const PendingAction action)
+        {
+            if (sceneHasUnsavedChanges(scene, playMode, document))
+            {
+                document.pending = action;
+                document.openPrompt = true;
+            }
+            else
+            {
+                runSceneAction(action);
             }
         };
 
@@ -1443,27 +1976,62 @@ namespace
             const ImGuiIO& io = ImGui::GetIO();
             if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             {
-                newScene();
+                requestSceneAction(PendingAction::NewScene);
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
             {
-                openScene();
+                requestSceneAction(PendingAction::OpenScene);
             }
             else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                (void)saveCurrent();
             }
-            else if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+            // Undo/redo keys are handled once, in drawEditorPanels (audit B1).
+        }
+
+        // "Save / Don't Save / Cancel" before New, Open or closing the window
+        // (the window's close button sets openPrompt from the main loop).
+        if (document.openPrompt)
+        {
+            ImGui::OpenPopup("Unsaved Changes");
+            document.openPrompt = false;
+        }
+        if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            const std::string sceneName =
+                currentScenePath.empty() ? std::string("the new scene") : currentScenePath.filename().string();
+            ImGui::Text("Save changes to %s?", sceneName.c_str());
+            ImGui::TextDisabled("If you don't save, your changes are lost.");
+            ImGui::Separator();
+            const PendingAction action = document.pending;
+            bool close = false;
+            bool run = false;
+            if (ImGui::Button("Save", ImVec2(110.0F, 0.0F)))
             {
-                performUndo(history, scene, selection);
+                // A cancelled Save As dialog counts as Cancel.
+                run = saveCurrent();
+                close = true;
             }
-            else if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+            ImGui::SameLine();
+            if (ImGui::Button("Don't Save", ImVec2(110.0F, 0.0F)))
             {
-                performRedo(history, scene, selection);
+                run = true;
+                close = true;
             }
-            else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y))
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(110.0F, 0.0F)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
             {
-                performRedo(history, scene, selection);
+                close = true;
+            }
+            if (close)
+            {
+                document.pending = PendingAction::None;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+            if (run)
+            {
+                runSceneAction(action);
             }
         }
 
@@ -1481,27 +2049,56 @@ namespace
         {
             if (ImGui::MenuItem("New Scene", "Ctrl+N"))
             {
-                newScene();
+                requestSceneAction(PendingAction::NewScene);
             }
             if (ImGui::MenuItem("Open Scene...", "Ctrl+O"))
             {
-                openScene();
+                requestSceneAction(PendingAction::OpenScene);
             }
             if (ImGui::MenuItem("Save Scene", "Ctrl+S"))
             {
-                saveSceneAndLog(scene, currentScenePath, console);
+                (void)saveCurrent();
             }
             if (ImGui::MenuItem("Save Scene As..."))
             {
-                if (const std::optional<std::filesystem::path> picked =
-                        showSaveSceneDialog(nativeWindowHandle, scenesDirectory))
-                {
-                    saveSceneAndLog(scene, *picked, console);
-                    currentScenePath = *picked;
-                }
+                (void)saveSceneAsDialog(
+                    scene, playMode, currentScenePath, document, console, nativeWindowHandle, scenesDirectory);
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Build Game..."))
+            if (ImGui::MenuItem("Import FPS Demo Kit into This Project"))
+            {
+                // The kit's source: the engine folder this editor was built
+                // from (found by walking up from the editor executable).
+                std::array<wchar_t, MAX_PATH> exePath{};
+                GetModuleFileNameW(nullptr, exePath.data(), static_cast<DWORD>(exePath.size()));
+                const std::optional<std::filesystem::path> kitSource =
+                    gameforger::editor::findFpsDemoKitSource(std::filesystem::path(exePath.data()).parent_path());
+                if (!kitSource.has_value())
+                {
+                    logMessage(console, LogLevel::Error,
+                        "Could not find the FPS Demo kit (Game/Scripts/FPSDemo) next to or above the editor.");
+                }
+                else
+                {
+                    const gameforger::editor::FpsDemoKitImportResult imported =
+                        gameforger::editor::importFpsDemoKit(*kitSource, projectRoot, false);
+                    logMessage(console, imported.success ? LogLevel::Info : LogLevel::Error, imported.message);
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Copies the FPS Demo scripts (Game/Scripts/FPSDemo) and their icons "
+                    "(Game/Icons/FPSDemo) into this project. Files already here are kept.");
+            }
+            // Build names the .gfai after the scene file, so the scene must be
+            // saved once first (audit B2).
+            const bool sceneHasFile = !currentScenePath.empty();
+            const bool buildClicked = ImGui::MenuItem("Build Game...", nullptr, false, sceneHasFile);
+            if (!sceneHasFile && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Save the scene first (File > Save Scene As...).");
+            }
+            if (buildClicked)
             {
                 // "Build" = export the current scene to the .gfai extension
                 // the standalone Runtime ("the engine") loads, and point
@@ -1612,6 +2209,41 @@ namespace
             if (ImGui::MenuItem("Capsule"))
             {
                 spawnPrimitive(scene, commandBus, selection, PrimitiveType::Capsule, "Capsule");
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("FPS Player (Hands + Weapons)"))
+            {
+                createFpsPlayer(scene, commandBus, selection, console, camera, false);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "A first-person player with fps_player.lua and animated hands holding 8 weapons "
+                    "(sword, axe, hammer, pickaxe, pistol, AK-47, taser, chain lightning).");
+            }
+            if (ImGui::MenuItem("Game Manager"))
+            {
+                const std::string managerName = createGameManager(scene, commandBus, camera.target);
+                if (const SceneEntity* manager = scene.findEntity(managerName))
+                {
+                    selectOnly(selection, manager->id);
+                    logMessage(console, LogLevel::Info,
+                        "Created '" + managerName + "' - set the game title and splash logo in the Inspector.");
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("The built game's title, splash logo and intro message (game_manager.lua).");
+            }
+            if (ImGui::MenuItem("FPS Demo Arena (Player, Weapon Pickups, Targets)"))
+            {
+                createFpsPlayer(scene, commandBus, selection, console, camera, true);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "The FPS Player plus a ground, one items.lua pickup of every weapon, training dummies, "
+                    "a chasing enemy and a rock to mine - press Play and try it.");
             }
             ImGui::EndMenu();
         }
@@ -1730,6 +2362,15 @@ namespace
                 playMode.gameCameraLookPitchDegrees = 0.0F;
                 playMode.cursorLockSuppressed = false;
                 playMode.gameplay.inventoryItems.clear();
+                ensureInventorySlots(playMode.gameplay);
+                playMode.gameplay.selectedSlot = 0;
+                playMode.gameplay.inventoryOpen = false;
+                playMode.gameplay.beams.clear();
+                playMode.gameplay.flashes.clear();
+                playMode.gameplay.floatingTexts.clear();
+                playMode.gameplay.hudBars.clear();
+                playMode.gameplay.messageText.clear();
+                playMode.gameplay.messageSecondsRemaining = 0.0F;
                 playMode.inventoryWindowOpen = false;
                 playMode.gameplay.projectiles.clear();
                 playMode.gameplay.heldItemEntityName.clear();
@@ -1769,6 +2410,9 @@ namespace
                         playMode.gameplay.projectiles.push_back(
                             GameplayState::Projectile{from, velocity, hitTag, 6.0F, true});
                     });
+                // After initialize() (which resets it): backs self.inventory,
+                // self.camera:getPitch/getAim and the beam/flash effects.
+                scriptRuntime.setGameplayState(&playMode.gameplay);
                 for (const SceneEntity& entity : scene.entities())
                 {
                     for (const std::string& scriptPath : entity.scripts)
@@ -1839,22 +2483,88 @@ namespace
         ImGui::EndMainMenuBar();
     }
 
+    // Called every frame (even with Settings closed) so a finished provider
+    // test is reported as soon as its worker thread is done.
+    void pollProviderTest(AISetupState& state, ConsoleState& console)
+    {
+        AIProviderResponse probe;
+        std::string providerId;
+        {
+            const std::lock_guard<std::mutex> lock(state.testMutex);
+            if (!state.hasTestResult)
+            {
+                return;
+            }
+            state.hasTestResult = false;
+            probe = std::move(state.testResponse);
+            providerId = state.testProviderId;
+        }
+        if (state.testWorker.joinable())
+        {
+            state.testWorker.join();
+        }
+        state.tested = true;
+        state.testSucceeded = probe.success;
+        // Redact: don't echo back the full body (which can echo the prompt
+        // or carry provider-side debug info). Just report status + truncated
+        // error.
+        std::string message;
+        if (probe.success)
+        {
+            message = "OK (HTTP " + std::to_string(probe.statusCode) + ")";
+        }
+        else
+        {
+            const std::string err = probe.error.empty() ? "no error message" : probe.error;
+            const std::size_t maxLen = 200;
+            message = "HTTP " + std::to_string(probe.statusCode) + " - " +
+                (err.size() > maxLen ? err.substr(0, maxLen) + "..." : err);
+        }
+        state.testMessage = message;
+        state.calibrated = probe.success;
+        state.setupChanged = false;
+        logMessage(
+            console,
+            probe.success ? LogLevel::Info : LogLevel::Error,
+            "Provider test (" + providerId + "): " + message);
+    }
+
     void drawAiSetupSettingsContent(
         AISetupState& state,
         const AIProviderClient& providerClient,
+        const std::filesystem::path& projectRoot,
         ConsoleState& console)
     {
         ImGui::TextUnformatted("Provider and model configuration");
         ImGui::Separator();
 
-        if (ImGui::BeginCombo("Provider", providers[static_cast<std::size_t>(state.selectedProvider)].displayName))
+        // Everything here comes from Game/AI/Providers.json, the only place
+        // the AI client reads it (audits A1, A3). Re-read while this page is
+        // shown, so edits saved in the file appear here right away.
+        const std::filesystem::path providersFile = projectRoot / "Game" / "AI" / "Providers.json";
+        state.providers = loadProviderList(providersFile).providers;
+        const AIProvider* current = nullptr;
+        for (const AIProvider& provider : state.providers)
         {
-            for (int index = 0; index < static_cast<int>(providers.size()); ++index)
+            if (provider.id == state.selectedProviderId)
             {
-                const bool selected = state.selectedProvider == index;
-                if (ImGui::Selectable(providers[static_cast<std::size_t>(index)].displayName, selected))
+                current = &provider;
+            }
+        }
+
+        if (state.providers.empty())
+        {
+            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "No providers in Game/AI/Providers.json.");
+        }
+        else if (ImGui::BeginCombo("Provider", current != nullptr ? current->displayName.c_str() : "(choose)"))
+        {
+            for (const AIProvider& provider : state.providers)
+            {
+                const bool selected = &provider == current;
+                if (ImGui::Selectable(provider.displayName.c_str(), selected))
                 {
-                    selectProvider(state, index);
+                    selectProvider(state, provider.id);
+                    current = &provider;
                 }
                 if (selected)
                 {
@@ -1864,48 +2574,78 @@ namespace
             ImGui::EndCombo();
         }
 
-        ImGui::InputText("Endpoint", state.endpoint.data(), state.endpoint.size());
-        ImGui::InputText("Model", state.model.data(), state.model.size());
-        ImGui::Text("API key source: %s", providers[static_cast<std::size_t>(state.selectedProvider)].keySource);
+        // Read-only (audit A1).
+        if (current != nullptr)
+        {
+            ImGui::LabelText("Endpoint", "%s", current->endpoint.c_str());
+            ImGui::LabelText("Model", "%s", current->model.c_str());
+        }
+        else if (!state.providers.empty())
+        {
+            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F),
+                "\"%s\" is not in Game/AI/Providers.json - choose a provider.", state.selectedProviderId.c_str());
+        }
+        if (ImGui::Button("Open Providers.json"))
+        {
+            const std::wstring filePath = providersFile.wstring();
+            const HINSTANCE opened =
+                ShellExecuteW(nullptr, L"open", filePath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (reinterpret_cast<INT_PTR>(opened) <= 32)
+            {
+                // No app is set to open .json files - fall back to Notepad.
+                ShellExecuteW(nullptr, L"open", L"notepad.exe", filePath.c_str(), nullptr, SW_SHOWNORMAL);
+            }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Endpoint and model are set in this file. Save it and they update here.");
+        }
+        ImGui::Text("API key source: %s", current != nullptr ? current->keySource.c_str() : "-");
         ImGui::TextUnformatted("Secrets: Game/AI/Providers.local.json");
 
         // The Calibrate / Test provider button used to flip a flag without
         // sending anything - the user saw "Configuration ready" while the
         // editor never asked the provider if it was reachable. Send a tiny
         // probe (a minimal completion request) and surface the real result.
+        // The probe runs on a worker thread (audit A2); pollProviderTest()
+        // reports the result.
+        const bool testing = state.testing.load();
+        const bool canTest = !testing && current != nullptr;
+        if (!canTest)
+        {
+            ImGui::BeginDisabled();
+        }
         if (ImGui::Button("Calibrate / Test provider"))
         {
-            const std::string providerId =
-                providers[static_cast<std::size_t>(state.selectedProvider)].id;
-            const AIProviderResponse probe = providerClient.send(
-                providerId,
-                AIProviderRequest{"Reply with the single word: pong", ""});
-            state.tested = true;
-            state.testSucceeded = probe.success;
-            // Redact: don't echo back the full body (which can echo the prompt
-            // or carry provider-side debug info). Just report status + truncated
-            // error.
-            std::string message;
-            if (probe.success)
+            if (state.testWorker.joinable())
             {
-                message = "OK (HTTP " + std::to_string(probe.statusCode) + ")";
+                state.testWorker.join();
             }
-            else
-            {
-                const std::string err = probe.error.empty() ? "no error message" : probe.error;
-                const std::size_t maxLen = 200;
-                message = "HTTP " + std::to_string(probe.statusCode) + " - " +
-                    (err.size() > maxLen ? err.substr(0, maxLen) + "..." : err);
-            }
-            state.testMessage = message;
-            state.calibrated = probe.success;
-            state.setupChanged = false;
-            logMessage(
-                console,
-                probe.success ? LogLevel::Info : LogLevel::Error,
-                "Provider test (" + providerId + "): " + message);
+            const std::string providerId = current->id;
+            state.testing = true;
+            state.testWorker = std::thread(
+                [&state, &providerClient, providerId]()
+                {
+                    AIProviderResponse probe = providerClient.send(
+                        providerId,
+                        AIProviderRequest{"Reply with the single word: pong", ""});
+                    const std::lock_guard<std::mutex> lock(state.testMutex);
+                    state.testResponse = std::move(probe);
+                    state.testProviderId = providerId;
+                    state.hasTestResult = true;
+                    state.testing = false;
+                });
         }
-        if (state.tested)
+        if (!canTest)
+        {
+            ImGui::EndDisabled();
+        }
+        if (testing)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Testing...");
+        }
+        else if (state.tested)
         {
             ImGui::SameLine();
             ImGui::TextColored(
@@ -2057,6 +2797,7 @@ namespace
         const AIProviderClient& providerClient,
         ConsoleState& console)
     {
+        pollProviderTest(aiSetup, console);
         if (!settings.open)
         {
             return;
@@ -2084,7 +2825,7 @@ namespace
         ImGui::BeginChild("SettingsContent", ImVec2(0.0F, 0.0F));
         switch (settings.selectedCategory)
         {
-            case 0: drawAiSetupSettingsContent(aiSetup, providerClient, console); break;
+            case 0: drawAiSetupSettingsContent(aiSetup, providerClient, projectRoot, console); break;
             case 1: drawProjectSettingsContent(projectRoot, scene); break;
             case 2: drawAppearanceSettingsContent(appearance); break;
             case 3: drawLanguageSettingsContent(language); break;
@@ -2224,9 +2965,7 @@ namespace
                     std::ifstream scriptFile(file.path(), std::ios::binary);
                     const std::string content(
                         (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                    scriptEditor.buffer.fill('\0');
-                    const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                    std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
+                    scriptEditor.text = content;
                     scriptEditor.scriptPath = toProjectRootError ? name : relativeToRoot.generic_string();
                     scriptEditor.status.clear();
                     scriptEditor.requestOpen = true;
@@ -2640,76 +3379,54 @@ namespace
                 }
             }
 
-            // Pickup interaction - proximity to the followed entity's own
-            // position (see findPickupCandidate's comment for why this is
-            // NOT an aim-ray check). Only active while the followed entity
-            // has inventory_system.lua attached (Presets > Inventory &
-            // Pickup, same place as FPS/Collider) - so it's an opt-in,
-            // removable, editable per-entity feature rather than
-            // unconditional behavior for any followed camera. pickup_range/
-            // pickup_height_tolerance are read live off that script
-            // instance (see ScriptRuntime::getScriptNumberField), so
-            // editing the .lua's on_start() actually changes behavior
-            // without a rebuild.
-            constexpr const char* kInventorySystemScriptPath = "Game/Scripts/inventory_system.lua";
-            const bool hasInventorySystem = followedEntity != nullptr &&
-                std::find(followedEntity->scripts.begin(), followedEntity->scripts.end(),
-                    kInventorySystemScriptPath) != followedEntity->scripts.end();
-            if (hasInventorySystem)
+            // Pickup + inventory - active while the followed entity has an
+            // inventory-providing script (inventory_system.lua, or any script
+            // that sets self.inventory_enabled = true, e.g. fps_player.lua).
+            // E picks up the nearest "Is Pickup Item" or items.lua object in
+            // range (see findPickupItemCandidate, GameplayLoop.cpp - shared
+            // with GameForgerRuntime); I toggles the inventory grid.
+            // pickup_range/pickup_height_tolerance are read live off
+            // whichever script sets them.
+            const bool providesInventory =
+                followedEntity != nullptr && entityProvidesInventory(*followedEntity, scriptRuntime);
+            std::string interactionHint;
+            if (providesInventory && playMode.gameplay.gameOverMessage.empty())
             {
-                const float pickupRange = scriptRuntime.getScriptNumberField(
-                    followedEntity->id, kInventorySystemScriptPath, "pickup_range", 4.0F);
-                const float pickupHeightTolerance = scriptRuntime.getScriptNumberField(
-                    followedEntity->id, kInventorySystemScriptPath, "pickup_height_tolerance", 2.5F);
-                const SceneEntity* candidate = findPickupCandidate(
-                    scene, followedEntity->position, pickupRange, pickupHeightTolerance, followedEntity->id);
-                if (candidate != nullptr)
+                float pickupRange = 4.0F;
+                float pickupHeightTolerance = 2.5F;
+                for (const std::string& scriptPath : followedEntity->scripts)
                 {
-                    const std::string hint = "[E] Pick up " + candidate->pickupItem.itemName;
-                    const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(
-                            imagePos.x + available.x * 0.5F - hintSize.x * 0.5F,
-                            imagePos.y + available.y * 0.5F + 20.0F),
-                        IM_COL32(255, 255, 255, 235),
-                        hint.c_str());
-                    if (ImGui::IsKeyPressed(ImGuiKey_E))
+                    const float range =
+                        scriptRuntime.getScriptNumberField(followedEntity->id, scriptPath, "pickup_range", -1.0F);
+                    if (range >= 0.0F)
                     {
-                        const std::string itemName = candidate->pickupItem.itemName;
-                        const std::string iconPath = candidate->pickupItem.iconPath;
-                        const glm::vec3 itemScale = candidate->scale;
-                        const glm::vec3 itemColor = candidate->color;
-                        const glm::vec3 itemMaterialBlendWeight = candidate->materialBlendWeight;
-                        const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
-                        const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
-                        commandBus.execute(DeleteEntityCommand{candidate->name});
-                        const auto existing = std::find_if(
-                            playMode.gameplay.inventoryItems.begin(),
-                            playMode.gameplay.inventoryItems.end(),
-                            [&itemName](const GameplayState::InventoryItem& item)
-                            { return item.itemName == itemName; });
-                        if (existing != playMode.gameplay.inventoryItems.end())
-                        {
-                            existing->count += 1;
-                        }
-                        else
-                        {
-                            playMode.gameplay.inventoryItems.push_back(
-                                {itemName,
-                                 iconPath,
-                                 1,
-                                 itemScale,
-                                 itemColor,
-                                 itemMaterialBlendWeight,
-                                 itemMaterialLayers,
-                                 itemMaterialUvScale});
-                        }
+                        pickupRange = range;
+                        pickupHeightTolerance = scriptRuntime.getScriptNumberField(
+                            followedEntity->id, scriptPath, "pickup_height_tolerance", pickupHeightTolerance);
+                        break;
+                    }
+                }
+                const SceneEntity* candidate = findPickupItemCandidate(
+                    scene, followedEntity->position, pickupRange, pickupHeightTolerance, followedEntity->id);
+                if (candidate != nullptr && !playMode.inventoryWindowOpen)
+                {
+                    const std::string itemLabel = pickupDisplayName(*candidate, scriptRuntime);
+                    interactionHint = "[E] Pick up " + itemLabel;
+                    if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+                    {
+                        const int followedId = followedEntity->id;
+                        const bool picked = pickUpItem(scene, commandBus, playMode.gameplay, scriptRuntime, *candidate);
+                        playMode.gameplay.messageText = picked ? "Picked up " + itemLabel : "Inventory full";
+                        playMode.gameplay.messageSecondsRemaining = 1.6F;
+                        // A legacy pickup is deleted, which can move other
+                        // entities in the scene's storage - re-find ours.
+                        followedEntity = scene.findEntity(followedId);
                     }
                 }
 
                 // I toggles the inventory grid - works with or without the
                 // cursor lock feature on.
-                if (ImGui::IsKeyPressed(ImGuiKey_I))
+                if (ImGui::IsKeyPressed(ImGuiKey_I, false))
                 {
                     playMode.inventoryWindowOpen = !playMode.inventoryWindowOpen;
                 }
@@ -2748,8 +3465,8 @@ namespace
             {
                 ImDrawList* overlayDrawList = ImGui::GetWindowDrawList();
                 const float timeSeconds = static_cast<float>(ImGui::GetTime());
-                constexpr std::array<const char*, 2> kDetectionScriptPaths{
-                    "Game/Scripts/enemy_ai.lua", "Game/Scripts/ranged_attacker.lua"};
+                constexpr std::array<const char*, 3> kDetectionScriptPaths{
+                    "Game/Scripts/enemy_ai.lua", "Game/Scripts/ranged_attacker.lua", gameforger::editor::fpsdemo::kEnemy};
                 for (const SceneEntity& other : scene.entities())
                 {
                     if (other.scripts.empty())
@@ -2914,6 +3631,25 @@ namespace
                 }
             }
 
+            // ---- Gameplay HUD: effects, damage numbers, health/XP bars, hotbar,
+            // weapon line, messages - the same layout GameForgerRuntime draws
+            // (drawGameplayHud, GameplayHud.cpp).
+            if (playMode.isPlaying)
+            {
+                ImGuiHudCanvas canvas(ImGui::GetWindowDrawList(), projectRoot);
+                HudFrame frame;
+                frame.origin = glm::vec2(imagePos.x, imagePos.y);
+                frame.size = glm::vec2(available.x, available.y);
+                frame.view = renderer.view();
+                frame.projection = renderer.projection();
+                frame.timeSeconds = static_cast<float>(ImGui::GetTime());
+                frame.player = followedEntity;
+                frame.showHotbar = providesInventory && followedEntity != nullptr;
+                frame.interactionHint = interactionHint;
+                frame.drawCrosshair = false; // the Game view draws its own while the cursor is locked
+                drawGameplayHud(canvas, frame, scene, scriptRuntime, playMode.gameplay);
+            }
+
             // Win/lose banner - set once by tickProjectiles (a castle's hp
             // reached 0) or the enemy auto-fire tick (main loop). Drawn on
             // top of everything else in the panel; further E/R/F input and
@@ -2959,15 +3695,13 @@ namespace
         ImGui::End();
     }
 
-    // I-key inventory grid (see the E/I key handling inside
-    // drawGameViewPanel above, which toggles inventoryWindowOpen). Icons
-    // reuse ensureIconTextureGpu, the same GPU texture cache the
-    // Inspector's icon picker uses. Dragging a slot onto another slot
-    // swaps the two (reorder); dragging a slot and releasing outside this
-    // window drops one of that item back into the world just in front of
-    // the player and removes it from the stack (spawns a fresh
-    // isPickupItem entity via CreateEntityCommand + PickupItem property
-    // commands - mirrors what E removed).
+    // I-key inventory grid (see the E/I key handling in drawGameViewPanel,
+    // which toggles inventoryWindowOpen). kInventorySlotCount fixed slots,
+    // the top row being the hotbar (keys 1-8). Click a slot to equip/select
+    // it; drag a slot onto another to swap (empty slots too); drag a slot
+    // out of the window to drop one back into the world in front of the
+    // player; right-click for Equip / Drop one / Drop all. Pickup/drop logic
+    // itself is shared with GameForgerRuntime (GameplayLoop.cpp).
     void drawInventoryWindow(
         PlayModeState& playMode,
         EditorScene& scene,
@@ -2979,84 +3713,198 @@ namespace
         {
             return;
         }
+        auto& slots = playMode.gameplay.inventoryItems;
+        if (static_cast<int>(slots.size()) != kInventorySlotCount)
+        {
+            ensureInventorySlots(playMode.gameplay);
+        }
 
-        ImGui::SetNextWindowSize(ImVec2(360.0F, 320.0F), ImGuiCond_FirstUseEver);
+        constexpr int kColumns = kHotbarSlotCount;
+        constexpr float kSlotSize = 56.0F;
+        constexpr float kSlotSpacing = 6.0F;
+        const float gridWidth = kColumns * kSlotSize + (kColumns - 1) * kSlotSpacing;
+        ImGui::SetNextWindowSize(ImVec2(gridWidth + 32.0F, 0.0F), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.93F);
         bool stillOpen = true;
-        ImGui::Begin("Inventory (I to close)", &stillOpen);
+        ImGui::Begin("Inventory (I to close)", &stillOpen, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
         if (!stillOpen)
         {
             playMode.inventoryWindowOpen = false;
         }
 
-        constexpr float kSlotSize = 64.0F;
-        constexpr float kSlotSpacing = 8.0F;
-        const float availableWidth = ImGui::GetContentRegionAvail().x;
-        const int columns =
-            std::max(1, static_cast<int>((availableWidth + kSlotSpacing) / (kSlotSize + kSlotSpacing)));
-
-        if (playMode.gameplay.inventoryItems.empty())
+        int dropSlot = -1;
+        int dropCount = 0;
+        const auto dropFromSlot = [&](const int slotIndex, const int count)
         {
-            ImGui::TextDisabled("Empty - walk up to a pickup item and press E.");
-        }
+            dropSlot = slotIndex;
+            dropCount = count;
+        };
 
-        bool droppedOutsideWindow = false;
-        int droppedSlotIndex = -1;
-
-        for (int i = 0; i < static_cast<int>(playMode.gameplay.inventoryItems.size()); ++i)
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const int slotCount = static_cast<int>(slots.size());
+        for (int index = 0; index < slotCount; ++index)
         {
-            GameplayState::InventoryItem& item = playMode.gameplay.inventoryItems[i];
-            if (i % columns != 0)
+            if (index == 0)
+            {
+                ImGui::TextDisabled("Hotbar (1-8)");
+            }
+            else if (index == kHotbarSlotCount)
+            {
+                ImGui::Dummy(ImVec2(0.0F, 4.0F));
+                ImGui::TextDisabled("Backpack");
+            }
+            if (index % kColumns != 0)
             {
                 ImGui::SameLine(0.0F, kSlotSpacing);
             }
 
-            ImGui::PushID(i);
-            const GLuint iconTexture = item.iconPath.empty() ? 0 : ensureIconTextureGpu(item.iconPath, projectRoot);
-            ImGui::ImageButton(
-                "##slot", static_cast<ImTextureID>(iconTexture), ImVec2(kSlotSize, kSlotSize));
-
-            if (ImGui::BeginDragDropSource())
+            GameplayState::InventoryItem& item = slots[static_cast<std::size_t>(index)];
+            const bool selected = playMode.gameplay.selectedSlot == index;
+            ImGui::PushID(index);
+            const ImVec2 slotMin = ImGui::GetCursorScreenPos();
+            const ImVec2 slotMax(slotMin.x + kSlotSize, slotMin.y + kSlotSize);
+            if (ImGui::InvisibleButton("##slot", ImVec2(kSlotSize, kSlotSize)))
             {
-                ImGui::SetDragDropPayload("INVENTORY_SLOT", &i, sizeof(int));
-                if (iconTexture != 0)
+                playMode.gameplay.selectedSlot = index;
+            }
+            const bool hovered = ImGui::IsItemHovered();
+
+            drawList->AddRectFilled(
+                slotMin, slotMax,
+                index < kHotbarSlotCount ? IM_COL32(30, 26, 20, 255) : IM_COL32(22, 22, 26, 255), 5.0F);
+            if (!item.empty())
+            {
+                const GLuint icon = item.iconPath.empty() ? 0 : ensureIconTextureGpu(item.iconPath, projectRoot);
+                if (icon != 0)
                 {
-                    ImGui::Image(static_cast<ImTextureID>(iconTexture), ImVec2(32.0F, 32.0F));
-                    ImGui::SameLine();
+                    drawList->AddImage(
+                        static_cast<ImTextureID>(icon), ImVec2(slotMin.x + 5.0F, slotMin.y + 5.0F),
+                        ImVec2(slotMax.x - 5.0F, slotMax.y - 5.0F));
                 }
-                ImGui::TextUnformatted(item.itemName.c_str());
-                ImGui::EndDragDropSource();
+                else
+                {
+                    const std::string initials = item.itemName.substr(0, 3);
+                    drawList->AddText(
+                        ImVec2(slotMin.x + 8.0F, slotMin.y + kSlotSize * 0.5F - 7.0F), IM_COL32(230, 230, 230, 255),
+                        initials.c_str());
+                }
+                if (item.count > 1)
+                {
+                    const std::string countLabel = "x" + std::to_string(item.count);
+                    const ImVec2 countSize = ImGui::CalcTextSize(countLabel.c_str());
+                    drawList->AddText(
+                        ImVec2(slotMax.x - countSize.x - 4.0F, slotMax.y - countSize.y - 2.0F),
+                        IM_COL32(255, 255, 255, 255), countLabel.c_str());
+                }
+            }
+            if (index < kHotbarSlotCount)
+            {
+                drawList->AddText(
+                    ImVec2(slotMin.x + 4.0F, slotMin.y + 2.0F), IM_COL32(200, 190, 170, 170),
+                    std::to_string(index + 1).c_str());
+            }
+            drawList->AddRect(
+                slotMin, slotMax,
+                selected ? IM_COL32(249, 135, 3, 255)
+                         : (hovered ? IM_COL32(220, 220, 230, 200) : IM_COL32(120, 120, 130, 140)),
+                5.0F, 0, selected ? 3.0F : 1.0F);
+
+            if (!item.empty())
+            {
+                if (ImGui::BeginDragDropSource())
+                {
+                    ImGui::SetDragDropPayload("INVENTORY_SLOT", &index, sizeof(int));
+                    const GLuint icon = item.iconPath.empty() ? 0 : ensureIconTextureGpu(item.iconPath, projectRoot);
+                    if (icon != 0)
+                    {
+                        ImGui::Image(static_cast<ImTextureID>(icon), ImVec2(32.0F, 32.0F));
+                        ImGui::SameLine();
+                    }
+                    ImGui::TextUnformatted(item.itemName.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(item.itemName.c_str());
+                    if (!item.itemType.empty())
+                    {
+                        ImGui::TextDisabled("%s%s%s", item.itemType.c_str(), item.weapon.empty() ? "" : " - ",
+                            item.weapon.c_str());
+                    }
+                    if (item.count > 1)
+                    {
+                        ImGui::TextDisabled("x%d", item.count);
+                    }
+                    ImGui::TextDisabled("Click: equip   Drag out: drop   Right-click: more");
+                    ImGui::EndTooltip();
+                }
+                if (ImGui::BeginPopupContextItem("SlotMenu"))
+                {
+                    ImGui::TextUnformatted(item.itemName.c_str());
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Equip / Select"))
+                    {
+                        playMode.gameplay.selectedSlot = index;
+                    }
+                    if (ImGui::MenuItem("Drop one"))
+                    {
+                        dropFromSlot(index, 1);
+                    }
+                    if (item.count > 1 && ImGui::MenuItem("Drop all"))
+                    {
+                        dropFromSlot(index, item.count);
+                    }
+                    ImGui::EndPopup();
+                }
             }
             if (ImGui::BeginDragDropTarget())
             {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("INVENTORY_SLOT"))
                 {
                     const int sourceIndex = *static_cast<const int*>(payload->Data);
-                    if (sourceIndex != i)
+                    if (sourceIndex != index && sourceIndex >= 0 && sourceIndex < slotCount)
                     {
-                        std::swap(playMode.gameplay.inventoryItems[sourceIndex], playMode.gameplay.inventoryItems[i]);
+                        std::swap(slots[static_cast<std::size_t>(sourceIndex)], slots[static_cast<std::size_t>(index)]);
+                        // Keep the equipped item equipped when it moves.
+                        if (playMode.gameplay.selectedSlot == sourceIndex)
+                        {
+                            playMode.gameplay.selectedSlot = index;
+                        }
+                        else if (playMode.gameplay.selectedSlot == index)
+                        {
+                            playMode.gameplay.selectedSlot = sourceIndex;
+                        }
                     }
                 }
                 ImGui::EndDragDropTarget();
             }
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("%s x%d", item.itemName.c_str(), item.count);
-            }
-
-            const ImVec2 slotMax = ImGui::GetItemRectMax();
-            const std::string countLabel = "x" + std::to_string(item.count);
-            ImGui::GetWindowDrawList()->AddText(
-                ImVec2(slotMax.x - ImGui::CalcTextSize(countLabel.c_str()).x - 4.0F, slotMax.y - 16.0F),
-                IM_COL32(255, 255, 255, 255),
-                countLabel.c_str());
-
             ImGui::PopID();
         }
 
+        // Details of the selected slot.
+        ImGui::Separator();
+        const int selectedSlot = playMode.gameplay.selectedSlot;
+        if (selectedSlot >= 0 && selectedSlot < slotCount && !slots[static_cast<std::size_t>(selectedSlot)].empty())
+        {
+            const GameplayState::InventoryItem& item = slots[static_cast<std::size_t>(selectedSlot)];
+            ImGui::Text("Equipped: %s", item.itemName.c_str());
+            if (!item.weapon.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", item.weapon.c_str());
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("Equipped: nothing (fists)");
+        }
+        ImGui::TextDisabled("E picks up items near you.");
+
         // ImGui has no direct "dropped over nothing" event, so this infers
         // it: our payload is still active, the mouse just released, and the
-        // release point is outside this window's own rect (a release
-        // inside was already handled as a slot-to-slot swap above).
+        // release point is outside this window (a release inside was
+        // already handled as a slot swap above).
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
         {
             const ImGuiPayload* payload = ImGui::GetDragDropPayload();
@@ -3069,48 +3917,30 @@ namespace
                     mousePos.y >= windowMin.y && mousePos.y <= windowMax.y;
                 if (!insideWindow)
                 {
-                    droppedOutsideWindow = true;
-                    droppedSlotIndex = *static_cast<const int*>(payload->Data);
+                    dropFromSlot(*static_cast<const int*>(payload->Data), 1);
                 }
             }
         }
 
         ImGui::End();
 
-        if (droppedOutsideWindow && followedEntity != nullptr && droppedSlotIndex >= 0 &&
-            droppedSlotIndex < static_cast<int>(playMode.gameplay.inventoryItems.size()))
+        if (dropSlot >= 0 && followedEntity != nullptr)
         {
-            GameplayState::InventoryItem& item = playMode.gameplay.inventoryItems[droppedSlotIndex];
-            const glm::vec3 dropForward = yawPitchForward(followedEntity->rotationEuler.y, 0.0F);
-            const glm::vec3 dropPosition = followedEntity->position + dropForward * 2.0F;
-
-            const std::string spawnedName = makeMenuEntityName(scene, item.itemName);
-            commandBus.execute(CreateEntityCommand{spawnedName, PrimitiveType::Cube, dropPosition});
-            commandBus.execute(SetPropertyCommand{spawnedName, "Transform", "scale", item.scale});
-            commandBus.execute(SetPropertyCommand{spawnedName, "Renderer", "color", item.color});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "enabled", true});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "itemName", item.itemName});
-            commandBus.execute(SetPropertyCommand{spawnedName, "PickupItem", "iconPath", item.iconPath});
-            // materialBlendWeight/materialLayers/materialUvScale (the
-            // Appearance section's texture mix) have no SetPropertyCommand
-            // - the Inspector itself mutates them directly via
-            // findEntityMutable (see the Appearance section above), so
-            // this does the same rather than inventing new command types
-            // for fields nothing else needs to set indirectly.
-            if (const SceneEntity* spawned = scene.findEntity(spawnedName))
+            // Copy what we need first - dropping can create entities, which
+            // may move the followed entity in the scene's storage.
+            const glm::vec3 forward = yawPitchForward(followedEntity->rotationEuler.y, 0.0F);
+            const glm::vec3 basePosition = followedEntity->position;
+            const float yaw = followedEntity->rotationEuler.y;
+            for (int dropped = 0; dropped < dropCount; ++dropped)
             {
-                if (SceneEntity* mutableSpawned = scene.findEntityMutable(spawned->id))
+                // Spread several dropped items out a little.
+                const glm::vec3 side(forward.z, 0.0F, -forward.x);
+                const glm::vec3 dropPosition = basePosition + forward * 2.0F +
+                    side * (static_cast<float>(dropped % 5) - 2.0F) * 0.45F + glm::vec3(0.0F, 0.6F, 0.0F);
+                if (!dropInventoryItem(scene, commandBus, playMode.gameplay, dropSlot, dropPosition, yaw))
                 {
-                    mutableSpawned->materialBlendWeight = item.materialBlendWeight;
-                    mutableSpawned->materialLayers = item.materialLayers;
-                    mutableSpawned->materialUvScale = item.materialUvScale;
+                    break;
                 }
-            }
-
-            item.count -= 1;
-            if (item.count <= 0)
-            {
-                playMode.gameplay.inventoryItems.erase(playMode.gameplay.inventoryItems.begin() + droppedSlotIndex);
             }
         }
     }
@@ -3442,6 +4272,7 @@ namespace
     // since they need extra input (a font file, in Text Mesh's case). First
     // (and so far only) tool: Text Mesh, real extruded 3D glyph geometry.
     void drawToolboxPanel(
+        const EditorCameraState& toolboxCamera,
         TextMeshToolState& textMeshTool,
         StoryboardState& storyboard,
         TerrainSculptState& terrainSculpt,
@@ -3497,6 +4328,18 @@ namespace
         ImGui::TextDisabled(
             "Real heightmap terrain - starts flat. Select it and use the Inspector's Terrain section to "
             "sculpt, import a heightmap, or generate one with Perlin noise.");
+
+        if (ImGui::Button("FPS Player (Hands + Weapons)", ImVec2(-1.0F, 0.0F)))
+        {
+            createFpsPlayer(scene, commandBus, selection, console, toolboxCamera, false);
+        }
+        if (ImGui::Button("FPS Demo Arena", ImVec2(-1.0F, 0.0F)))
+        {
+            createFpsPlayer(scene, commandBus, selection, console, toolboxCamera, true);
+        }
+        ImGui::TextDisabled(
+            "First-person player with animated hands and 8 weapons (fps_player.lua). The arena adds "
+            "ground, weapon pickups (items.lua) and targets (health.lua).");
         ImGui::End();
 
         if (textMeshTool.requestOpen)
@@ -4030,6 +4873,15 @@ namespace
         else
         {
             ImGui::Text("Shape: %s", primitiveTypeName(entity.primitive));
+        }
+        if (hasScript(entity, gameforger::editor::fpsdemo::kGameManager))
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98F, 0.62F, 0.1F, 1.0F));
+            ImGui::TextWrapped(
+                "GAME MANAGER - the built game's settings. Edit title, splash logo (Change Image...) and intro "
+                "under Scripts > game_manager.lua below; File > Build Game makes this scene the one "
+                "GameForgerRuntime loads.");
+            ImGui::PopStyleColor();
         }
 
         bool active = entity.active;
@@ -4917,8 +5769,32 @@ namespace
                     "every frame.");
             }
         }
+        // Plain scripts first, then each preset's scripts under its own line.
+        std::vector<std::pair<std::string, std::string>> orderedScripts; // path, preset name ("" = none)
         for (const std::string& scriptPath : entity.scripts)
         {
+            const ScriptRuntime::ScriptPresetTag tag = ScriptRuntime::cachedScriptPreset(projectRoot / scriptPath);
+            if (tag.name.empty())
+            {
+                orderedScripts.emplace_back(scriptPath, std::string());
+            }
+        }
+        for (const std::string& scriptPath : entity.scripts)
+        {
+            const ScriptRuntime::ScriptPresetTag tag = ScriptRuntime::cachedScriptPreset(projectRoot / scriptPath);
+            if (!tag.name.empty())
+            {
+                orderedScripts.emplace_back(scriptPath, tag.name);
+            }
+        }
+        std::string previousPreset;
+        for (const auto& [scriptPath, presetName] : orderedScripts)
+        {
+            if (!presetName.empty() && presetName != previousPreset)
+            {
+                ImGui::SeparatorText((presetName + " preset").c_str());
+            }
+            previousPreset = presetName;
             ImGui::PushID(scriptPath.c_str());
             const bool isFocused =
                 history.focusedScriptEntityId.has_value() && *history.focusedScriptEntityId == entity.id &&
@@ -4952,9 +5828,7 @@ namespace
                 std::ifstream scriptFile(projectRoot / scriptPath, std::ios::binary);
                 std::string content(
                     (std::istreambuf_iterator<char>(scriptFile)), std::istreambuf_iterator<char>());
-                scriptEditor.buffer.fill('\0');
-                const std::size_t copyLength = std::min(content.size(), scriptEditor.buffer.size() - 1);
-                std::memcpy(scriptEditor.buffer.data(), content.data(), copyLength);
+                scriptEditor.text = content;
                 scriptEditor.scriptPath = scriptPath;
                 scriptEditor.status.clear();
                 scriptEditor.requestOpen = true;
@@ -4976,58 +5850,352 @@ namespace
                 }
             }
 
-            // T2-2: Script Parameter Reflection
-            const auto exposedProps = ScriptRuntime::parseScriptProperties(projectRoot / scriptPath);
+            // The script's `-- @property` fields (ScriptRuntime::
+            // ExposedScriptProperty). Outside Play an edit is THIS object's
+            // own value - undoable and saved with the scene
+            // (SceneEntity::scriptProperties) - so two objects sharing a
+            // script (e.g. two items.lua pickups) keep different names/icons.
+            // During Play an edit changes the running script live instead
+            // (and, like everything in Play, is discarded on Stop).
+            const auto& exposedProps = ScriptRuntime::cachedScriptProperties(projectRoot / scriptPath);
             if (!exposedProps.empty())
             {
+                using PropertyType = ScriptRuntime::ExposedScriptProperty::Type;
                 ImGui::Indent(15.0F);
+                const bool live = scriptRuntime.isRunning();
                 for (const auto& prop : exposedProps)
                 {
                     ImGui::PushID(prop.name.c_str());
-                    if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::Number)
+                    const gameforger::editor::ScriptPropertyOverride* stored =
+                        gameforger::editor::findScriptProperty(entity, scriptPath, prop.name);
+                    const std::string storedText = stored != nullptr ? stored->value : prop.defaultAsText();
+                    const std::string propertyKey = scriptPath + "#" + prop.name;
+                    // Text-typed values (string/icon/enum) share one path.
+                    const auto commitText = [&](const std::string& text)
                     {
-                        float val = scriptRuntime.isRunning()
-                            ? scriptRuntime.getScriptNumberField(entity.id, scriptPath, prop.name, prop.defaultNumber)
-                            : prop.defaultNumber;
-                        if (ImGui::DragFloat(prop.name.c_str(), &val, 0.1F))
+                        if (live)
                         {
-                            if (scriptRuntime.isRunning())
+                            scriptRuntime.setScriptStringField(entity.id, scriptPath, prop.name, text);
+                        }
+                        else
+                        {
+                            (void)commandBus.execute(SetPropertyCommand{entity.name, "ScriptProperty", propertyKey, text});
+                        }
+                    };
+                    const std::string currentText = live
+                        ? scriptRuntime.getScriptStringField(entity.id, scriptPath, prop.name, storedText)
+                        : storedText;
+
+                    if (prop.type == PropertyType::Number)
+                    {
+                        char* parseEnd = nullptr;
+                        const float storedValue = std::strtof(storedText.c_str(), &parseEnd);
+                        float value = live
+                            ? scriptRuntime.getScriptNumberField(entity.id, scriptPath, prop.name, storedValue)
+                            : storedValue;
+                        if (ImGui::DragFloat(prop.name.c_str(), &value, 0.05F))
+                        {
+                            if (live)
                             {
-                                scriptRuntime.setScriptNumberField(entity.id, scriptPath, prop.name, val);
+                                scriptRuntime.setScriptNumberField(entity.id, scriptPath, prop.name, value);
+                            }
+                            else
+                            {
+                                std::array<char, 32> numberText{};
+                                std::snprintf(numberText.data(), numberText.size(), "%g", static_cast<double>(value));
+                                (void)commandBus.execute(
+                                    SetPropertyCommand{entity.name, "ScriptProperty", propertyKey, std::string(numberText.data())});
                             }
                         }
                     }
-                    else if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::Bool)
+                    else if (prop.type == PropertyType::Slider)
                     {
-                        bool val = scriptRuntime.isRunning()
-                            ? scriptRuntime.getScriptBoolField(entity.id, scriptPath, prop.name, prop.defaultBool)
-                            : prop.defaultBool;
-                        if (ImGui::Checkbox(prop.name.c_str(), &val))
+                        // `-- @property <name> slider <min>|<max> <default>`
+                        char* parseEnd = nullptr;
+                        float storedValue = std::strtof(storedText.c_str(), &parseEnd);
+                        if (parseEnd == storedText.c_str())
                         {
-                            if (scriptRuntime.isRunning())
+                            storedValue = prop.defaultNumber;
+                        }
+                        float value = live
+                            ? scriptRuntime.getScriptNumberField(entity.id, scriptPath, prop.name, storedValue)
+                            : storedValue;
+                        if (ImGui::SliderFloat(prop.name.c_str(), &value, prop.sliderMin, prop.sliderMax, "%.0f"))
+                        {
+                            if (live)
                             {
-                                scriptRuntime.setScriptBoolField(entity.id, scriptPath, prop.name, val);
+                                scriptRuntime.setScriptNumberField(entity.id, scriptPath, prop.name, value);
+                            }
+                            else
+                            {
+                                std::array<char, 32> numberText{};
+                                std::snprintf(numberText.data(), numberText.size(), "%g", static_cast<double>(value));
+                                (void)commandBus.execute(
+                                    SetPropertyCommand{entity.name, "ScriptProperty", propertyKey, std::string(numberText.data())});
                             }
                         }
                     }
-                    else if (prop.type == ScriptRuntime::ExposedScriptProperty::Type::String)
+                    else if (prop.type == PropertyType::Bool)
                     {
-                        std::string val = scriptRuntime.isRunning()
-                            ? scriptRuntime.getScriptStringField(entity.id, scriptPath, prop.name, prop.defaultString)
-                            : prop.defaultString;
-                        std::array<char, 128> strBuf{};
-                        std::snprintf(strBuf.data(), strBuf.size(), "%s", val.c_str());
-                        if (ImGui::InputText(prop.name.c_str(), strBuf.data(), strBuf.size()))
+                        const bool storedValue = storedText == "true" || storedText == "1";
+                        bool value = live
+                            ? scriptRuntime.getScriptBoolField(entity.id, scriptPath, prop.name, storedValue)
+                            : storedValue;
+                        if (ImGui::Checkbox(prop.name.c_str(), &value))
                         {
-                            if (scriptRuntime.isRunning())
+                            if (live)
                             {
-                                scriptRuntime.setScriptStringField(entity.id, scriptPath, prop.name, strBuf.data());
+                                scriptRuntime.setScriptBoolField(entity.id, scriptPath, prop.name, value);
+                            }
+                            else
+                            {
+                                (void)commandBus.execute(SetPropertyCommand{
+                                    entity.name, "ScriptProperty", propertyKey, std::string(value ? "true" : "false")});
                             }
                         }
+                    }
+                    else if (prop.type == PropertyType::Vec3)
+                    {
+                        std::array<float, 3> value{prop.defaultVec3.x, prop.defaultVec3.y, prop.defaultVec3.z};
+                        {
+                            std::string spaced = storedText;
+                            std::replace(spaced.begin(), spaced.end(), ',', ' ');
+                            std::istringstream stream(spaced);
+                            stream >> value[0] >> value[1] >> value[2];
+                        }
+                        if (ImGui::DragFloat3(prop.name.c_str(), value.data(), 0.05F) && !live)
+                        {
+                            std::array<char, 96> vectorText{};
+                            std::snprintf(vectorText.data(), vectorText.size(), "%g %g %g",
+                                static_cast<double>(value[0]), static_cast<double>(value[1]), static_cast<double>(value[2]));
+                            (void)commandBus.execute(
+                                SetPropertyCommand{entity.name, "ScriptProperty", propertyKey, std::string(vectorText.data())});
+                        }
+                    }
+                    else if (prop.type == PropertyType::Enum)
+                    {
+                        if (ImGui::BeginCombo(prop.name.c_str(), currentText.c_str()))
+                        {
+                            for (const std::string& option : prop.options)
+                            {
+                                if (ImGui::Selectable(option.c_str(), option == currentText))
+                                {
+                                    commitText(option);
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                    }
+                    else if (prop.type == PropertyType::Image)
+                    {
+                        // Big preview + "Change Image..." (copied into the
+                        // default's own folder, e.g. Game/Branding/).
+                        const GLuint imageTexture = currentText.empty() ? 0 : ensureIconTextureGpu(currentText, projectRoot);
+                        ImGui::TextUnformatted(prop.name.c_str());
+                        const float previewWidth = std::min(ImGui::GetContentRegionAvail().x, 220.0F);
+                        if (imageTexture != 0)
+                        {
+                            ImGui::Image(static_cast<ImTextureID>(imageTexture), ImVec2(previewWidth, previewWidth * 0.5625F));
+                        }
+                        else
+                        {
+                            ImGui::TextDisabled("(no image)");
+                        }
+                        ImGui::TextDisabled("%s", currentText.c_str());
+                        if (ImGui::Button("Change Image..."))
+                        {
+                            std::string folder = std::filesystem::path(prop.defaultString).parent_path().generic_string();
+                            if (folder.rfind("Game/", 0) != 0)
+                            {
+                                folder = "Game/Images";
+                            }
+                            if (const std::optional<std::filesystem::path> picked =
+                                    showOpenImageDialog(nativeWindowHandle, projectRoot / folder))
+                            {
+                                if (const std::optional<std::string> imported = importFileIntoFolder(*picked, projectRoot, folder))
+                                {
+                                    commitText(*imported);
+                                }
+                                else
+                                {
+                                    logMessage(console, LogLevel::Error, "Could not copy that image into " + folder + ".");
+                                }
+                            }
+                        }
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("Pick an image from your PC - it's copied into the game's own folder so it "
+                                "ships with the game.");
+                        }
+                        if (!live && stored != nullptr)
+                        {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Reset"))
+                            {
+                                (void)commandBus.execute(
+                                    SetPropertyCommand{entity.name, "ScriptPropertyReset", propertyKey, std::string()});
+                            }
+                        }
+                    }
+                    else if (prop.type == PropertyType::Icon)
+                    {
+                        // [thumbnail]  name
+                        //              path
+                        //              [Change Icon...] [Built-in v] [Reset]
+                        const GLuint iconTexture = currentText.empty() ? 0 : ensureIconTextureGpu(currentText, projectRoot);
+                        const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
+                        constexpr float kThumb = 56.0F;
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            thumbMin, ImVec2(thumbMin.x + kThumb, thumbMin.y + kThumb), IM_COL32(25, 25, 30, 255), 4.0F);
+                        if (iconTexture != 0)
+                        {
+                            ImGui::Image(static_cast<ImTextureID>(iconTexture), ImVec2(kThumb, kThumb));
+                        }
+                        else
+                        {
+                            ImGui::Dummy(ImVec2(kThumb, kThumb));
+                        }
+                        ImGui::GetWindowDrawList()->AddRect(
+                            thumbMin, ImVec2(thumbMin.x + kThumb, thumbMin.y + kThumb), IM_COL32(120, 120, 130, 180), 4.0F);
+                        ImGui::SameLine();
+                        ImGui::BeginGroup();
+                        ImGui::TextUnformatted(prop.name.c_str());
+                        ImGui::PushTextWrapPos(0.0F);
+                        ImGui::TextDisabled("%s", currentText.empty() ? "(no icon)" : currentText.c_str());
+                        ImGui::PopTextWrapPos();
+                        if (ImGui::Button("Change Icon..."))
+                        {
+                            if (const std::optional<std::filesystem::path> picked =
+                                    showOpenImageDialog(nativeWindowHandle, projectRoot / "Game" / "Icons"))
+                            {
+                                if (const std::optional<std::string> imported = importIconIntoProject(*picked, projectRoot))
+                                {
+                                    commitText(*imported);
+                                }
+                                else
+                                {
+                                    logMessage(console, LogLevel::Error, "Could not import that icon into the project.");
+                                }
+                            }
+                        }
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("Pick an image from your PC - it's copied into Game/Icons/ and used for this object.");
+                        }
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(110.0F);
+                        if (ImGui::BeginCombo("##BuiltInIcon", "Built-in...", ImGuiComboFlags_HeightLarge))
+                        {
+                            for (const std::string& iconPath : projectIconPaths(projectRoot))
+                            {
+                                const GLuint thumbnail = ensureIconTextureGpu(iconPath, projectRoot);
+                                if (thumbnail != 0)
+                                {
+                                    ImGui::Image(static_cast<ImTextureID>(thumbnail), ImVec2(22.0F, 22.0F));
+                                    ImGui::SameLine();
+                                }
+                                const std::string label = std::filesystem::path(iconPath).stem().string() + "##" + iconPath;
+                                if (ImGui::Selectable(label.c_str(), iconPath == currentText))
+                                {
+                                    commitText(iconPath);
+                                }
+                                if (ImGui::IsItemHovered())
+                                {
+                                    ImGui::SetTooltip("%s", iconPath.c_str());
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        if (!live && stored != nullptr)
+                        {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Reset"))
+                            {
+                                (void)commandBus.execute(
+                                    SetPropertyCommand{entity.name, "ScriptPropertyReset", propertyKey, std::string()});
+                            }
+                        }
+                        ImGui::EndGroup();
+                    }
+                    else
+                    {
+                        std::array<char, 256> textBuffer{};
+                        std::snprintf(textBuffer.data(), textBuffer.size(), "%s", currentText.c_str());
+                        ImGui::InputText(prop.name.c_str(), textBuffer.data(), textBuffer.size());
+                        if (ImGui::IsItemDeactivatedAfterEdit())
+                        {
+                            commitText(textBuffer.data());
+                        }
+                    }
+
+                    // Right-click any (non-icon) field to put it back to the
+                    // script's own default.
+                    if (!live && stored != nullptr && prop.type != PropertyType::Icon && prop.type != PropertyType::Image &&
+                        ImGui::BeginPopupContextItem("PropertyMenu"))
+                    {
+                        if (ImGui::MenuItem("Reset to script default"))
+                        {
+                            (void)commandBus.execute(
+                                SetPropertyCommand{entity.name, "ScriptPropertyReset", propertyKey, std::string()});
+                        }
+                        ImGui::EndPopup();
                     }
                     ImGui::PopID();
                 }
                 ImGui::Unindent(15.0F);
+            }
+
+            // Last row of a preset script: link/unlink the rest of its set.
+            if (!presetName.empty())
+            {
+                const ScriptRuntime::ScriptPresetTag tag = ScriptRuntime::cachedScriptPreset(projectRoot / scriptPath);
+                const std::vector<std::string> linkable = presetLinkableScripts(projectRoot, presetName);
+                if ((tag.role == "player" || tag.role == "damageable") && linkable.size() > 1)
+                {
+                    const int attached = static_cast<int>(std::count_if(linkable.begin(), linkable.end(),
+                        [&entity](const std::string& path) { return hasScript(entity, path); }));
+                    bool linked = attached == static_cast<int>(linkable.size());
+                    ImGui::Indent(15.0F);
+                    const std::string label = "Link all " + presetName + " scripts (" + std::to_string(attached) + "/" +
+                        std::to_string(linkable.size()) + ")";
+                    if (ImGui::Checkbox(label.c_str(), &linked))
+                    {
+                        for (const std::string& other : linkable)
+                        {
+                            if (linked && !hasScript(entity, other))
+                            {
+                                (void)commandBus.execute(AttachScriptCommand{entity.name, other});
+                            }
+                            else if (!linked && other != scriptPath && hasScript(entity, other))
+                            {
+                                (void)commandBus.execute(DetachScriptCommand{entity.name, other});
+                                if (scriptRuntime.isRunning())
+                                {
+                                    scriptRuntime.stopScript(entity.id, other);
+                                }
+                            }
+                        }
+                        if (linked && hasScript(entity, gameforger::editor::fpsdemo::kPlayer))
+                        {
+                            (void)commandBus.execute(SetPropertyCommand{entity.name, "ScriptProperty",
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#is_player"), std::string("true")});
+                        }
+                        logMessage(console, LogLevel::Info,
+                            linked ? presetName + ": linked every compatible script to '" + entity.name + "'."
+                                   : presetName + ": unlinked the other preset scripts from '" + entity.name + "'.");
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        std::string tooltip = "All of these must be on this object for the preset to work at its best:";
+                        for (const std::string& path : linkable)
+                        {
+                            tooltip += "\n  " + std::string(hasScript(entity, path) ? "[x] " : "[ ] ") + path;
+                        }
+                        tooltip += "\nUntick to remove the others (keeps this one).";
+                        ImGui::SetTooltip("%s", tooltip.c_str());
+                    }
+                    ImGui::Unindent(15.0F);
+                }
             }
 
             ImGui::PopID();
@@ -5179,7 +6347,12 @@ namespace
                 // MovementController - so it's exclusive with those too,
                 // just its own kind rather than reusing MovementController
                 // (which is worded/described as player-input-driven).
-                EnemyAI
+                EnemyAI,
+                // A plain marker script (items.lua, health.lua) - attaches
+                // without turning the Collider on.
+                Marker,
+                // Several scripts at once (the whole FPS Demo player set).
+                Bundle
             };
             struct ScriptPreset
             {
@@ -5188,7 +6361,7 @@ namespace
                 const char* description;
                 PresetKind kind;
             };
-            constexpr std::array<ScriptPreset, 8> presets{{
+            constexpr std::array<ScriptPreset, 17> presets{{
                     {"FPS Controller",
                      "Game/Scripts/fps_controller.lua",
                      "WASD move, Space jump, Shift sprint, mouse-look. First-person camera by default - "
@@ -5244,9 +6417,57 @@ namespace
                      "entity tagged \"CatapultArm\" - tag your imported arm object with that. All ranges/"
                      "speeds/power-charge-time are editable in the script itself.",
                      PresetKind::Utility},
+                    // ---- FPS Demo preset (drawn under its own separator) ----
+                    {"FPS Demo - full player set",
+                     nullptr,
+                     "Everything the player needs, in one go: fps_player.lua (movement, camera, inventory, 11 "
+                     "weapons + hands), projectiles.lua (spell projectiles), effects.lua (particles), "
+                     "xp_system.lua (XP, weapon levels, caster unlocks) and health.lua (health bar, healing, "
+                     "respawn). The hands rig comes from GameObject > FPS Player (Hands + Weapons).",
+                     PresetKind::Bundle},
+                    {"FPS Player (fps_player.lua)",
+                     gameforger::editor::fpsdemo::kPlayer,
+                     "Movement, camera, inventory (E / I / 1-8) and the weapons with first-person hands. Works "
+                     "alone, but spells, effects, XP and healing need the rest of the FPS Demo set.",
+                     PresetKind::MovementController},
+                    {"Projectiles (projectiles.lua)",
+                     gameforger::editor::fpsdemo::kProjectiles,
+                     "Spell projectiles for the Storm/Fire/Frost Casters - chain lightning, explosions + burning, "
+                     "freezing. Goes on the player.",
+                     PresetKind::Marker},
+                    {"Effects (effects.lua)",
+                     gameforger::editor::fpsdemo::kEffects,
+                     "Particles: spell casts, trails, elemental impacts, heals, level-ups, crits. Goes on the player.",
+                     PresetKind::Marker},
+                    {"XP System (xp_system.lua)",
+                     gameforger::editor::fpsdemo::kXpSystem,
+                     "XP from every hit; weapon levels boost damage, fire rate, accuracy, ammo and crits; player "
+                     "levels unlock the Fire, Frost and Life Casters. Goes on the player.",
+                     PresetKind::Marker},
+                    {"Health (health.lua)",
+                     gameforger::editor::fpsdemo::kHealth,
+                     "Lets weapons damage this object; health bar, damage numbers, burning/frozen states. On the "
+                     "player, tick is_player for the HUD bar, healing and respawn.",
+                     PresetKind::Marker},
+                    {"Inventory Item (items.lua)",
+                     gameforger::editor::fpsdemo::kItems,
+                     "Makes this object pick-up-able with E into the inventory. Set its name, icon (Change "
+                     "Icon... picks one from your PC), type and weapon in the Scripts section afterwards.",
+                     PresetKind::Marker},
+                    {"Game Manager (game_manager.lua)",
+                     gameforger::editor::fpsdemo::kGameManager,
+                     "The built game's title, splash logo (Change Image...) and intro message - put it on one "
+                     "object per scene (or use GameObject > Game Manager).",
+                     PresetKind::Marker},
+                    {"Climbable (climbable.lua)",
+                     gameforger::editor::fpsdemo::kClimbable,
+                     "Makes this object climbable by the FPS Demo player - a ladder, a wall, a cliff. Walk into it "
+                     "with W to grab on; W/S climb, A/D move sideways, Space jumps off. climb_angle (slider "
+                     "0-360) sets which way the player faces while climbing it.",
+                     PresetKind::Marker},
                 }};
 
-            static std::array<bool, 8> presetSelected{};
+            static std::array<bool, presets.size()> presetSelected{};
 
             std::string presetsPreview;
             for (std::size_t index = 0; index < presets.size(); ++index)
@@ -5270,10 +6491,30 @@ namespace
                     const auto isExclusive = [](const PresetKind kind)
                     {
                         return kind == PresetKind::MovementController || kind == PresetKind::Rigidbody ||
-                            kind == PresetKind::EnemyAI;
+                            kind == PresetKind::EnemyAI || kind == PresetKind::Bundle;
                     };
-                    if (ImGui::Checkbox(presets[index].label, &presetSelected[index]) && !wasSelected &&
-                        isExclusive(presets[index].kind))
+                    if (presets[index].kind == PresetKind::Bundle)
+                    {
+                        ImGui::SeparatorText("FPS Demo preset");
+                    }
+                    // A preset whose .lua isn't in this project stays listed but
+                    // can't be picked (audit G1: catapult_controller.lua is missing).
+                    std::error_code missingCheckError;
+                    const bool scriptMissing = presets[index].path != nullptr &&
+                        !std::filesystem::exists(projectRoot / presets[index].path, missingCheckError);
+                    if (scriptMissing)
+                    {
+                        presetSelected[index] = false;
+                        ImGui::BeginDisabled();
+                    }
+                    const bool presetClicked = ImGui::Checkbox(presets[index].label, &presetSelected[index]);
+                    if (scriptMissing)
+                    {
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.95F, 0.6F, 0.2F, 1.0F), "(file missing: %s)", presets[index].path);
+                    }
+                    if (presetClicked && !wasSelected && isExclusive(presets[index].kind))
                     {
                         // At most one physics-driving preset (a movement controller
                         // OR Rigidbody) at a time - each runs its own independent
@@ -5378,24 +6619,16 @@ namespace
                 {
                     if (!scriptCreator.previewSynced)
                     {
-                        std::snprintf(
-                            scriptCreator.previewBuffer.data(),
-                            scriptCreator.previewBuffer.size(),
-                            "%s",
-                            resultContentNow.c_str());
+                        scriptCreator.previewText = resultContentNow;
                         scriptCreator.previewSynced = true;
                     }
-                    ImGui::InputTextMultiline(
-                        "##GeneratedScript",
-                        scriptCreator.previewBuffer.data(),
-                        scriptCreator.previewBuffer.size(),
-                        ImVec2(480.0F, 220.0F));
+                    inputTextMultilineString("##GeneratedScript", scriptCreator.previewText, ImVec2(480.0F, 220.0F));
 
                     if (ImGui::Button("Save & Attach"))
                     {
                         const std::string path = makeUniqueScriptPath(projectRoot, scriptCreator.scriptName.data());
                         const AICommandResult createResult = commandBus.execute(
-                            CreateScriptCommand{path, "lua", std::string(scriptCreator.previewBuffer.data())});
+                            CreateScriptCommand{path, "lua", scriptCreator.previewText});
                         if (createResult.success)
                         {
                             (void)commandBus.execute(AttachScriptCommand{scriptCreator.targetEntityName, path});
@@ -5440,11 +6673,28 @@ namespace
                         }
                         const ScriptPreset& preset = presets[index];
                         AICommandResult result{true, false, ""};
-                        if (preset.kind != PresetKind::ColliderOnly)
+                        if (preset.kind == PresetKind::Bundle)
+                        {
+                            int attachedCount = 0;
+                            for (const std::string& script : fpsDemoPlayerScripts())
+                            {
+                                if (commandBus.execute(AttachScriptCommand{scriptCreator.targetEntityName, script}).success)
+                                {
+                                    ++attachedCount;
+                                }
+                            }
+                            (void)commandBus.execute(SetPropertyCommand{scriptCreator.targetEntityName, "ScriptProperty",
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#is_player"), std::string("true")});
+                            (void)commandBus.execute(SetPropertyCommand{scriptCreator.targetEntityName, "ScriptProperty",
+                                std::string(std::string(gameforger::editor::fpsdemo::kHealth) + "#destroy_on_death"), std::string("false")});
+                            result = {attachedCount > 0, false,
+                                "Attached " + std::to_string(attachedCount) + " FPS Demo script(s)."};
+                        }
+                        else if (preset.kind != PresetKind::ColliderOnly)
                         {
                             result = commandBus.execute(
                                 AttachScriptCommand{scriptCreator.targetEntityName, preset.path});
-                            if (result.success)
+                            if (result.success && preset.kind != PresetKind::Marker)
                             {
                                 commandBus.execute(SetPropertyCommand{
                                     scriptCreator.targetEntityName, "Collider", "enabled", true});
@@ -5492,16 +6742,12 @@ namespace
         {
             ImGui::Text("File: %s", scriptEditor.scriptPath.c_str());
             ImGui::Separator();
-            ImGui::InputTextMultiline(
-                "##EditScriptContent",
-                scriptEditor.buffer.data(),
-                scriptEditor.buffer.size(),
-                ImVec2(560.0F, 320.0F));
+            inputTextMultilineString("##EditScriptContent", scriptEditor.text, ImVec2(560.0F, 320.0F));
 
             if (ImGui::Button("Save"))
             {
                 const AICommandResult saveResult = commandBus.execute(
-                    CreateScriptCommand{scriptEditor.scriptPath, "lua", std::string(scriptEditor.buffer.data())});
+                    CreateScriptCommand{scriptEditor.scriptPath, "lua", scriptEditor.text});
                 scriptEditor.status = saveResult.message;
                 scriptEditor.statusSuccess = saveResult.success;
                 if (saveResult.success)
@@ -5599,18 +6845,28 @@ namespace
     }
 
     std::optional<int> pickEntity(
-        const Ray& worldRay, const std::vector<SceneEntity>& entities, const std::filesystem::path& projectRoot)
+        const Ray& worldRay, const EditorScene& scene, const std::filesystem::path& projectRoot)
     {
         std::optional<int> bestId;
         float bestDistance = std::numeric_limits<float>::max();
 
-        for (const SceneEntity& entity : entities)
+        for (const SceneEntity& entity : scene.entities())
         {
+            // What you can't see, you can't click (hidden objects, items
+            // sitting in an inventory, anything under a hidden parent).
+            if (!scene.isActiveInHierarchy(entity))
+            {
+                continue;
+            }
             const glm::mat4 model = composeEntityTransform(entity);
             const glm::mat4 inverseModel = glm::inverse(model);
             const glm::vec3 localOrigin = glm::vec3(inverseModel * glm::vec4(worldRay.origin, 1.0F));
             const glm::vec3 localDirection = glm::vec3(inverseModel * glm::vec4(worldRay.direction, 0.0F));
-            const auto [localMin, localMax] = entityLocalBounds(entity, projectRoot);
+            // An "Empty" group node isn't drawn - give it a small grab box
+            // at its origin instead of the full [-1,1] cube.
+            const auto [localMin, localMax] = hasTag(entity, "Empty")
+                ? std::pair<glm::vec3, glm::vec3>{glm::vec3(-0.12F), glm::vec3(0.12F)}
+                : entityLocalBounds(entity, projectRoot);
 
             float tMin = 0.0F;
             float tMax = std::numeric_limits<float>::max();
@@ -5920,12 +7176,13 @@ namespace
         }
 
         const glm::vec3 offsetDirection = cameraOffsetDirection(camera.yaw, camera.pitch);
-        const glm::vec3 forward = -offsetDirection;
-        // Y up, Z forward (right-handed): right = +X = cross(+Y, forward).
-        // Was cross(forward, +Y) which returned -X and made middle-mouse-pan
-        // feel reversed.
-        const glm::vec3 right = glm::normalize(glm::cross(glm::vec3(0.0F, 1.0F, 0.0F), forward));
-        const glm::vec3 up = glm::cross(right, forward);
+        // Screen-right / screen-up of the rendered view (glm::lookAt). This
+        // used cross(+Y, forward), which is screen-LEFT, so A/D were swapped
+        // and middle-mouse pan went the wrong way on both axes.
+        const gameforger::editor::CameraBasis basis = gameforger::editor::cameraBasis(-offsetDirection);
+        const glm::vec3 forward = basis.forward;
+        const glm::vec3 right = basis.right;
+        const glm::vec3 up = basis.up;
 
         if (camera.dragMode == CameraDragMode::Pan)
         {
@@ -6385,7 +7642,6 @@ namespace
         ConsoleState& console,
         ProjectBrowserState& projectBrowser,
         EditHistoryState& history,
-        const std::filesystem::path& currentScenePath,
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
         const float deltaTime,
@@ -6394,10 +7650,25 @@ namespace
         const bool advanceSim = playMode.isPlaying && (!playMode.isPaused || playMode.stepOneFrame);
         const float simDt = advanceSim ? deltaTime : 0.0F;
 
+        // Scripts read where the player is looking (fps_player.lua tilts its
+        // hands with it) and whether the inventory grid has the mouse.
+        playMode.gameplay.lookPitchDegrees = playMode.gameCameraLookPitchDegrees;
+        playMode.gameplay.lookYawDegrees = playMode.gameCameraLookYawDegrees;
+        playMode.gameplay.inventoryOpen = playMode.inventoryWindowOpen;
+
         applyParentConstraints(scene, commandBus);
         tickPlayModeAnimations(scene, commandBus, playMode.gameplay, advanceSim, simDt);
         tickScripts(scene, scriptRuntime, advanceSim, simDt);
+        if (advanceSim)
+        {
+            // Again after scripts, so children of anything a script just
+            // moved (the first-person hands/weapons under the view rig)
+            // follow THIS frame instead of lagging one frame behind the
+            // camera.
+            applyParentConstraints(scene, commandBus);
+        }
         tickProjectiles(scene, commandBus, playMode.gameplay, advanceSim, simDt);
+        tickEffects(playMode.gameplay, advanceSim, simDt);
 
         // Enemy catapult auto-fire - the "two-sided battle" simplification
         // from the plan: no live targeting, just a periodic shot along
@@ -6440,18 +7711,17 @@ namespace
         if (!playMode.isPlaying && !ImGui::GetIO().WantCaptureKeyboard && !ImGuizmo::IsUsing())
         {
             const ImGuiIO& shortcutIo = ImGui::GetIO();
-            if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z))
+            // The only undo/redo key handler: Ctrl+Z undo, Ctrl+Shift+Z or Ctrl+Y redo.
+            if (shortcutIo.KeyCtrl && !shortcutIo.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
             {
                 performUndo(history, scene, selection);
             }
-            else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y))
+            else if (shortcutIo.KeyCtrl &&
+                     ((shortcutIo.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)) || ImGui::IsKeyPressed(ImGuiKey_Y)))
             {
                 performRedo(history, scene, selection);
             }
-            else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
-            {
-                saveSceneAndLog(scene, currentScenePath, console);
-            }
+            // Ctrl+R no longer saves (audit B13) - Save Scene is Ctrl+S, in drawMainMenu.
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
                 selection.multiSelectedIds.clear();
@@ -6778,7 +8048,10 @@ namespace
 
         const bool viewportHovered = viewportReady && ImGui::IsItemHovered();
 
-        if (!playMode.isPlaying && viewportHovered && activeCamera.dragMode == CameraDragMode::None)
+        // Not while Ctrl is held: Ctrl+Y (redo) and Ctrl+R also switched the
+        // gizmo to Universal / Scale.
+        if (!playMode.isPlaying && viewportHovered && activeCamera.dragMode == CameraDragMode::None &&
+            !ImGui::GetIO().KeyCtrl)
         {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) gizmoOperation = ImGuizmo::TRANSLATE;
             if (ImGui::IsKeyPressed(ImGuiKey_E)) gizmoOperation = ImGuizmo::ROTATE;
@@ -6944,7 +8217,7 @@ namespace
         {
             const Ray ray = computeMouseRay(
                 ImGui::GetMousePos(), imageScreenPos, available, viewportRenderer.view(), viewportRenderer.projection());
-            const std::optional<int> hit = pickEntity(ray, scene.entities(), projectRoot);
+            const std::optional<int> hit = pickEntity(ray, scene, projectRoot);
             const ImGuiIO& pickIo = ImGui::GetIO();
             if (hit.has_value())
             {
@@ -7142,7 +8415,19 @@ int main()
         });
     AIProviderClient aiProviderClient(projectRoot);
     AISetupState aiSetup;
-    selectProvider(aiSetup, 0);
+    {
+        // Start on Providers.json's activeProvider (audit A3), else its first entry.
+        const AIProviderList providerList = loadProviderList(projectRoot / "Game" / "AI" / "Providers.json");
+        aiSetup.providers = providerList.providers;
+        aiSetup.selectedProviderId = providerList.activeProvider;
+        const bool activeListed = std::any_of(
+            aiSetup.providers.begin(), aiSetup.providers.end(),
+            [&](const AIProvider& provider) { return provider.id == providerList.activeProvider; });
+        if (!activeListed && !aiSetup.providers.empty())
+        {
+            aiSetup.selectedProviderId = aiSetup.providers.front().id;
+        }
+    }
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
@@ -7154,7 +8439,8 @@ int main()
     // the app's lifetime and is re-passed to scriptRuntime.initialize() on
     // every Play start, same lifetime pattern as scriptRuntime itself. See
     // GlfwInputSource for GameForgerRuntime's equivalent.
-    ImGuiInputSource imguiInputSource;
+    // Qualified: imgui_internal.h has its own enum ImGuiInputSource.
+    gameforger::editor::ImGuiInputSource imguiInputSource;
     AnimationPanelState animPanel;
     AIAnimationState aiAnimation;
     ProjectBrowserState projectBrowser;
@@ -7163,9 +8449,16 @@ int main()
     TerrainSculptState terrainSculpt;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     bool resetLayout = false;
-    // What "Save Scene" (Ctrl+R) writes to and "Open Scene..." reads from most
-    // recently; "Save Scene As..." and "Open Scene..." both update this.
-    std::filesystem::path currentScenePath = projectRoot / "Game" / "Scenes" / "Castle.gfprod";
+    ImGuiID dockspaceId = 0;
+    bool needsDefaultLayout = false;
+    int focusDefaultTabsInFrames = 0;
+    // The scene file "Save Scene" writes to; set by Open and Save As. Empty
+    // until the scene has a file (the editor starts with an empty, unsaved
+    // scene), so the first Save asks where instead of overwriting
+    // Castle.gfprod (audit B2).
+    std::filesystem::path currentScenePath;
+    SceneDocumentState sceneDocument;
+    sceneDocument.savedText = serializeScene(scene.entities());
     double lastFrameTime = glfwGetTime();
 
     while (glfwWindowShouldClose(window) == GLFW_FALSE)
@@ -7177,27 +8470,54 @@ int main()
 
         glfwPollEvents();
 
+        // Closing the window with unsaved changes asks first (audit B2).
+        if (glfwWindowShouldClose(window) == GLFW_TRUE && !sceneDocument.quitConfirmed &&
+            sceneHasUnsavedChanges(scene, playMode, sceneDocument))
+        {
+            glfwSetWindowShouldClose(window, GLFW_FALSE);
+            sceneDocument.pending = SceneDocumentState::PendingAction::Quit;
+            sceneDocument.openPrompt = true;
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
 
-        if (resetLayout)
+        // Built before this frame's DockSpace, with the id the previous
+        // frame's DockSpace returned: on first run when the layout file had
+        // no docked layout, and for Edit > Reset Editor Layout (which used
+        // to load an empty layout = every panel floating).
+        if (dockspaceId != 0 && (resetLayout || needsDefaultLayout))
         {
-            ImGui::LoadIniSettingsFromMemory("", 0);
+            buildDefaultDockLayout(dockspaceId, ImGui::GetMainViewport());
             resetLayout = false;
+            needsDefaultLayout = false;
+            // Panels dock into the new layout and their tab bars are created
+            // over the next frames; focus once that has settled.
+            focusDefaultTabsInFrames = 4;
         }
 
-        ImGui::DockSpaceOverViewport(
+        const bool firstDockFrame = dockspaceId == 0;
+        dockspaceId = ImGui::DockSpaceOverViewport(
             0,
             ImGui::GetMainViewport(),
             ImGuiDockNodeFlags_PassthruCentralNode);
+        if (firstDockFrame)
+        {
+            const ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+            needsDefaultLayout = rootNode == nullptr || !rootNode->IsSplitNode();
+        }
 
         drawMainMenu(
             scene, commandBus, selection, camera, playMode, scriptRuntime, imguiInputSource, projectRoot, console,
-            settings, history, currentScenePath, nativeWindowHandle, resetLayout);
+            settings, history, currentScenePath, sceneDocument, nativeWindowHandle, resetLayout);
+        if (sceneDocument.quitConfirmed)
+        {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
-        const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
+        const std::string activeProviderId = aiSetup.selectedProviderId;
         drawEditorPanels(
             viewportRenderer,
             camera,
@@ -7218,13 +8538,12 @@ int main()
             console,
             projectBrowser,
             history,
-            currentScenePath,
             gizmoOperation,
             terrainSculpt,
             deltaTime,
             nativeWindowHandle);
         drawToolboxPanel(
-            textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
+            camera, textMeshTool, storyboard, terrainSculpt, scene, commandBus, selection, console, projectRoot,
             nativeWindowHandle);
         drawConsolePanel(console);
         drawGameViewPanel(
@@ -7238,6 +8557,16 @@ int main()
         drawCineCameraPreviewPanel(
             cineCameraRenderer, scene, commandBus, selection, storyboard, projectRoot, deltaTime);
         drawStoryboardPanel(scene, selection, storyboard);
+
+        if (focusDefaultTabsInFrames > 0 && --focusDefaultTabsInFrames == 0)
+        {
+            // After a default layout is built, show the first tab of each
+            // group - otherwise the last panel created (Storyboard) has focus
+            // and its tab stays on top.
+            selectDockedTab("AI Forge");
+            selectDockedTab("Viewport");
+            ImGui::SetWindowFocus("Viewport");
+        }
 
         ImGui::Render();
 
@@ -7263,6 +8592,10 @@ int main()
     if (aiAnimation.worker.joinable())
     {
         aiAnimation.worker.join();
+    }
+    if (aiSetup.testWorker.joinable())
+    {
+        aiSetup.testWorker.join();
     }
 
     if (trayIconAdded)

@@ -161,6 +161,20 @@ namespace gameforger::editor
 		float launchSpeed = 22.0F;
 	};
 
+	// A per-entity value for one of a script's `-- @property` fields (see
+	// ScriptRuntime::parseScriptProperties). Stored as text whatever the
+	// property's declared type - the script's own annotation says how to
+	// read it back. Applied onto the script instance's table right before
+	// its on_start() runs, so two objects sharing one script (e.g. two
+	// items.lua pickups) can each carry their own item name/icon, saved
+	// with the scene. No entry = the script's own annotated default.
+	struct ScriptPropertyOverride
+	{
+		std::string scriptPath;
+		std::string name;
+		std::string value;
+	};
+
 	struct SceneEntity
 	{
 		int id = 0;
@@ -192,6 +206,9 @@ namespace gameforger::editor
 		// hinge edge. Position always refers to this pivot's world location.
 		glm::vec3 pivotOffset{0.0F};
 		std::vector<std::string> scripts;
+		// Per-entity values for the attached scripts' `-- @property` fields
+		// - see ScriptPropertyOverride above.
+		std::vector<ScriptPropertyOverride> scriptProperties;
 		EntityAnimation animation;
 		EntityCameraRig cameraRig;
 		// Whether self.physics:resolve() (see ScriptRuntime) treats this
@@ -284,6 +301,45 @@ namespace gameforger::editor
 		return entity.tags.empty() ? "Untagged" : entity.tags.front();
 	}
 
+	[[nodiscard]] inline bool hasTag(const SceneEntity& entity, const std::string& tag)
+	{
+		for (const std::string& candidate : entity.tags)
+		{
+			if (candidate == tag)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	[[nodiscard]] inline bool hasScript(const SceneEntity& entity, const std::string& scriptPath)
+	{
+		for (const std::string& candidate : entity.scripts)
+		{
+			if (candidate == scriptPath)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The override stored for (scriptPath, name), or nullptr if the entity
+	// uses that property's annotated default.
+	[[nodiscard]] inline const ScriptPropertyOverride* findScriptProperty(
+		const SceneEntity& entity, const std::string& scriptPath, const std::string& name)
+	{
+		for (const ScriptPropertyOverride& entry : entity.scriptProperties)
+		{
+			if (entry.scriptPath == scriptPath && entry.name == name)
+			{
+				return &entry;
+			}
+		}
+		return nullptr;
+	}
+
 	class EditorScene final
 	{
 	public:
@@ -293,6 +349,12 @@ namespace gameforger::editor
 		[[nodiscard]] const std::vector<SceneEntity>& entities() const noexcept;
 		[[nodiscard]] const SceneEntity* findEntity(int id) const noexcept;
 		[[nodiscard]] const SceneEntity* findEntity(const std::string& name) const noexcept;
+
+		// Unity's activeInHierarchy: false if this entity OR any ancestor
+		// (via parentName) is inactive - so hiding a parent (e.g. a weapon
+		// model root, or an item stored in the inventory) hides every part
+		// under it. A missing parent or a parent cycle ends the walk.
+		[[nodiscard]] bool isActiveInHierarchy(const SceneEntity& entity) const noexcept;
 
 		// Direct, unvalidated mutable access for editor-internal bookkeeping that
 		// isn't a scene "property" in the AICommand sense (animation keyframe

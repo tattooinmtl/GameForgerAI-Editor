@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.28)
 # bump the patch number (0.31 -> 0.32 -> ...) each time a meaningful change
 # lands, through Beta 1.0.0 at first public try-out release.
 project(GameForgerAI
-    VERSION 0.79.0
+    VERSION 0.89.0
     DESCRIPTION "AI-assisted OpenGL RPG editor and runtime"
     LANGUAGES C CXX
 )
@@ -63,7 +63,9 @@ FetchContent_Declare(
     imguizmo
     GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
     GIT_TAG 5ab7676402ace03cdf930b2d972f59c7d03c6fa8
-    GIT_SHALLOW TRUE
+    # No GIT_SHALLOW: a shallow clone can only check out a branch/tag, not a
+    # bare commit hash - with it, every fresh configure (and CI) failed with
+    # "Failed to checkout tag".
 )
 
 FetchContent_Declare(

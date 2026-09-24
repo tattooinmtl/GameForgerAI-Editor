@@ -35,6 +35,9 @@ namespace gameforger::editor
 		// rects even with no text labels).
 		[[nodiscard]] bool initialize(const std::filesystem::path& fontPath);
 		void shutdown() noexcept;
+		// False if the font given to initialize() couldn't be baked (menu text
+		// would be blank) - the caller can shutdown() and retry another font.
+		[[nodiscard]] bool hasFont() const noexcept { return fontLoaded_; }
 
 		// Draws the whole pause menu (dim overlay, title, two sliders,
 		// Save/Load/Resume/Quit buttons) into whichever framebuffer is

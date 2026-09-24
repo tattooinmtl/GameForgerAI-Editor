@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -21,6 +22,7 @@
 #include <glm/common.hpp>
 #include <glm/vec3.hpp>
 
+#include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/AICommandBus.hpp"
 #include "GameForger/Editor/EditorScene.hpp"
 #include "GameForger/Editor/GlfwInputSource.hpp"
@@ -32,7 +34,11 @@
 #include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
+#include "GameForger/Runtime/GameplayHud.hpp"
+#include "GameForger/Runtime/FpsDemoKit.hpp"
+
 #include "GameMenu.hpp"
+#include "RuntimeHud.hpp"
 
 namespace
 {
@@ -85,44 +91,6 @@ namespace
 		return projectRoot / *startupScene;
 	}
 
-	// Nearest isPickupItem entity to `origin` (the player's own position, not
-	// a camera aim ray) within horizontalRange/heightTolerance - mirrors the
-	// Editor's own findPickupCandidate (Editor/src/main.cpp) exactly; kept as
-	// a small standalone copy here rather than relocated to Engine, since
-	// it's the only piece of the Play-mode gameplay loop that isn't already
-	// shared and isn't worth a new header for ~30 lines.
-	const gameforger::editor::SceneEntity* findPickupCandidate(
-		const gameforger::editor::EditorScene& scene,
-		const glm::vec3& origin,
-		const float horizontalRange,
-		const float heightTolerance,
-		const int excludeId)
-	{
-		const gameforger::editor::SceneEntity* best = nullptr;
-		float bestDistanceSquared = horizontalRange * horizontalRange;
-		for (const gameforger::editor::SceneEntity& other : scene.entities())
-		{
-			if (other.id == excludeId || !other.isPickupItem)
-			{
-				continue;
-			}
-			if (std::abs(other.position.y - origin.y) > heightTolerance)
-			{
-				continue;
-			}
-			const float deltaX = other.position.x - origin.x;
-			const float deltaZ = other.position.z - origin.z;
-			const float distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
-			if (distanceSquared > bestDistanceSquared)
-			{
-				continue;
-			}
-			best = &other;
-			bestDistanceSquared = distanceSquared;
-		}
-		return best;
-	}
-
 	// Save/resume: the world half is just the existing scene-file format
 	// (saveScene/loadScene, SceneSerializer.hpp) written to a fixed path -
 	// full entity state (positions, and critically, any isPickupItem entity
@@ -134,12 +102,11 @@ namespace
 	// building JSON text directly rather than through a generic serializer
 	// (see SceneSerializer.cpp's own escapeJson/vec3ToJsonArray).
 	//
-	// MVP scope cut, stated plainly: only itemName/iconPath/count round-
-	// trip - not scale/color/materialBlendWeight/materialLayers/
-	// materialUvScale. A saved-then-reloaded item that's later dropped
-	// (Editor-only feature today, see drawInventoryWindow) would drop with
-	// default appearance instead of its original look. Worth extending if
-	// Runtime ever gets its own drop-from-inventory action.
+	// Saved per non-empty slot: slot index, name, icon, count, and the
+	// items.lua data (type/weapon/stacking + the hidden scene objects the
+	// slot holds, which the world save keeps). Legacy pickups' captured
+	// look (scale/color/material) is not saved - Runtime has no drop action
+	// for them yet.
 	std::string escapeJsonString(const std::string& text)
 	{
 		std::string escaped;
@@ -168,15 +135,30 @@ namespace
 	bool writeInventorySave(
 		const std::filesystem::path& path, const std::vector<gameforger::editor::GameplayState::InventoryItem>& items)
 	{
-		std::string json = "{\n  \"inventoryItems\": [\n";
+		std::string json = "{\n  \"inventoryItems\": [";
+		bool first = true;
 		for (std::size_t index = 0; index < items.size(); ++index)
 		{
 			const gameforger::editor::GameplayState::InventoryItem& item = items[index];
-			json += "    { \"itemName\": \"" + escapeJsonString(item.itemName) + "\", \"iconPath\": \"" +
-				escapeJsonString(item.iconPath) + "\", \"count\": " + std::to_string(item.count) + " }";
-			json += (index + 1 < items.size()) ? ",\n" : "\n";
+			if (item.empty())
+			{
+				continue;
+			}
+			std::string stored;
+			for (std::size_t storedIndex = 0; storedIndex < item.storedEntityNames.size(); ++storedIndex)
+			{
+				stored += (storedIndex == 0 ? "\"" : ", \"") + escapeJsonString(item.storedEntityNames[storedIndex]) + "\"";
+			}
+			json += first ? "\n" : ",\n";
+			first = false;
+			json += "    { \"slot\": " + std::to_string(index) + ", \"itemName\": \"" +
+				escapeJsonString(item.itemName) + "\", \"iconPath\": \"" + escapeJsonString(item.iconPath) +
+				"\", \"count\": " + std::to_string(item.count) + ", \"itemType\": \"" +
+				escapeJsonString(item.itemType) + "\", \"weapon\": \"" + escapeJsonString(item.weapon) +
+				"\", \"stackable\": " + (item.stackable ? "true" : "false") + ", \"maxStack\": " +
+				std::to_string(item.maxStack) + ", \"storedEntities\": [" + stored + "] }";
 		}
-		json += "  ]\n}\n";
+		json += first ? "]\n}\n" : "\n  ]\n}\n";
 
 		std::ofstream output(path, std::ios::binary);
 		if (!output)
@@ -205,11 +187,40 @@ namespace
 		{
 			return std::nullopt;
 		}
-		std::vector<gameforger::editor::GameplayState::InventoryItem> items;
-		items.reserve(itemsField->arrayValue.size());
+		std::vector<gameforger::editor::GameplayState::InventoryItem> items(
+			static_cast<std::size_t>(gameforger::editor::kInventorySlotCount));
 		for (const gameforger::editor::json::Value& itemValue : itemsField->arrayValue)
 		{
 			gameforger::editor::GameplayState::InventoryItem item;
+			if (const gameforger::editor::json::Value* typeField = itemValue.find("itemType"))
+			{
+				item.itemType = typeField->asString().value_or("");
+			}
+			if (const gameforger::editor::json::Value* weaponField = itemValue.find("weapon"))
+			{
+				item.weapon = weaponField->asString().value_or("");
+			}
+			if (const gameforger::editor::json::Value* stackableField = itemValue.find("stackable"))
+			{
+				item.stackable = stackableField->type == gameforger::editor::json::Value::Type::Boolean
+					? stackableField->boolValue
+					: true;
+			}
+			if (const gameforger::editor::json::Value* maxStackField = itemValue.find("maxStack"))
+			{
+				item.maxStack = static_cast<int>(maxStackField->asNumber().value_or(99.0));
+			}
+			if (const gameforger::editor::json::Value* storedField = itemValue.find("storedEntities");
+				storedField != nullptr && storedField->type == gameforger::editor::json::Value::Type::Array)
+			{
+				for (const gameforger::editor::json::Value& storedName : storedField->arrayValue)
+				{
+					if (const std::optional<std::string> name = storedName.asString())
+					{
+						item.storedEntityNames.push_back(*name);
+					}
+				}
+			}
 			if (const gameforger::editor::json::Value* nameField = itemValue.find("itemName"))
 			{
 				item.itemName = nameField->asString().value_or("");
@@ -222,7 +233,32 @@ namespace
 			{
 				item.count = static_cast<int>(countField->asNumber().value_or(0.0));
 			}
-			items.push_back(std::move(item));
+			if (item.empty())
+			{
+				continue;
+			}
+			// Older saves have no slot index - put those in the first free slot.
+			int slot = -1;
+			if (const gameforger::editor::json::Value* slotField = itemValue.find("slot"))
+			{
+				slot = static_cast<int>(slotField->asNumber().value_or(-1.0));
+			}
+			if (slot < 0 || slot >= static_cast<int>(items.size()) || !items[static_cast<std::size_t>(slot)].empty())
+			{
+				slot = -1;
+				for (int free = 0; free < static_cast<int>(items.size()); ++free)
+				{
+					if (items[static_cast<std::size_t>(free)].empty())
+					{
+						slot = free;
+						break;
+					}
+				}
+			}
+			if (slot >= 0)
+			{
+				items[static_cast<std::size_t>(slot)] = std::move(item);
+			}
 		}
 		return items;
 	}
@@ -276,6 +312,157 @@ namespace
 	}
 }
 
+namespace
+{
+	constexpr const char* kGameManagerScript = gameforger::editor::fpsdemo::kGameManager;
+
+	// The scene's Game Manager (an object with game_manager.lua) - its
+	// Inspector values configure the built game: window title, boot splash
+	// logo and how long it shows. Null if the scene has none.
+	const gameforger::editor::SceneEntity* findGameManager(const std::vector<gameforger::editor::SceneEntity>& entities)
+	{
+		for (const gameforger::editor::SceneEntity& entity : entities)
+		{
+			if (gameforger::editor::hasScript(entity, kGameManagerScript))
+			{
+				return &entity;
+			}
+		}
+		return nullptr;
+	}
+
+	// Which startup scene a save belongs to. A save made while playing a
+	// different game/scene (e.g. before "Build Game" pointed Project.json at
+	// a new scene) is ignored, not deleted, so it can't hijack the new game.
+	std::string readSaveMetaScene(const std::filesystem::path& metaPath)
+	{
+		const std::optional<std::string> text = readTextFile(metaPath);
+		if (!text.has_value())
+		{
+			return {};
+		}
+		const std::optional<gameforger::editor::json::Value> parsed = gameforger::editor::json::parse(*text);
+		if (!parsed.has_value())
+		{
+			return {};
+		}
+		const gameforger::editor::json::Value* scene = parsed->find("startupScene");
+		return scene != nullptr ? scene->asString().value_or("") : std::string();
+	}
+
+	void writeSaveMeta(const std::filesystem::path& metaPath, const std::string& startupScene)
+	{
+		std::ofstream output(metaPath, std::ios::binary | std::ios::trunc);
+		output << "{\n  \"startupScene\": \"" << escapeJsonString(startupScene) << "\"\n}\n";
+	}
+
+	// Runtime's inventory grid (I): the shared hotbar shows slots 1-8 all
+	// the time; this panel shows all 24. Click a slot to equip it,
+	// right-click to drop one in front of the player.
+	struct RuntimeInventoryPanel
+	{
+		bool leftWasDown = false;
+		bool rightWasDown = false;
+	};
+
+	void drawRuntimeInventory(gameforger::editor::RuntimeHud& hud, GLFWwindow* window, const int width, const int height,
+		gameforger::editor::GameplayState& gameplay, gameforger::editor::EditorScene& scene,
+		gameforger::editor::AICommandBus& commandBus, const gameforger::editor::SceneEntity* player,
+		RuntimeInventoryPanel& panel)
+	{
+		using namespace gameforger::editor;
+		double mouseX = 0.0;
+		double mouseY = 0.0;
+		glfwGetCursorPos(window, &mouseX, &mouseY);
+		const bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+		const bool rightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+		const bool leftClicked = leftDown && !panel.leftWasDown;
+		const bool rightClicked = rightDown && !panel.rightWasDown;
+		panel.leftWasDown = leftDown;
+		panel.rightWasDown = rightDown;
+
+		constexpr int kColumns = kHotbarSlotCount;
+		constexpr float kSlot = 62.0F;
+		constexpr float kGap = 8.0F;
+		const int rows = (kInventorySlotCount + kColumns - 1) / kColumns;
+		const glm::vec2 gridSize(kColumns * kSlot + (kColumns - 1) * kGap, rows * kSlot + (rows - 1) * kGap);
+		const glm::vec2 panelMin(
+			(static_cast<float>(width) - gridSize.x) * 0.5F - 24.0F, (static_cast<float>(height) - gridSize.y) * 0.5F - 60.0F);
+		const glm::vec2 panelMax = panelMin + gridSize + glm::vec2(48.0F, 110.0F);
+		hud.rectFilled({0.0F, 0.0F}, {static_cast<float>(width), static_cast<float>(height)}, {0.0F, 0.0F, 0.0F, 0.35F}, 0.0F);
+		hud.rectFilled(panelMin, panelMax, {0.06F, 0.06F, 0.07F, 0.94F}, 8.0F);
+		hud.rect(panelMin, panelMax, {0.976F, 0.53F, 0.012F, 0.9F}, 8.0F, 2.0F);
+		hud.text(panelMin + glm::vec2(24.0F, 14.0F), {1.0F, 0.9F, 0.7F, 1.0F}, "Inventory", 1.3F);
+		hud.text(panelMin + glm::vec2(24.0F, 40.0F), {0.7F, 0.7F, 0.75F, 1.0F},
+			"Click: equip    Right-click: drop    I: close", 0.85F);
+
+		const glm::vec2 gridOrigin = panelMin + glm::vec2(24.0F, 70.0F);
+		int hovered = -1;
+		auto& slots = gameplay.inventoryItems;
+		for (int index = 0; index < static_cast<int>(slots.size()); ++index)
+		{
+			const int column = index % kColumns;
+			const int row = index / kColumns;
+			const glm::vec2 min = gridOrigin + glm::vec2(column * (kSlot + kGap), row * (kSlot + kGap));
+			const glm::vec2 max = min + glm::vec2(kSlot);
+			const bool isHovered = mouseX >= min.x && mouseX <= max.x && mouseY >= min.y && mouseY <= max.y;
+			if (isHovered)
+			{
+				hovered = index;
+			}
+			const GameplayState::InventoryItem& item = slots[static_cast<std::size_t>(index)];
+			hud.rectFilled(min, max, row == 0 ? HudColor{0.13F, 0.11F, 0.08F, 1.0F} : HudColor{0.10F, 0.10F, 0.12F, 1.0F}, 5.0F);
+			if (!item.empty())
+			{
+				if (!item.iconPath.empty())
+				{
+					hud.image(item.iconPath, min + glm::vec2(6.0F), max - glm::vec2(6.0F));
+				}
+				else
+				{
+					hud.text(min + glm::vec2(8.0F, 22.0F), {0.9F, 0.9F, 0.9F, 1.0F}, item.itemName.substr(0, 3), 1.0F);
+				}
+				if (item.count > 1)
+				{
+					const std::string count = "x" + std::to_string(item.count);
+					hud.text(max - hud.textSize(count, 0.8F) - glm::vec2(4.0F, 2.0F), {1.0F, 1.0F, 1.0F, 1.0F}, count, 0.8F);
+				}
+			}
+			if (row == 0)
+			{
+				hud.text(min + glm::vec2(4.0F, 2.0F), {0.8F, 0.75F, 0.65F, 0.8F}, std::to_string(index + 1), 0.7F);
+			}
+			const bool selected = gameplay.selectedSlot == index;
+			hud.rect(min, max,
+				selected ? HudColor{0.976F, 0.53F, 0.012F, 1.0F}
+						 : (isHovered ? HudColor{0.9F, 0.9F, 0.95F, 0.9F} : HudColor{0.5F, 0.5F, 0.55F, 0.6F}),
+				5.0F, selected ? 3.0F : 1.0F);
+		}
+
+		if (hovered >= 0 && !slots[static_cast<std::size_t>(hovered)].empty())
+		{
+			const GameplayState::InventoryItem& item = slots[static_cast<std::size_t>(hovered)];
+			std::string label = item.itemName;
+			if (!item.weapon.empty())
+			{
+				label += "  (" + item.weapon + ")";
+			}
+			hud.text({panelMin.x + 24.0F, panelMax.y - 30.0F}, {1.0F, 1.0F, 1.0F, 1.0F}, label, 1.0F);
+			if (leftClicked)
+			{
+				gameplay.selectedSlot = hovered;
+			}
+			else if (rightClicked && player != nullptr)
+			{
+				const float yaw = player->rotationEuler.y;
+				const glm::vec3 forward(std::sin(glm::radians(yaw)), 0.0F, std::cos(glm::radians(yaw)));
+				const glm::vec3 dropPosition = player->position + forward * 2.0F + glm::vec3(0.0F, 0.6F, 0.0F);
+				(void)dropInventoryItem(scene, commandBus, gameplay, hovered, dropPosition, yaw);
+			}
+		}
+	}
+}
+
 int main()
 {
 	using namespace gameforger::editor;
@@ -295,9 +482,24 @@ int main()
 	// Resume: if a previous session's save exists, it takes priority over
 	// Project.json's authored startupScene - this is the whole mechanism,
 	// no menu/prompt needed (see the README's Alpha 0.73 note for why).
+	const std::filesystem::path saveMetaPath = saveDirectory / "save.meta.json";
+	const std::optional<std::filesystem::path> startupScenePath = readStartupScenePath(projectRoot);
+	std::string startupSceneKey;
+	if (startupScenePath.has_value())
+	{
+		std::error_code relativeError;
+		startupSceneKey = std::filesystem::relative(*startupScenePath, projectRoot, relativeError).generic_string();
+	}
 	std::vector<SceneEntity> initialEntities;
 	bool resumedFromSave = false;
-	if (std::filesystem::exists(saveScenePath))
+	const bool saveMatchesGame =
+		!startupSceneKey.empty() && readSaveMetaScene(saveMetaPath) == startupSceneKey;
+	if (std::filesystem::exists(saveScenePath) && !saveMatchesGame)
+	{
+		std::fprintf(stderr, "Ignoring %s - it was saved from a different startup scene.\n",
+			saveScenePath.string().c_str());
+	}
+	if (std::filesystem::exists(saveScenePath) && saveMatchesGame)
 	{
 		const SceneLoadResult saveLoadResult = loadScene(saveScenePath);
 		if (saveLoadResult.success)
@@ -315,7 +517,6 @@ int main()
 	}
 	if (!resumedFromSave)
 	{
-		const std::optional<std::filesystem::path> startupScenePath = readStartupScenePath(projectRoot);
 		if (!startupScenePath.has_value())
 		{
 			return 1;
@@ -343,13 +544,48 @@ int main()
 	// The shipped game's own boot splash - distinct from the Editor's
 	// logo.jpg, same technique (own borderless GLFW window + GL context,
 	// closes itself after durationSeconds - see SplashScreen.hpp).
-	showSplashScreen(projectRoot / "Game" / "Branding" / "engine.png", 1.8);
+	std::string windowTitle = "GameForgerAI Runtime";
+	{
+		std::filesystem::path splashPath = projectRoot / "Game" / "Branding" / "engine.png";
+		double splashSeconds = 1.8;
+		if (const SceneEntity* manager = findGameManager(initialEntities))
+		{
+			const std::string title = ScriptRuntime::scriptPropertyText(*manager, kGameManagerScript, "game_title", projectRoot);
+			if (!title.empty())
+			{
+				windowTitle = title;
+			}
+			// The logo must live inside the game's own folder (Game/...).
+			const std::string logo = ScriptRuntime::scriptPropertyText(*manager, kGameManagerScript, "splash_logo", projectRoot);
+			if (const std::optional<std::filesystem::path> resolved =
+					gameforger::core::resolveProjectFile(projectRoot, logo, "Game", {".png", ".jpg", ".jpeg", ".bmp", ".tga"});
+				resolved.has_value() && std::filesystem::exists(*resolved))
+			{
+				splashPath = *resolved;
+			}
+			else if (!logo.empty())
+			{
+				std::fprintf(stderr, "Game Manager splash_logo '%s' not found inside Game/ - using the engine logo.\n",
+					logo.c_str());
+			}
+			const std::string seconds =
+				ScriptRuntime::scriptPropertyText(*manager, kGameManagerScript, "splash_seconds", projectRoot);
+			if (!seconds.empty())
+			{
+				splashSeconds = std::clamp(std::strtod(seconds.c_str(), nullptr), 0.0, 10.0);
+			}
+		}
+		if (splashSeconds > 0.0)
+		{
+			showSplashScreen(splashPath, splashSeconds);
+		}
+	}
 
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-	GLFWwindow* window = glfwCreateWindow(1280, 720, "GameForgerAI Runtime", nullptr, nullptr);
+	GLFWwindow* window = glfwCreateWindow(1280, 720, windowTitle.c_str(), nullptr, nullptr);
 	if (window == nullptr)
 	{
 		glfwTerminate();
@@ -411,10 +647,34 @@ int main()
 	// stays usable with blank labels); only a real GL/shader failure
 	// returns false, which isn't fatal enough to abort the whole game over.
 	GameMenu gameMenu;
-	if (!gameMenu.initialize(projectRoot / "Game" / "Fonts" / "Thuast Demo.otf"))
 	{
-		std::fprintf(stderr, "Failed to initialize the pause menu (shader/GL setup failed) - continuing without it.\n");
+		// The bundled display font is CFF-flavored (stb_truetype can't bake
+		// it) - fall back to a TrueType font so menu text isn't blank.
+		std::vector<std::filesystem::path> menuFonts{projectRoot / "Game" / "Fonts" / "Thuast Demo.otf"};
+		for (const std::filesystem::path& candidate : runtimeFontCandidates(projectRoot))
+		{
+			menuFonts.push_back(candidate);
+		}
+		for (const std::filesystem::path& fontPath : menuFonts)
+		{
+			gameMenu.shutdown();
+			if (!gameMenu.initialize(fontPath))
+			{
+				std::fprintf(stderr, "Failed to initialize the pause menu (shader/GL setup failed) - continuing without it.\n");
+				break;
+			}
+			if (gameMenu.hasFont())
+			{
+				break;
+			}
+		}
 	}
+	RuntimeHud hud;
+	if (!hud.initialize(projectRoot))
+	{
+		std::fprintf(stderr, "Failed to initialize the HUD renderer - continuing without HUD.\n");
+	}
+	RuntimeInventoryPanel inventoryPanel;
 
 	// No undo history needed here (that's Editor-only bookkeeping around
 	// this same execute() call - see main.cpp's own commandBus.setHandler).
@@ -431,6 +691,7 @@ int main()
 			gameplay.inventoryItems = *savedInventory;
 		}
 	}
+	ensureInventorySlots(gameplay);
 	ScriptRuntime scriptRuntime;
 	// Re-run whenever the running entity list changes out from under the
 	// script runtime - initial startup, and the pause menu's Load button
@@ -470,6 +731,9 @@ int main()
 			{
 				/* no-op: Runtime does not spawn gravity projectiles */
 			});
+		// After initialize() (which resets it) - self.inventory,
+		// self.camera:getPitch/getAim and spawnBeam/spawnFlash use it.
+		scriptRuntime.setGameplayState(&gameplay);
 		for (const SceneEntity& entity : scene.entities())
 		{
 			for (const std::string& scriptPath : entity.scripts)
@@ -496,8 +760,6 @@ int main()
 	bool saveRequested = false;
 	bool loadRequested = false;
 
-	constexpr const char* kInventorySystemScriptPath = "Game/Scripts/inventory_system.lua";
-
 	while (glfwWindowShouldClose(window) == GLFW_FALSE)
 	{
 		glfwPollEvents();
@@ -518,10 +780,20 @@ int main()
 		// drawEditorPanels (main.cpp) - `!menuOpen` in place of
 		// playMode.isPlaying (Runtime has no Play/Stop toggle, it's
 		// "playing" its entire lifetime except while paused for the menu).
+		gameplay.lookPitchDegrees = gameCameraLookPitchDegrees;
+		gameplay.lookYawDegrees = gameCameraLookYawDegrees;
+		// gameplay.inventoryOpen is toggled with I below (runtime inventory panel).
 		applyParentConstraints(scene, commandBus);
 		tickPlayModeAnimations(scene, commandBus, gameplay, !menuOpen, deltaTime);
 		tickScripts(scene, scriptRuntime, !menuOpen, deltaTime);
+		if (!menuOpen)
+		{
+			// Again after scripts so the first-person hands rig follows the
+			// camera this frame (same as the Editor, see drawEditorPanels).
+			applyParentConstraints(scene, commandBus);
+		}
 		tickProjectiles(scene, commandBus, gameplay, !menuOpen, deltaTime);
+		tickEffects(gameplay, !menuOpen, deltaTime);
 
 		const SceneEntity* followedEntity =
 			scriptRuntime.hasActiveCamera() ? scene.findEntity(scriptRuntime.activeCameraEntityId()) : nullptr;
@@ -553,7 +825,13 @@ int main()
 		{
 			menuOpen = !menuOpen;
 		}
-		const bool wantsCursorLock = followedEntity != nullptr && followedEntity->cameraRig.lockCursor && !menuOpen;
+		if (!menuOpen && followedEntity != nullptr && inputSource.isKeyPressed("I") &&
+			entityProvidesInventory(*followedEntity, scriptRuntime))
+		{
+			gameplay.inventoryOpen = !gameplay.inventoryOpen;
+		}
+		const bool wantsCursorLock = followedEntity != nullptr && followedEntity->cameraRig.lockCursor && !menuOpen &&
+			!gameplay.inventoryOpen;
 		if (wantsCursorLock && !gameplay.cursorCurrentlyLocked)
 		{
 			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -598,58 +876,45 @@ int main()
 			}
 		}
 
-		// Pickup (E key) - proximity-based, same as the Editor's Game view
-		// (see findPickupCandidate's own comment for why). No visual "[E]
-		// Pick up X" hint or inventory grid yet (both are ImGui UI chrome,
-		// deferred to a later pass) - E still works, it just does its thing
-		// silently for now. Suppressed while the menu is open so E doesn't
-		// double as a gameplay action behind the pause overlay.
-		if (followedEntity != nullptr && !menuOpen)
+		// Pickup (E key) - the same shared logic as the Editor's Game view
+		// (findPickupItemCandidate/pickUpItem, GameplayLoop.cpp): legacy
+		// "Is Pickup Item" objects and items.lua objects alike. No on-screen
+		// hint or inventory grid in Runtime yet (those are ImGui UI in the
+		// Editor); the hotbar keys 1-8 still work since fps_player.lua
+		// handles them itself. Suppressed while the pause menu is open.
+		std::string interactionHint;
+		if (followedEntity != nullptr && !menuOpen && entityProvidesInventory(*followedEntity, scriptRuntime))
 		{
-			const bool hasInventorySystem = std::find(
-				followedEntity->scripts.begin(), followedEntity->scripts.end(), kInventorySystemScriptPath) !=
-				followedEntity->scripts.end();
-			if (hasInventorySystem)
+			float pickupRange = 4.0F;
+			float pickupHeightTolerance = 2.5F;
+			for (const std::string& scriptPath : followedEntity->scripts)
 			{
-				const float pickupRange = scriptRuntime.getScriptNumberField(
-					followedEntity->id, kInventorySystemScriptPath, "pickup_range", 4.0F);
-				const float pickupHeightTolerance = scriptRuntime.getScriptNumberField(
-					followedEntity->id, kInventorySystemScriptPath, "pickup_height_tolerance", 2.5F);
-				const SceneEntity* candidate = findPickupCandidate(
-					scene, followedEntity->position, pickupRange, pickupHeightTolerance, followedEntity->id);
-				if (candidate != nullptr && inputSource.isKeyPressed("E"))
+				const float range =
+					scriptRuntime.getScriptNumberField(followedEntity->id, scriptPath, "pickup_range", -1.0F);
+				if (range >= 0.0F)
 				{
-					const std::string itemName = candidate->pickupItem.itemName;
-					const std::string iconPath = candidate->pickupItem.iconPath;
-					const glm::vec3 itemScale = candidate->scale;
-					const glm::vec3 itemColor = candidate->color;
-					const glm::vec3 itemMaterialBlendWeight = candidate->materialBlendWeight;
-					const std::array<TerrainLayerData, 3> itemMaterialLayers = candidate->materialLayers;
-					const glm::vec2 itemMaterialUvScale = candidate->materialUvScale;
-					commandBus.execute(DeleteEntityCommand{candidate->name});
-					const auto existing = std::find_if(
-						gameplay.inventoryItems.begin(),
-						gameplay.inventoryItems.end(),
-						[&itemName](const GameplayState::InventoryItem& item)
-						{ return item.itemName == itemName; });
-					if (existing != gameplay.inventoryItems.end())
-					{
-						existing->count += 1;
-					}
-					else
-					{
-						gameplay.inventoryItems.push_back(
-							{itemName,
-							 iconPath,
-							 1,
-							 itemScale,
-							 itemColor,
-							 itemMaterialBlendWeight,
-							 itemMaterialLayers,
-							 itemMaterialUvScale});
-					}
-					std::fprintf(stderr, "Picked up %s.\n", itemName.c_str());
+					pickupRange = range;
+					pickupHeightTolerance = scriptRuntime.getScriptNumberField(
+						followedEntity->id, scriptPath, "pickup_height_tolerance", pickupHeightTolerance);
+					break;
 				}
+			}
+			const SceneEntity* candidate = findPickupItemCandidate(
+				scene, followedEntity->position, pickupRange, pickupHeightTolerance, followedEntity->id);
+			if (candidate != nullptr)
+			{
+				interactionHint = "[E] Pick up " + pickupDisplayName(*candidate, scriptRuntime);
+			}
+			if (candidate != nullptr && inputSource.isKeyPressed("E") && !gameplay.inventoryOpen)
+			{
+				const int followedId = followedEntity->id;
+				const std::string itemName = pickupDisplayName(*candidate, scriptRuntime);
+				const bool picked = pickUpItem(scene, commandBus, gameplay, scriptRuntime, *candidate);
+				gameplay.messageText = picked ? "Picked up " + itemName : "Inventory full";
+				gameplay.messageSecondsRemaining = 1.6F;
+				std::fprintf(stderr, picked ? "Picked up %s.\n" : "Inventory full - could not pick up %s.\n",
+					itemName.c_str());
+				followedEntity = scene.findEntity(followedId);
 			}
 		}
 
@@ -674,6 +939,30 @@ int main()
 		viewportRenderer.resize(width, height);
 		viewportRenderer.render(scene.entities(), {}, projectRoot, excludeEntityId);
 		viewportRenderer.blitToCurrentFramebuffer(width, height);
+
+		// Gameplay HUD - the same layout as the Editor's Game view
+		// (drawGameplayHud), drawn by RuntimeHud.
+		{
+			hud.begin(width, height);
+			HudFrame frame;
+			frame.origin = glm::vec2(0.0F);
+			frame.size = glm::vec2(static_cast<float>(width), static_cast<float>(height));
+			frame.view = viewportRenderer.view();
+			frame.projection = viewportRenderer.projection();
+			frame.timeSeconds = static_cast<float>(glfwGetTime());
+			frame.player = followedEntity;
+			frame.showHotbar = followedEntity != nullptr && entityProvidesInventory(*followedEntity, scriptRuntime);
+			frame.interactionHint = gameplay.inventoryOpen ? std::string() : interactionHint;
+			frame.drawCrosshair = followedEntity != nullptr && scriptRuntime.activeCameraMode() == "fps" &&
+				!gameplay.inventoryOpen && !menuOpen;
+			drawGameplayHud(hud, frame, scene, scriptRuntime, gameplay);
+			if (gameplay.inventoryOpen && !menuOpen)
+			{
+				drawRuntimeInventory(hud, window, width, height, gameplay, scene, commandBus, followedEntity, inventoryPanel);
+				followedEntity = scriptRuntime.hasActiveCamera() ? scene.findEntity(scriptRuntime.activeCameraEntityId()) : nullptr;
+			}
+			hud.end();
+		}
 
 		// Win/lose banner. gameplay.gameOverMessage is set by
 		// tickProjectiles() the first time a castle's HP hits 0; the
@@ -702,6 +991,7 @@ int main()
 			std::filesystem::create_directories(saveDirectory, saveDirectoryError);
 			const SceneSaveResult manualSaveResult = saveScene(saveScenePath, scene.entities());
 			const bool inventorySaveOk = writeInventorySave(saveInventoryPath, gameplay.inventoryItems);
+			writeSaveMeta(saveMetaPath, startupSceneKey);
 			writeSettings(settingsPath, gameSettings);
 			std::fprintf(
 				stderr, "%s\n",
@@ -719,6 +1009,12 @@ int main()
 					gameplay.projectiles.clear();
 					gameplay.inventoryItems =
 						readInventorySave(saveInventoryPath).value_or(std::vector<GameplayState::InventoryItem>{});
+					ensureInventorySlots(gameplay);
+					gameplay.beams.clear();
+					gameplay.flashes.clear();
+					gameplay.floatingTexts.clear();
+					gameplay.hudBars.clear();
+					gameplay.inventoryOpen = false;
 					// Reset every other piece of session state that was
 					// previously surviving a Load - otherwise the new
 					// game's scripts see stale callbacks (held item,
@@ -783,12 +1079,14 @@ int main()
 	{
 		std::fprintf(stderr, "Failed to save inventory state.\n");
 	}
+	writeSaveMeta(saveMetaPath, startupSceneKey);
 	// Unconditional, not just on a slider release - guarantees the final
 	// values persist regardless of how the window closed (X, Alt+F4, or
 	// the menu's own Quit button).
 	writeSettings(settingsPath, gameSettings);
 
 	gameMenu.shutdown();
+	hud.shutdown();
 	scriptRuntime.shutdown();
 	viewportRenderer.shutdown();
 	glfwDestroyWindow(window);

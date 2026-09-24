@@ -31,17 +31,17 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 |---|---|---|---|---|
 | B1 | 🔴 | **Keyboard shortcuts run twice.** Ctrl+Z/Y are handled in `drawMainMenu` and again in `drawEditorPanels` on the same frame. Result: Ctrl+Z undoes 2 steps, Ctrl+Y redoes 2, and Ctrl+Shift+Z redoes and then undoes (net: nothing happens). | `main.cpp:1441-1468` and `main.cpp:6440-6450` | **FIXED 0.83** |
 | B2 | 🔴 | **New Scene keeps the old file path.** `newScene()` clears the entities but not `currentScenePath`. Ctrl+S right after "New Scene" overwrites the scene you had open before (default `Castle.gfprod`) with an empty scene. There is also no "unsaved changes?" prompt on New/Open/Quit. | `main.cpp:1421-1428`, `main.cpp:7168` | **FIXED 0.83** |
-| B3 | 🔴 | **Renaming a parent breaks its children.** Parent links are stored by name (`parentName`). `RenameEntityCommand` renames only the entity itself, so every child is orphaned: it jumps to the top of the Hierarchy and stops following. The same happens to Catapult `yawEntityName`/`armEntityName` references. | `EditorScene.cpp:53-70` | CONFIRMED |
+| B3 | 🔴 | **Renaming a parent breaks its children.** Parent links are stored by name (`parentName`). `RenameEntityCommand` renames only the entity itself, so every child is orphaned: it jumps to the top of the Hierarchy and stops following. The same happens to Catapult `yawEntityName`/`armEntityName` references. | `EditorScene.cpp:53-70` | **FIXED 0.80** |
 | B4 | 🔴 | **The script editor cuts off long scripts.** The Edit Script buffer is a fixed 16 KB and the AI preview is 8 KB. A longer `.lua` is silently truncated when it loads, and pressing **Save** writes the truncated text back to disk. None of today's scripts is that big, but the next long one will be damaged. | `main.cpp:557`, `main.cpp:548`, `main.cpp:2228`, `main.cpp:4956` | **FIXED 0.83** |
 | B5 | 🟠 | **Multi-select delete and duplicate only act on one object.** You can select many objects (Ctrl/Shift-click), but `deleteSelected` and `duplicateSelected` only use the primary one. | `main.cpp:750`, `main.cpp:1345` | **FIXED 0.83** |
 | B6 | 🟠 | **Many Inspector edits can't be undone.** Undo only records changes that go through the command bus. These edit the entity directly and skip it: the Active checkbox, tag Up/Down, Mask RGB, UV Scale, the 3 material layers, terrain World Size, terrain textures, Import Heightmap, Perlin Generate, sculpt/paint, Animate Object, Loop, and keyframe add/delete. Those edits are also left out of undo snapshots. | `main.cpp:3751, 4038, 4065, 4432-4486, 4724, 4803-4865, 5106, 5741, 5798, 5976, 6198-6303` | CONFIRMED |
 | B7 | 🟡 | **Undo only goes back 5 steps**, and each step is a full copy of the scene. | `main.cpp:322` | CONFIRMED |
 | B8 | 🟠 | **Script properties (`-- @property`) edited in the Inspector outside Play mode are thrown away.** The field shows the default and ignores the edit, because there's nowhere per-entity to store it. The same `.lua` file is also re-read from disk every frame, for every attached script. | `main.cpp:4980-5031` | CONFIRMED |
-| B9 | 🟠 | **Clicking in the Viewport can select hidden (inactive) objects.** `pickEntity` has no `active` check, while the renderer skips inactive objects. | `main.cpp:5601-5652` vs `ViewportRenderer.cpp:887` | CONFIRMED |
+| B9 | 🟠 | **Clicking in the Viewport can select hidden (inactive) objects.** `pickEntity` has no `active` check, while the renderer skips inactive objects. | `main.cpp:5601-5652` vs `ViewportRenderer.cpp:887` | **FIXED 0.80** |
 | B10 | 🟡 | **Viewport clicks on an imported model re-load the whole model file from disk** (Assimp) for every imported model in the scene, on every click. | `main.cpp:5586-5590` | CONFIRMED |
 | B11 | 🟡 | **Hidden panels still render.** No panel checks the return value of `ImGui::Begin`, so the Game view and Cine Camera Preview redraw the whole scene every frame even when their tab is hidden. That's up to 3 full scene renders per frame. | `main.cpp:2445`, `3146`, `6704` | CONFIRMED |
 | B12 | 🟡 | **Icons that fail to load stay missing until restart.** `ensureIconTextureGpu` caches a failed load as texture `0`, so it never retries. | `main.cpp:1317-1343` | CONFIRMED |
-| B13 | 🟡 | **Ctrl+R also saves** (a second, non-standard save shortcut), and a code comment calls it the main Save key while the menu shows Ctrl+S. | `main.cpp:6451`, `main.cpp:7166` | CONFIRMED |
+| B13 | 🟡 | **Ctrl+R also saves** (a second, non-standard save shortcut), and a code comment calls it the main Save key while the menu shows Ctrl+S. | `main.cpp:6451`, `main.cpp:7166` | **FIXED 0.84** |
 | B14 | 🟡 | **Storyboard shots aren't saved.** They live only in memory and are gone when you close the editor. | `main.cpp:3288-3292` | CONFIRMED |
 | B15 | 🟡 | **The Pickup "Item Name" field sends a command on every keystroke**, so typing a name floods the undo history (partly hidden by the 0.6 s grouping of rapid changes). | `main.cpp:4583` | CONFIRMED |
 | B16 | 🟡 | **Play mode leaves steps in the undo history.** After Stop, the first Ctrl+Z restores the snapshot taken before Play, which looks like nothing happened. | `main.cpp:7130-7142`, Stop at `1786-1797` | LIKELY |
@@ -52,7 +52,7 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 |---|---|---|---|---|
 | A1 | 🟠 | **The Settings > AI Setup "Endpoint" and "Model" boxes do nothing.** `AIProviderClient` reads only `Game/AI/Providers.json`, so anything typed there is ignored. | `main.cpp:1867-1868`, `AIProviderClient.cpp:138-159` | **FIXED 0.83** |
 | A2 | 🟠 | **"Calibrate / Test provider" freezes the editor.** It runs on the UI thread, and the timeout is 120 s. | `main.cpp:1876-1907`, `Providers.json timeoutSeconds` | **FIXED 0.83** |
-| A3 | 🟡 | **The provider list is written twice:** hard-coded in `main.cpp` and again in `Providers.json`. The JSON's `"activeProvider"` is ignored; the UI always starts on entry 0. | `main.cpp:629-641` | CONFIRMED |
+| A3 | 🟡 | **The provider list is written twice:** hard-coded in `main.cpp` and again in `Providers.json`. The JSON's `"activeProvider"` is ignored; the UI always starts on entry 0. | `main.cpp:629-641` | **FIXED 0.84** |
 | A4 | 🟡 | **Theme and Language choices are not saved** and reset every launch. | `main.cpp:598-607`, `7003-7004` | CONFIRMED |
 | A5 | 🟡 | **Placeholder settings pages:** Settings > *Project* ("more settings will land here…") and *Language* (only English works). | `main.cpp:1927-1935`, `2032-2048` | CONFIRMED (placeholder) |
 | A6 | 🟡 | **`RequestAnimationCommand` is a dead command type.** It always returns "Animation execution is not connected yet." | `EditorScene.cpp:~646`, `AICommand.hpp:52` | CONFIRMED |
@@ -61,7 +61,7 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 
 | # | Sev | Finding | Where | Status |
 |---|---|---|---|---|
-| G1 | 🔴 | **Missing script:** the *Catapult Controller* preset attaches `Game/Scripts/catapult_controller.lua`, which **isn't in the repo**. The Game view's aiming-line overlay also looks for it. | `main.cpp:5239-5246`, `main.cpp:2855` | CONFIRMED |
+| G1 | 🔴 | **Missing script:** the *Catapult Controller* preset attaches `Game/Scripts/catapult_controller.lua`, which **isn't in the repo**. The Game view's aiming-line overlay also looks for it. | `main.cpp:5239-5246`, `main.cpp:2855` | **FIXED 0.84 (preset greyed out; script not written)** |
 | G2 | 🟠 | **Editor Play and the built game (Runtime) play differently.** Holding a weapon with F, catapult operation, the inventory window, castle HP bars, the enemy detection icon, projectile visuals and the enemy-catapult auto-fire timer exist **only** in the Editor's Game panel. `GameForgerRuntime.exe` doesn't have them, so a game can behave differently once built. `findPickupCandidate` is also copied into both. | `main.cpp:2583-2914`, `main.cpp:6407-6433`, `Runtime/src/main.cpp:90-94, 459-468` | CONFIRMED |
 | G3 | 🟠 | **E-pickup and F-hold both trigger on "Is Pickup Item" objects.** Standing next to a potion shows "[E] Pick up" *and* "[F] Hold" at once, and F will hold the potion like a weapon. | `main.cpp:2589`, `main.cpp:2664` | CONFIRMED |
 | G4 | 🟡 | **Game rules are tied to hard-coded script file paths** (`"Game/Scripts/enemy_ai.lua"`, `inventory_system.lua`, `catapult_controller.lua`). Rename or copy a script and the feature silently turns off. | `main.cpp:2654`, `2751`, `2855` | CONFIRMED |
@@ -104,7 +104,12 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 - **Fixed:** B4, B1, B2, B5, A1, A2 (the user asked for these six, in that order). Details: `docs/planFix_AGY_CHANGELOG.md` §1f.
 - **B1 note:** the single handler stayed in `drawEditorPanels` (no new `handleEditorShortcuts()` function).
 - **B2 note:** the editor also starts with no scene file now (it used to point at `Castle.gfprod` while showing an empty scene).
-- **Plan status:** **Phase 1 partly done** - still open in Phase 1: B3 (rename orphans), B9 (picking hidden objects), G1 (missing catapult script). Phase 1's manual checks for the six fixes are waiting for the user. Phases 0 and 2-8 not started.
+- **Plan status (corrected in §2.9):** B3 and B9 were already fixed in 0.80 (§2.5) - this line wrongly listed them as open.
+
+### 2.9 Update 2026-09-24 (Alpha 0.84)
+
+- **Fixed:** B13 (Ctrl+R no longer saves), A3 (provider list only in `Providers.json`, starts on its `activeProvider`), G1 (Catapult Controller preset greyed out with "file missing" - the script itself is still missing; writing it is the user's call), and the gizmo keys no longer react while Ctrl is held (Ctrl+Y / Ctrl+R used to also switch the gizmo). Details: changelog §1g.
+- **Phase 1 status:** all Phase 1 code is done (B1, B2, B3, B4, B5, B9, G1, A1, A2). Waiting for the user's manual checks listed in Phase 1. Phases 0 and 2-8 not started.
 
 ## 3. Findings — duplication and things that don't make sense
 

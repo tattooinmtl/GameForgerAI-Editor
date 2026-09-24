@@ -619,18 +619,72 @@ namespace
         glm::vec3 direction;
     };
 
+    // One entry of Game/AI/Providers.json - the only provider list (audit
+    // A3: it used to be hard-coded here too, and the file's activeProvider
+    // was ignored).
     struct AIProvider
     {
-        const char* id;
-        const char* displayName;
-        const char* endpoint;
-        const char* model;
-        const char* keySource;
+        std::string id;
+        std::string displayName;
+        std::string endpoint;
+        std::string model;
+        std::string keySource;
     };
+
+    struct AIProviderList
+    {
+        std::vector<AIProvider> providers;
+        std::string activeProvider; // the file's "activeProvider"
+    };
+
+    AIProviderList loadProviderList(const std::filesystem::path& providersFile)
+    {
+        namespace json = gameforger::editor::json;
+        AIProviderList list;
+        std::ifstream input(providersFile, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const std::optional<json::Value> root = json::parse(text);
+        if (!root.has_value())
+        {
+            return list;
+        }
+        const auto stringField = [](const json::Value& object, const char* key)
+        {
+            const json::Value* value = object.find(key);
+            return value != nullptr ? value->asString().value_or("") : std::string();
+        };
+        list.activeProvider = stringField(*root, "activeProvider");
+        if (const json::Value* entries = root->find("providers"))
+        {
+            for (const json::Value& entry : entries->arrayValue)
+            {
+                AIProvider provider;
+                provider.id = stringField(entry, "id");
+                if (provider.id.empty())
+                {
+                    continue;
+                }
+                provider.displayName = stringField(entry, "displayName");
+                if (provider.displayName.empty())
+                {
+                    provider.displayName = provider.id;
+                }
+                provider.endpoint = stringField(entry, "endpoint");
+                provider.model = stringField(entry, "model");
+                provider.keySource = stringField(entry, "apiKeyEnvironmentVariable");
+                list.providers.push_back(std::move(provider));
+            }
+        }
+        return list;
+    }
 
     struct AISetupState
     {
-        int selectedProvider = 0;
+        // Filled from Game/AI/Providers.json (re-read while Settings > AI
+        // Setup is open). The selection is kept by id; it starts on the
+        // file's activeProvider.
+        std::vector<AIProvider> providers;
+        std::string selectedProviderId;
         bool calibrated = false;
         bool setupChanged = false;
         // Filled in by the Test provider button: true if a probe request
@@ -687,20 +741,6 @@ namespace
         bool hasPlanResult = false;
         AIPlanResult planResult;
     };
-
-    constexpr std::array<AIProvider, 2> providers{
-        AIProvider{
-            "nvidia",
-            "NVIDIA NIM",
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            "nvidia/nemotron-3-nano-30b-a3b",
-            "NVIDIA_API_KEY"},
-        AIProvider{
-            "agnes-ai",
-            "Agnes-AI",
-            "https://apihub.agnes-ai.com/v1/chat/completions",
-            "agnes-2.0-flash",
-            "AGNES_AI_API_KEY"}};
 
     const char* primitiveTypeName(const PrimitiveType type)
     {
@@ -1103,7 +1143,7 @@ namespace
         return saveSceneToPath(editModeEntities(scene, playMode), *picked, currentScenePath, document, console);
     }
 
-    // Save Scene (Ctrl+S / Ctrl+R). A scene that has no file yet (New Scene,
+    // Save Scene (Ctrl+S). A scene that has no file yet (New Scene,
     // or the empty scene the editor starts with) asks where to save it,
     // instead of overwriting the file that was open before.
     bool saveCurrentScene(
@@ -1740,9 +1780,9 @@ namespace
         clearSelection(selection);
     }
 
-    void selectProvider(AISetupState& state, const int providerIndex)
+    void selectProvider(AISetupState& state, const std::string& providerId)
     {
-        state.selectedProvider = providerIndex;
+        state.selectedProviderId = providerId;
         state.calibrated = false;
         state.setupChanged = true;
     }
@@ -2397,49 +2437,6 @@ namespace
         ImGui::EndMainMenuBar();
     }
 
-    // What Game/AI/Providers.json says for one provider - the file
-    // AIProviderClient actually reads (audit A1). Empty strings when missing.
-    struct ProviderFileSettings
-    {
-        bool found = false;
-        std::string endpoint;
-        std::string model;
-    };
-
-    ProviderFileSettings readProviderFileSettings(
-        const std::filesystem::path& providersFile, const std::string& providerId)
-    {
-        namespace json = gameforger::editor::json;
-        ProviderFileSettings settings;
-        std::ifstream input(providersFile, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        const std::optional<json::Value> root = json::parse(text);
-        const json::Value* list = root.has_value() ? root->find("providers") : nullptr;
-        if (list == nullptr)
-        {
-            return settings;
-        }
-        for (const json::Value& provider : list->arrayValue)
-        {
-            const json::Value* id = provider.find("id");
-            if (id == nullptr || id->asString() != providerId)
-            {
-                continue;
-            }
-            settings.found = true;
-            if (const json::Value* endpoint = provider.find("endpoint"))
-            {
-                settings.endpoint = endpoint->asString().value_or("");
-            }
-            if (const json::Value* model = provider.find("model"))
-            {
-                settings.model = model->asString().value_or("");
-            }
-            break;
-        }
-        return settings;
-    }
-
     // Called every frame (even with Settings closed) so a finished provider
     // test is reported as soon as its worker thread is done.
     void pollProviderTest(AISetupState& state, ConsoleState& console)
@@ -2495,14 +2492,33 @@ namespace
         ImGui::TextUnformatted("Provider and model configuration");
         ImGui::Separator();
 
-        if (ImGui::BeginCombo("Provider", providers[static_cast<std::size_t>(state.selectedProvider)].displayName))
+        // Everything here comes from Game/AI/Providers.json, the only place
+        // the AI client reads it (audits A1, A3). Re-read while this page is
+        // shown, so edits saved in the file appear here right away.
+        const std::filesystem::path providersFile = projectRoot / "Game" / "AI" / "Providers.json";
+        state.providers = loadProviderList(providersFile).providers;
+        const AIProvider* current = nullptr;
+        for (const AIProvider& provider : state.providers)
         {
-            for (int index = 0; index < static_cast<int>(providers.size()); ++index)
+            if (provider.id == state.selectedProviderId)
             {
-                const bool selected = state.selectedProvider == index;
-                if (ImGui::Selectable(providers[static_cast<std::size_t>(index)].displayName, selected))
+                current = &provider;
+            }
+        }
+
+        if (state.providers.empty())
+        {
+            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "No providers in Game/AI/Providers.json.");
+        }
+        else if (ImGui::BeginCombo("Provider", current != nullptr ? current->displayName.c_str() : "(choose)"))
+        {
+            for (const AIProvider& provider : state.providers)
+            {
+                const bool selected = &provider == current;
+                if (ImGui::Selectable(provider.displayName.c_str(), selected))
                 {
-                    selectProvider(state, index);
+                    selectProvider(state, provider.id);
+                    current = &provider;
                 }
                 if (selected)
                 {
@@ -2512,20 +2528,16 @@ namespace
             ImGui::EndCombo();
         }
 
-        // Read-only: these come from Game/AI/Providers.json, the only place
-        // the AI client reads them (audit A1). Re-read while this page is
-        // shown, so edits saved in the file appear here right away.
-        const std::filesystem::path providersFile = projectRoot / "Game" / "AI" / "Providers.json";
-        const ProviderFileSettings fileSettings = readProviderFileSettings(
-            providersFile, providers[static_cast<std::size_t>(state.selectedProvider)].id);
-        if (fileSettings.found)
+        // Read-only (audit A1).
+        if (current != nullptr)
         {
-            ImGui::LabelText("Endpoint", "%s", fileSettings.endpoint.c_str());
-            ImGui::LabelText("Model", "%s", fileSettings.model.c_str());
+            ImGui::LabelText("Endpoint", "%s", current->endpoint.c_str());
+            ImGui::LabelText("Model", "%s", current->model.c_str());
         }
-        else
+        else if (!state.providers.empty())
         {
-            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F), "This provider is not in Game/AI/Providers.json.");
+            ImGui::TextColored(ImVec4(0.95F, 0.35F, 0.35F, 1.0F),
+                "\"%s\" is not in Game/AI/Providers.json - choose a provider.", state.selectedProviderId.c_str());
         }
         if (ImGui::Button("Open Providers.json"))
         {
@@ -2542,7 +2554,7 @@ namespace
         {
             ImGui::SetTooltip("Endpoint and model are set in this file. Save it and they update here.");
         }
-        ImGui::Text("API key source: %s", providers[static_cast<std::size_t>(state.selectedProvider)].keySource);
+        ImGui::Text("API key source: %s", current != nullptr ? current->keySource.c_str() : "-");
         ImGui::TextUnformatted("Secrets: Game/AI/Providers.local.json");
 
         // The Calibrate / Test provider button used to flip a flag without
@@ -2552,7 +2564,8 @@ namespace
         // The probe runs on a worker thread (audit A2); pollProviderTest()
         // reports the result.
         const bool testing = state.testing.load();
-        if (testing)
+        const bool canTest = !testing && current != nullptr;
+        if (!canTest)
         {
             ImGui::BeginDisabled();
         }
@@ -2562,8 +2575,7 @@ namespace
             {
                 state.testWorker.join();
             }
-            const std::string providerId =
-                providers[static_cast<std::size_t>(state.selectedProvider)].id;
+            const std::string providerId = current->id;
             state.testing = true;
             state.testWorker = std::thread(
                 [&state, &providerClient, providerId]()
@@ -2578,9 +2590,12 @@ namespace
                     state.testing = false;
                 });
         }
-        if (testing)
+        if (!canTest)
         {
             ImGui::EndDisabled();
+        }
+        if (testing)
+        {
             ImGui::SameLine();
             ImGui::TextDisabled("Testing...");
         }
@@ -6403,8 +6418,24 @@ namespace
                     {
                         ImGui::SeparatorText("FPS Demo preset");
                     }
-                    if (ImGui::Checkbox(presets[index].label, &presetSelected[index]) && !wasSelected &&
-                        isExclusive(presets[index].kind))
+                    // A preset whose .lua isn't in this project stays listed but
+                    // can't be picked (audit G1: catapult_controller.lua is missing).
+                    std::error_code missingCheckError;
+                    const bool scriptMissing = presets[index].path != nullptr &&
+                        !std::filesystem::exists(projectRoot / presets[index].path, missingCheckError);
+                    if (scriptMissing)
+                    {
+                        presetSelected[index] = false;
+                        ImGui::BeginDisabled();
+                    }
+                    const bool presetClicked = ImGui::Checkbox(presets[index].label, &presetSelected[index]);
+                    if (scriptMissing)
+                    {
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.95F, 0.6F, 0.2F, 1.0F), "(file missing: %s)", presets[index].path);
+                    }
+                    if (presetClicked && !wasSelected && isExclusive(presets[index].kind))
                     {
                         // At most one physics-driving preset (a movement controller
                         // OR Rigidbody) at a time - each runs its own independent
@@ -7531,8 +7562,6 @@ namespace
         ConsoleState& console,
         ProjectBrowserState& projectBrowser,
         EditHistoryState& history,
-        std::filesystem::path& currentScenePath,
-        SceneDocumentState& sceneDocument,
         ImGuizmo::OPERATION& gizmoOperation,
         TerrainSculptState& terrainSculpt,
         const float deltaTime,
@@ -7612,12 +7641,7 @@ namespace
             {
                 performRedo(history, scene, selection);
             }
-            else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
-            {
-                (void)saveCurrentScene(
-                    scene, playMode, currentScenePath, sceneDocument, console, nativeWindowHandle,
-                    projectRoot / "Game" / "Scenes");
-            }
+            // Ctrl+R no longer saves (audit B13) - Save Scene is Ctrl+S, in drawMainMenu.
             else if (shortcutIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
                 selection.multiSelectedIds.clear();
@@ -7944,7 +7968,10 @@ namespace
 
         const bool viewportHovered = viewportReady && ImGui::IsItemHovered();
 
-        if (!playMode.isPlaying && viewportHovered && activeCamera.dragMode == CameraDragMode::None)
+        // Not while Ctrl is held: Ctrl+Y (redo) and Ctrl+R also switched the
+        // gizmo to Universal / Scale.
+        if (!playMode.isPlaying && viewportHovered && activeCamera.dragMode == CameraDragMode::None &&
+            !ImGui::GetIO().KeyCtrl)
         {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) gizmoOperation = ImGuizmo::TRANSLATE;
             if (ImGui::IsKeyPressed(ImGuiKey_E)) gizmoOperation = ImGuizmo::ROTATE;
@@ -8308,7 +8335,19 @@ int main()
         });
     AIProviderClient aiProviderClient(projectRoot);
     AISetupState aiSetup;
-    selectProvider(aiSetup, 0);
+    {
+        // Start on Providers.json's activeProvider (audit A3), else its first entry.
+        const AIProviderList providerList = loadProviderList(projectRoot / "Game" / "AI" / "Providers.json");
+        aiSetup.providers = providerList.providers;
+        aiSetup.selectedProviderId = providerList.activeProvider;
+        const bool activeListed = std::any_of(
+            aiSetup.providers.begin(), aiSetup.providers.end(),
+            [&](const AIProvider& provider) { return provider.id == providerList.activeProvider; });
+        if (!activeListed && !aiSetup.providers.empty())
+        {
+            aiSetup.selectedProviderId = aiSetup.providers.front().id;
+        }
+    }
     AIForgeState aiForge;
     SelectionState selection;
     RenameState renameState;
@@ -8380,7 +8419,7 @@ int main()
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
         drawSettingsWindow(settings, aiSetup, appearance, language, projectRoot, scene, aiProviderClient, console);
-        const std::string activeProviderId = providers[static_cast<std::size_t>(aiSetup.selectedProvider)].id;
+        const std::string activeProviderId = aiSetup.selectedProviderId;
         drawEditorPanels(
             viewportRenderer,
             camera,
@@ -8401,8 +8440,6 @@ int main()
             console,
             projectBrowser,
             history,
-            currentScenePath,
-            sceneDocument,
             gizmoOperation,
             terrainSculpt,
             deltaTime,

@@ -54,6 +54,18 @@
 
 ---
 
+## 1g. Session Log: 2026-09-24 (audit fixes B13, gizmo keys, A3, G1 - Alpha 0.84)
+
+The user asked for everything in 1f's "Not done" list. Every change, in order:
+1. **Correction:** B3 (rename orphans) and B9 (picking hidden objects) were already fixed in Alpha 0.80 (plan §2.5; `testRenameKeepsChildrenAttached`; `pickEntity` checks `isActiveInHierarchy`). 1f and plan §2.8 wrongly listed them as open. Their rows in plan §2.1 now say FIXED 0.80. No code change.
+2. **B13** (`Editor/src/main.cpp`): removed the Ctrl+R save branch from `drawEditorPanels`. Save Scene is Ctrl+S only (menu label unchanged). `drawEditorPanels` no longer takes `currentScenePath`/`sceneDocument` (Ctrl+R was their only use).
+3. **Gizmo keys** (`main.cpp`): W/E/R/T/Y over the Viewport switch the gizmo only when Ctrl is NOT held, so Ctrl+Y (redo) no longer also picks Universal and Ctrl+R no longer picks Scale.
+4. **A3** (`main.cpp`): deleted the hard-coded `providers` array. New `loadProviderList()` reads id, displayName, endpoint, model, apiKeyEnvironmentVariable and `activeProvider` from `Game/AI/Providers.json`. `AISetupState` keeps the list plus `selectedProviderId`; the editor starts on the file's `activeProvider` (first entry if it isn't listed). Settings > AI Setup re-reads the file while open, shows a red note if the file has no providers, and disables Test until a listed provider is chosen. AI Forge / script generation use `selectedProviderId`.
+5. **G1** (`main.cpp`, Inspector > Add Script presets): a preset whose `.lua` isn't in the project is still listed but greyed out with "(file missing: <path>)" and can't be picked - today that is the Catapult Controller (`Game/Scripts/catapult_controller.lua`). The file itself was not restored or written.
+6. **Version** 0.83 -> 0.84 (`CMakeLists.txt`, `README.md`).
+* **Verified:** Debug build of Engine, Tests, Editor, Runtime - zero new warnings on changed lines; `GameForgerTests` 20/20; the editor starts and runs.
+* **Not done (not asked):** writing a new `catapult_controller.lua` (the plan leaves that to the user); choosing a provider in Settings doesn't write `activeProvider` back to the file.
+
 ## 1f. Session Log: 2026-09-24 (audit fixes B4, B1, B2, B5, A1, A2 - Alpha 0.83)
 
 Every change, in the order the user asked for them:

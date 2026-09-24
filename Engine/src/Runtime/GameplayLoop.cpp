@@ -180,11 +180,12 @@ namespace gameforger::editor
 			bool hit = false;
 			if (projectile.useGravity)
 			{
-				// Real AABB-vs-collider test (same min/max formula as
-				// resolveBoxCollision, ScriptRuntime.cpp), gated on
-				// hasCollider, not the original sphere-vs-tag check - a
-				// boulder needs to actually land inside the castle's
-				// hitbox, not just pass near an entity carrying the tag.
+				// Real point-in-collider test (the same turned box as
+				// resolveBoxCollision, ScriptRuntime.cpp - colliderBox),
+				// gated on hasCollider, not the original sphere-vs-tag
+				// check - a boulder needs to actually land inside the
+				// castle's hitbox, not just pass near an entity carrying
+				// the tag.
 				for (const SceneEntity& other : scene.entities())
 				{
 					if (!other.active || !other.hasCollider)
@@ -195,11 +196,7 @@ namespace gameforger::editor
 					{
 						continue;
 					}
-					const glm::vec3 boxMin = other.position - other.scale;
-					const glm::vec3 boxMax = other.position + other.scale;
-					if (projectile.position.x >= boxMin.x && projectile.position.x <= boxMax.x &&
-						projectile.position.y >= boxMin.y && projectile.position.y <= boxMax.y &&
-						projectile.position.z >= boxMin.z && projectile.position.z <= boxMax.z)
+					if (colliderBox(other).contains(projectile.position))
 					{
 						hit = true;
 						if (other.isCastle && gameplay.gameOverMessage.empty())

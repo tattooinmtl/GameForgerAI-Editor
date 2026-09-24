@@ -1,6 +1,7 @@
 #include "GameForger/Editor/Transform.hpp"
 
 #include <cctype>
+#include <cmath>
 
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -45,6 +46,51 @@ namespace gameforger::editor
 			return trs;
 		}
 		return trs * glm::translate(glm::mat4(1.0F), -entity.pivotOffset);
+	}
+
+	OrientedBox colliderBox(const SceneEntity& entity)
+	{
+		const glm::mat4 model = composeEntityTransform(entity);
+		OrientedBox box;
+		box.center = glm::vec3(model[3]);
+		for (int axis = 0; axis < 3; ++axis)
+		{
+			const glm::vec3 column(model[axis]);
+			const float length = glm::length(column);
+			box.halfExtents[axis] = length;
+			box.axes[static_cast<std::size_t>(axis)] =
+				length > 1e-6F ? column / length : box.axes[static_cast<std::size_t>(axis)];
+		}
+		box.axisAligned = std::abs(entity.rotationEuler.x) < 1e-3F && std::abs(entity.rotationEuler.y) < 1e-3F &&
+			std::abs(entity.rotationEuler.z) < 1e-3F;
+		if (box.axisAligned)
+		{
+			box.axes = {glm::vec3(1.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F), glm::vec3(0.0F, 0.0F, 1.0F)};
+		}
+		return box;
+	}
+
+	bool OrientedBox::contains(const glm::vec3& point) const noexcept
+	{
+		const glm::vec3 d = point - center;
+		for (std::size_t axis = 0; axis < 3; ++axis)
+		{
+			if (std::abs(glm::dot(d, axes[axis])) > halfExtents[static_cast<int>(axis)])
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	glm::vec3 OrientedBox::worldHalfSize() const noexcept
+	{
+		glm::vec3 size(0.0F);
+		for (std::size_t axis = 0; axis < 3; ++axis)
+		{
+			size += glm::abs(axes[axis]) * halfExtents[static_cast<int>(axis)];
+		}
+		return size;
 	}
 
 	std::optional<glm::vec3> resolvePivotPreset(const std::string& presetName)

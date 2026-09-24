@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <unordered_map>
 #include <optional>
 #include <sstream>
@@ -15,6 +16,7 @@
 
 #include "GameForger/Core/ProjectPaths.hpp"
 #include "GameForger/Editor/Terrain.hpp"
+#include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
@@ -1194,14 +1196,116 @@ namespace gameforger::editor
 			bool grounded = false;
 		};
 
-		// Treats the moving entity as an axis-aligned box (halfWidth in X/Z,
+		// Pushes the mover (an upright box: halfWidth in X/Z, height in Y,
+		// `position` is its feet) out of a TURNED collider box (any rotation)
+		// along the axis of least penetration (separating-axis test: the 3
+		// world axes, the box's 3 axes and their 9 cross products). Pushes
+		// that are mostly upward are done straight up and count as standing
+		// on it (grounded) - so a tilted box is a ramp you can stand on, not
+		// a slide. Returns false if they don't overlap.
+		bool pushOutOfOrientedBox(glm::vec3& position, const float halfWidth, const float height,
+			const OrientedBox& box, bool& grounded)
+		{
+			const glm::vec3 half(halfWidth, height * 0.5F, halfWidth);
+			const glm::vec3 center = position + glm::vec3(0.0F, height * 0.5F, 0.0F);
+			const glm::vec3 toBox = box.center - center;
+			std::array<glm::vec3, 15> axes{};
+			std::size_t count = 0;
+			const std::array<glm::vec3, 3> world{glm::vec3(1.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F),
+				glm::vec3(0.0F, 0.0F, 1.0F)};
+			for (const glm::vec3& axis : world)
+			{
+				axes[count++] = axis;
+			}
+			for (const glm::vec3& axis : box.axes)
+			{
+				axes[count++] = axis;
+			}
+			for (const glm::vec3& a : world)
+			{
+				for (const glm::vec3& b : box.axes)
+				{
+					const glm::vec3 c = glm::cross(a, b);
+					const float length = glm::length(c);
+					if (length > 1e-3F)
+					{
+						axes[count++] = c / length;
+					}
+				}
+			}
+
+			float bestOverlap = std::numeric_limits<float>::max();
+			glm::vec3 bestPush(0.0F);
+			for (std::size_t i = 0; i < count; ++i)
+			{
+				const glm::vec3& axis = axes[i];
+				const float moverRadius = half.x * std::abs(axis.x) + half.y * std::abs(axis.y) + half.z * std::abs(axis.z);
+				float boxRadius = 0.0F;
+				for (std::size_t k = 0; k < 3; ++k)
+				{
+					boxRadius += box.halfExtents[static_cast<int>(k)] * std::abs(glm::dot(box.axes[k], axis));
+				}
+				const float distance = glm::dot(toBox, axis);
+				const float overlap = moverRadius + boxRadius - std::abs(distance);
+				if (overlap <= 0.0F)
+				{
+					return false; // a separating axis: no contact
+				}
+				if (overlap < bestOverlap)
+				{
+					bestOverlap = overlap;
+					bestPush = distance > 0.0F ? -axis : axis; // away from the box
+				}
+			}
+
+			// Standing on it: the mover's middle is over the box's top face
+			// and above its center - resolve up the box's own "up" axis, even
+			// when a sideways push is smaller (a thick platform fallen into
+			// deep in one frame would otherwise shove it sideways).
+			const glm::vec3& boxUp = box.axes[1];
+			const glm::vec3 local(glm::dot(-toBox, box.axes[0]), glm::dot(-toBox, box.axes[1]), glm::dot(-toBox, box.axes[2]));
+			if (std::abs(boxUp.y) > 0.7F && std::abs(local.x) < box.halfExtents.x && std::abs(local.z) < box.halfExtents.z &&
+				local.y * boxUp.y > 0.0F)
+			{
+				const glm::vec3 up = boxUp.y > 0.0F ? boxUp : -boxUp;
+				const float moverRadius = half.x * std::abs(up.x) + half.y * std::abs(up.y) + half.z * std::abs(up.z);
+				const float along = glm::dot(-toBox, up);
+				bestOverlap = moverRadius + box.halfExtents.y - along;
+				bestPush = up;
+			}
+
+			if (bestPush.y > 0.7F)
+			{
+				position.y += bestOverlap / bestPush.y;
+				grounded = true;
+			}
+			else if (bestPush.y < -0.7F)
+			{
+				position.y -= bestOverlap / -bestPush.y;
+			}
+			else
+			{
+				// A wall: push sideways only, so walking into a slanted wall
+				// never lifts or sinks the mover.
+				glm::vec3 flat(bestPush.x, 0.0F, bestPush.z);
+				const float flatLength = glm::length(flat);
+				if (flatLength > 1e-4F)
+				{
+					position += flat / flatLength * (bestOverlap / flatLength);
+				}
+			}
+			return true;
+		}
+
+		// Treats the moving entity as an upright box (halfWidth in X/Z,
 		// height in Y, `position` is its feet/base per this project's
-		// convention) and pushes it out of any overlapping Collider-enabled
-		// entity's world-space AABB, along whichever axis has the least
-		// penetration. A push along Y means "resting on top" (grounded) or
-		// "bumped a ceiling"; a push along X or Z means a wall/object blocked
-		// movement. This is a deliberately simple approximation - no rotation-
-		// aware colliders, no swept collision - not a general physics engine.
+		// convention) and pushes it out of every overlapping Collider-enabled
+		// entity's box as drawn - rotation, scale and pivot included (see
+		// colliderBox, Transform.hpp). Unturned boxes use the axis-aligned
+		// path below; turned ones pushOutOfOrientedBox. A push along Y means
+		// "resting on top" (grounded) or "bumped a ceiling"; a sideways push
+		// means a wall/object blocked movement. No swept collision - not a
+		// general physics engine.
 		BoxCollisionResult resolveBoxCollision(
 			const EditorScene& scene,
 			const int selfEntityId,
@@ -1262,8 +1366,30 @@ namespace gameforger::editor
 						continue;
 					}
 
-					const glm::vec3 otherMin = other.position - other.scale;
-					const glm::vec3 otherMax = other.position + other.scale;
+					const OrientedBox box = colliderBox(other);
+					{
+						// Quick reject on the box's world bounds.
+						const glm::vec3 reach = box.worldHalfSize();
+						if (result.position.x + halfWidth < box.center.x - reach.x ||
+							result.position.x - halfWidth > box.center.x + reach.x ||
+							result.position.z + halfWidth < box.center.z - reach.z ||
+							result.position.z - halfWidth > box.center.z + reach.z ||
+							result.position.y + height < box.center.y - reach.y || result.position.y > box.center.y + reach.y)
+						{
+							continue;
+						}
+					}
+					if (!box.axisAligned)
+					{
+						if (pushOutOfOrientedBox(result.position, halfWidth, height, box, result.grounded))
+						{
+							resolvedAny = true;
+						}
+						continue;
+					}
+
+					const glm::vec3 otherMin = box.center - box.halfExtents;
+					const glm::vec3 otherMax = box.center + box.halfExtents;
 					const glm::vec3 selfMin(
 						result.position.x - halfWidth, result.position.y, result.position.z - halfWidth);
 					const glm::vec3 selfMax(
@@ -1298,7 +1424,7 @@ namespace gameforger::editor
 						overlapX >= (2.0F * halfWidth - 0.001F) && overlapZ >= (2.0F * halfWidth - 0.001F);
 					if (fullyContainedHorizontally || (overlapY <= overlapX && overlapY <= overlapZ))
 					{
-						if (selfCenterY > other.position.y)
+						if (selfCenterY > box.center.y)
 						{
 							result.position.y = otherMax.y;
 							result.grounded = true;
@@ -1311,12 +1437,12 @@ namespace gameforger::editor
 					else if (overlapX <= overlapZ)
 					{
 						result.position.x =
-							result.position.x > other.position.x ? otherMax.x + halfWidth : otherMin.x - halfWidth;
+							result.position.x > box.center.x ? otherMax.x + halfWidth : otherMin.x - halfWidth;
 					}
 					else
 					{
 						result.position.z =
-							result.position.z > other.position.z ? otherMax.z + halfWidth : otherMin.z - halfWidth;
+							result.position.z > box.center.z ? otherMax.z + halfWidth : otherMin.z - halfWidth;
 					}
 				}
 				if (!resolvedAny)

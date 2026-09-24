@@ -514,6 +514,7 @@ return Controller
 // FPS player / items / inventory / weapon API tests
 // ----------------------------------------------------------------------------
 #include "GameForger/Editor/FpsRigBuilder.hpp"
+#include "GameForger/Editor/Transform.hpp"
 #include "GameForger/Runtime/GameCamera.hpp"
 #include "GameForger/Runtime/GameplayLoop.hpp"
 
@@ -1202,6 +1203,72 @@ void testFpsDemoThirdPersonStrafe()
 #endif
 }
 
+void testRotatedColliders()
+{
+	// Regression (audit G7): colliders were position +/- scale boxes -
+	// rotation and pivot ignored, so a turned wall blocked as if unturned.
+	SceneFixture fx;
+	const auto solid = [&fx](const std::string& name, const glm::vec3& position, const glm::vec3& scale,
+		const glm::vec3& rotation)
+	{
+		(void)fx.bus.execute(CreateEntityCommand{name, PrimitiveType::Cube, position});
+		(void)fx.bus.execute(SetPropertyCommand{name, "Transform", "scale", scale});
+		(void)fx.bus.execute(SetPropertyCommand{name, "Transform", "rotation", rotation});
+		(void)fx.bus.execute(SetPropertyCommand{name, "Collider", "enabled", true});
+	};
+	solid("Wall45", {0.0F, 1.0F, 3.0F}, {2.0F, 1.0F, 0.2F}, {0.0F, 45.0F, 0.0F});
+	solid("Ramp", {5.0F, 0.0F, 0.0F}, {3.0F, 0.2F, 3.0F}, {20.0F, 0.0F, 0.0F});
+	solid("Raised", {-5.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}, {0.0F, 0.0F, 0.0F});
+	(void)fx.bus.execute(SetPropertyCommand{"Raised", "Transform", "pivot", glm::vec3(0.0F, -1.0F, 0.0F)});
+	solid("Straight", {10.0F, 1.0F, 3.0F}, {2.0F, 1.0F, 0.2F}, {0.0F, 0.0F, 0.0F});
+
+	// A point on the turned wall's middle line (from its real box).
+	const OrientedBox wall = colliderBox(*fx.find("Wall45"));
+	TEST_ASSERT(!wall.axisAligned, "a turned box is not axis-aligned");
+	const glm::vec3 onWall = wall.center + wall.axes[0] * 1.4F;
+	TEST_ASSERT(std::abs(colliderBox(*fx.find("Raised")).center.y - 1.0F) < 1e-4F, "the pivot moves the collider box");
+
+	const std::string script = "Game/Scripts/test_obb.lua";
+	char text[1400];
+	std::snprintf(text, sizeof(text), R"(local T = {}
+local function put(self, key, x, y, z, w, h)
+	local p, g = self.physics:resolve({x = x, y = y, z = z}, w, h)
+	self[key .. "x"], self[key .. "y"], self[key .. "z"], self[key .. "g"] = p.x, p.y, p.z, g
+end
+function T:on_start()
+	put(self, "a", 1.5, 0, 3.0, 0.3, 1.8)       -- inside the OLD unturned box, clear of the real wall
+	put(self, "b", %f, 0, %f, 0.3, 1.8)         -- on the turned wall
+	put(self, "c", 5, 0.1, 0, 0.3, 1.8)         -- sunk into the tilted ramp
+	put(self, "d", -5, 1.5, 0, 0.3, 1.8)        -- inside the pivoted box (spans y 0..2)
+	put(self, "e", 10, 0, 2.9, 0.3, 1.8)        -- into the unturned wall (unchanged behavior)
+end
+return T
+)", static_cast<double>(onWall.x), static_cast<double>(onWall.z));
+	writeTextFile(script, text);
+	(void)fx.bus.execute(CreateEntityCommand{"Probe", PrimitiveType::Cube, glm::vec3(0.0F, 50.0F, 0.0F)});
+	(void)fx.bus.execute(AttachScriptCommand{"Probe", script});
+	fx.start();
+	const int probe = fx.find("Probe")->id;
+	const auto field = [&](const char* name) { return fx.runtime.getScriptNumberField(probe, script, name, -999.0F); };
+	const auto flag = [&](const char* name) { return fx.runtime.getScriptBoolField(probe, script, name, false); };
+
+	TEST_ASSERT(std::abs(field("ax") - 1.5F) < 1e-4F && std::abs(field("az") - 3.0F) < 1e-4F,
+		"a turned wall no longer blocks where it isn't");
+	const glm::vec3 pushed(field("bx"), field("by"), field("bz"));
+	const float fromMiddle = std::abs(glm::dot(pushed - glm::vec3(onWall.x, 0.0F, onWall.z), wall.axes[2]));
+	TEST_ASSERT(fromMiddle > 0.2F + 0.3F * (std::abs(wall.axes[2].x) + std::abs(wall.axes[2].z)) - 0.01F,
+		"the turned wall pushes the mover out along its own face (" + std::to_string(fromMiddle) + ")");
+	TEST_ASSERT(std::abs(field("by")) < 1e-4F && !flag("bg"), "a wall push stays level");
+	TEST_ASSERT(flag("cg") && field("cy") > 0.2F && field("cy") < 0.5F &&
+			std::abs(field("cx") - 5.0F) < 1e-4F && std::abs(field("cz")) < 1e-4F,
+		"a tilted box is a ramp you stand on - pushed straight up (y " + std::to_string(field("cy")) + ")");
+	TEST_ASSERT(flag("dg") && std::abs(field("dy") - 2.0F) < 1e-4F, "a pivoted box is solid where it is drawn");
+	TEST_ASSERT(std::abs(field("ez") - 2.5F) < 1e-4F && std::abs(field("ex") - 10.0F) < 1e-4F,
+		"an unturned wall blocks exactly as before");
+	fx.runtime.shutdown();
+	std::filesystem::remove(script);
+}
+
 void testSliderScriptProperty()
 {
 	const std::string scriptPath = "Game/Scripts/test_slider_prop.lua";
@@ -1334,9 +1401,7 @@ void testFpsDemoClimbing()
 		const glm::vec3 wallScale = wallYaw == 0.0F ? glm::vec3(1.0F, 2.0F, 0.3F) : glm::vec3(0.3F, 2.0F, 1.0F);
 		(void)h.bus.execute(SetPropertyCommand{"Wall", "Transform", "scale", wallScale});
 		(void)h.bus.execute(SetPropertyCommand{"Wall", "Transform", "rotation", glm::vec3(0.0F, wallYaw, 0.0F)});
-		// Colliders ignore rotation (a position +/- scale box), so only the
-		// unturned wall is solid - it is what the player pulls up onto.
-		(void)h.bus.execute(SetPropertyCommand{"Wall", "Collider", "enabled", wallYaw == 0.0F});
+		(void)h.bus.execute(SetPropertyCommand{"Wall", "Collider", "enabled", true});
 		TEST_ASSERT(h.bus.execute(AttachScriptCommand{"Wall", fpsdemo::kClimbable}).success, "attach climbable.lua");
 		(void)h.bus.execute(SetPropertyCommand{"Wall", "ScriptProperty", std::string(fpsdemo::kClimbable) + "#climb_angle",
 			std::string(wallYaw == 0.0F ? "180" : "90")});
@@ -1368,12 +1433,9 @@ void testFpsDemoClimbing()
 		TEST_ASSERT(!h.playerFlag("climbing"), "climbed over the top" + where);
 		h.input.keysDown.clear();
 		h.frames(30);
-		if (wallYaw == 0.0F)
-		{
-			TEST_ASSERT(std::abs(h.player().position.y - 4.0F) < 0.1F && h.player().position.z > 2.7F,
-				"standing on top of the wall" + where + " - at y " + std::to_string(h.player().position.y) + " z " +
-					std::to_string(h.player().position.z));
-		}
+		TEST_ASSERT(std::abs(h.player().position.y - 4.0F) < 0.1F && h.player().position.z > 2.7F,
+			"standing on top of the wall" + where + " - at y " + std::to_string(h.player().position.y) + " z " +
+				std::to_string(h.player().position.z));
 		TEST_ASSERT(h.errors.empty(), "no script errors" + where + ": " + h.firstError());
 	}
 
@@ -2020,6 +2082,7 @@ int main()
 	RUN_TEST(testScriptMessagingApi);
 	RUN_TEST(testFpsPlayerEndToEnd);
 	RUN_TEST(testFpsDemoThirdPersonStrafe);
+	RUN_TEST(testRotatedColliders);
 	RUN_TEST(testSliderScriptProperty);
 	RUN_TEST(testFpsDemoClimbing);
 	RUN_TEST(testFpsDemoPlayerBody);

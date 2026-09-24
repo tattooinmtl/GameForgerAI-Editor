@@ -17,9 +17,6 @@
 --
 -- The climbable area is the object's box: its scale (the primitive shapes
 -- are 2 x 2 x 2 at scale 1), position, pivot and Y rotation.
--- NOTE: colliders ignore rotation (they are position +/- scale boxes), so a
--- TURNED object that is also a Collider can stop the player before its real
--- face. Keep solid climbables unturned, or turn their Collider off.
 --
 -- @property climb_angle slider 0|360 0
 -- @property reach number 0.9

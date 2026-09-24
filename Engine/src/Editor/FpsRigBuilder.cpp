@@ -742,13 +742,13 @@ namespace gameforger::editor
 			}
 			builder.parts(ladder, ladderParts, false);
 
-			// Rock cliff: a tall block you climb on its -Z face (the side
-			// facing the start). Not turned: colliders ignore rotation, so a
-			// turned solid block would stop you short of its real face.
+			// Rock cliff: a tall block turned 30 degrees, climbed on its back
+			// (-Z) face - the side facing the start.
 			const std::string cliff = builder.uniqueName("Rock Cliff");
 			if (builder.create(cliff, PrimitiveType::Cube, origin + glm::vec3(-9.0F, 3.0F, 12.0F)))
 			{
 				builder.set(cliff, "Transform", "scale", glm::vec3(2.5F, 3.0F, 1.2F));
+				builder.set(cliff, "Transform", "rotation", glm::vec3(0.0F, 30.0F, 0.0F));
 				builder.set(cliff, "Renderer", "color", glm::vec3(0.46F, 0.42F, 0.38F));
 				builder.set(cliff, "Collider", "enabled", true);
 				builder.attach(cliff, kClimbableScript);

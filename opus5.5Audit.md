@@ -125,12 +125,18 @@ Severity: 🔴 data loss / wrong result · 🟠 feature broken or misleading · 
 ### 2.12 Update 2026-09-24 (Alpha 0.87)
 
 - **Feature (user request, not an audit item):** FPS Demo third-person body + crouch/climb, `climbable.lua`, `slider` script property. See changelog §1k.
-- **NEW G7 🟡 (not fixed):** colliders ignore rotation (position ± scale boxes) - a turned solid object blocks as if unturned. Found while testing climbing.
+- **NEW G7 🟡 (FIXED 0.89 - changelog §1m):** colliders ignore rotation (position ± scale boxes) - a turned solid object blocks as if unturned. Found while testing climbing.
 - Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
 
 ### 2.13 Update 2026-09-24 (Alpha 0.88)
 
 - **Feature (user request, not an audit item):** goblins (melee + ranged, shields), Orc Warlord boss, player shield block/parry, boss HUD bar. See changelog §1l.
+- Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
+
+### 2.14 Update 2026-09-24 (Alpha 0.89)
+
+- **G7 fixed:** colliders are the turned, pivoted box as drawn (`colliderBox`, separating-axis push-out). See changelog §1m.
+- **NEW G8 🟡 (not fixed):** `world:raycast` / `findDamageable` (weapon hits, spears) still use the unturned position ± scale box.
 - Phase status unchanged: Phase 1 code done, waiting for the user's manual checks; Phases 0 and 2-8 not started.
 
 ## 3. Findings — duplication and things that don't make sense

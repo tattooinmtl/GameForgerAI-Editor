@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.28)
 # bump the patch number (0.31 -> 0.32 -> ...) each time a meaningful change
 # lands, through Beta 1.0.0 at first public try-out release.
 project(GameForgerAI
-    VERSION 0.88.0
+    VERSION 0.89.0
     DESCRIPTION "AI-assisted OpenGL RPG editor and runtime"
     LANGUAGES C CXX
 )

@@ -3,7 +3,10 @@
 #include <optional>
 #include <string>
 
+#include <array>
+
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 
 #include "GameForger/Editor/EditorScene.hpp"
 
@@ -19,6 +22,21 @@ namespace gameforger::editor
 	// ImGuizmo::Manipulate so the gizmo handles sit at the pivot, matching what
 	// the user is actually dragging.
 	[[nodiscard]] glm::mat4 composeEntityPivotFrame(const SceneEntity& entity);
+
+	// An entity's solid box as drawn: its [-1,1] primitive box through
+	// composeEntityTransform, so rotation, scale and pivot all count.
+	struct OrientedBox
+	{
+		glm::vec3 center{0.0F};
+		std::array<glm::vec3, 3> axes{glm::vec3(1.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F), glm::vec3(0.0F, 0.0F, 1.0F)};
+		glm::vec3 halfExtents{1.0F};
+		bool axisAligned = true; // not turned: axes are the world axes
+
+		[[nodiscard]] bool contains(const glm::vec3& point) const noexcept;
+		// Half-size of its world axis-aligned bounds (for quick rejects).
+		[[nodiscard]] glm::vec3 worldHalfSize() const noexcept;
+	};
+	[[nodiscard]] OrientedBox colliderBox(const SceneEntity& entity);
 
 	// Maps preset names ("center", "left", "top-right", ...) to a pivotOffset in
 	// the primitive's [-1,1] local space. Returns std::nullopt for unknown names.

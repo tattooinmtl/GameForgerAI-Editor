@@ -54,6 +54,19 @@
 
 ---
 
+## 1m. Session Log: 2026-09-24 (G7: turned colliders - Alpha 0.89)
+
+The user asked to fix G7 (colliders ignored rotation) first. Every change:
+1. **`Engine/include/GameForger/Editor/Transform.hpp`, `Engine/src/Editor/Transform.cpp`**: new `OrientedBox colliderBox(entity)` - the entity's [-1,1] box through `composeEntityTransform` (rotation, scale AND pivot), with `contains(point)` and `worldHalfSize()`; `axisAligned` when not turned.
+2. **`Engine/src/Editor/ScriptRuntime.cpp` `resolveBoxCollision`** (`self.physics:resolve` - player, enemies, rigidbodies): unturned colliders keep the old axis-aligned logic (now centered on the pivot-corrected box); turned ones use new `pushOutOfOrientedBox` - separating-axis test (3 world axes, 3 box axes, 9 cross products), push along least penetration; mostly-upward pushes go straight up and set grounded (tilted box = ramp you stand on, no sliding), mostly-sideways pushes stay level (walls never lift or sink the mover); standing over a box's top face prefers its up axis (same idea as the old "fully contained" rule). Quick reject on the box's world bounds.
+3. **`Engine/src/Runtime/GameplayLoop.cpp`**: the catapult boulder vs castle hit test uses `colliderBox(...).contains()`.
+4. **Pivot** now counts for colliders too (it was ignored - a bottom-pivoted box collided half underground).
+5. **Workarounds from 0.87 undone**: the demo "Rock Cliff" is turned 30 deg again (`FpsRigBuilder.cpp`), the climbable.lua warning note is gone, the climbing test's turned wall is solid again and the player stands on top of it. Demo scene regenerated.
+6. **Test** `testRotatedColliders`: a 45 deg wall no longer blocks where only its unturned box was, and pushes out along its real face, level; a 20 deg tilted box is a ramp (grounded, pushed straight up); a pivoted box is solid where drawn; an unturned wall blocks exactly as before. 30 tests.
+7. **Version** 0.88 -> 0.89.
+* **Verified:** Debug build of all targets, zero new warnings on changed lines, 30/30 tests (incl. all climbing/enemy tests).
+* **Not changed (not asked):** `world:raycast` / `findDamageable` (weapon hits) still use the unturned position +/- scale box - the same issue for shots near turned objects.
+
 ## 1l. Session Log: 2026-09-24 (goblins, Orc Warlord boss, shields + parry - Alpha 0.88)
 
 The user asked for a pre-made set of 2 goblins (weak, range + melee, with shields), a shield for the player on the other mouse button (attack + defend, parry), and an orc boss with a big spiked club (melee). Every change:
